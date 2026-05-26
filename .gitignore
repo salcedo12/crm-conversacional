@@ -1,0 +1,16 @@
+# Firebase
+.firebase/
+.firebaserc.local
+
+# Env
+*.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+
+# Build
+functions/lib/
+frontend/.next/
+frontend/out/
