@@ -1,6 +1,7 @@
 import { formatMessageTime } from '@/shared/utils/date';
 import { formatPhone }        from '@/shared/utils/formatPhone';
 import { AiStatusBadge }      from './AiStatusBadge';
+import { channelBadge }       from '../utils/inboxes';
 import type { Lead }          from '../types';
 
 interface LeadListItemProps {
@@ -13,6 +14,7 @@ export function LeadListItem({ lead, isSelected, onClick }: LeadListItemProps) {
   const displayName = lead.name ?? formatPhone(lead.phone);
   const preview     = lead.lastMessageText ?? '—';
   const time        = formatMessageTime(lead.lastMessageAt);
+  const badge       = channelBadge(lead.channel);
 
   return (
     <button
@@ -34,7 +36,17 @@ export function LeadListItem({ lead, isSelected, onClick }: LeadListItemProps) {
 
       <p className="text-xs text-zinc-400 truncate mb-1.5">{preview}</p>
 
-      <AiStatusBadge aiEnabled={lead.aiEnabled} />
+      <div className="flex items-center gap-1.5">
+        <AiStatusBadge aiEnabled={lead.aiEnabled} />
+        {badge && (
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700"
+            title={badge.label}
+          >
+            {badge.icon} {badge.label}
+          </span>
+        )}
+      </div>
     </button>
   );
 }

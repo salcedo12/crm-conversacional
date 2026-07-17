@@ -31,6 +31,7 @@ export function CalendarPage() {
   const [error,    setError]    = useState<string | null>(null);
   const [createFor, setCreateFor] = useState<Date | null>(null);
   const [selected, setSelected] = useState<CalendarEvent | null>(null);
+  const [dayDetail, setDayDetail] = useState<{ date: Date; events: CalendarEvent[] } | null>(null);
 
   // 42 días (6 semanas) desde el lunes de la primera semana
   const gridDays = useMemo(() => {
@@ -143,7 +144,16 @@ export function CalendarPage() {
                       </button>
                     ))}
                     {dayEvents.length > 3 && (
-                      <span className="text-[9px] text-zinc-500 pl-1">+{dayEvents.length - 3} más</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDayDetail({ date: d, events: dayEvents });
+                        }}
+                        className="w-fit text-left text-[9px] text-zinc-500 pl-1 hover:text-violet-300"
+                      >
+                        +{dayEvents.length - 3} más
+                      </button>
                     )}
                   </div>
                 </div>
@@ -156,6 +166,52 @@ export function CalendarPage() {
       {/* Modal crear */}
       {createFor && companyId && (
         <EventModal companyId={companyId} defaultDate={createFor} onClose={() => setCreateFor(null)} onCreated={load} />
+      )}
+
+      {/* Eventos del dia */}
+      {dayDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDayDetail(null)}>
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase text-zinc-500">Eventos del dia</p>
+                <h3 className="text-sm font-semibold text-zinc-100">
+                  {new Intl.DateTimeFormat('es-CO', { dateStyle: 'full' }).format(dayDetail.date)}
+                </h3>
+              </div>
+              <button onClick={() => setDayDetail(null)} className="rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800">x</button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              <div className="flex flex-col gap-2">
+                {dayDetail.events.map((ev) => (
+                  <button
+                    key={`${ev.source}-${ev.id}`}
+                    type="button"
+                    onClick={() => {
+                      setDayDetail(null);
+                      setSelected(ev);
+                    }}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors hover:border-violet-500/40
+                      ${ev.source === 'crm' ? 'border-violet-500/20 bg-violet-600/10' : 'border-sky-500/20 bg-sky-600/10'}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`min-w-0 truncate text-xs font-medium ${ev.status === 'canceled' ? 'line-through text-zinc-500' : 'text-zinc-100'}`}>
+                        {ev.title}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-zinc-500">
+                        {ev.allDay ? 'Todo el dia' : `${fmtTime(ev.start)}-${fmtTime(ev.end)}`}
+                      </span>
+                    </div>
+                    {ev.leadName && <p className="mt-1 truncate text-[11px] text-zinc-500">{ev.leadName}</p>}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Button variant="ghost" size="sm" onClick={() => setDayDetail(null)}>Cerrar</Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Detalle evento */}

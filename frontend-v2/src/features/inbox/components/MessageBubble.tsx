@@ -1,7 +1,12 @@
+import { useState }          from 'react';
 import { formatMessageTime } from '@/shared/utils/date';
 import { MediaMessage }      from './MediaMessage';
 import { isWebp }            from '../services/media.service';
 import type { Message }      from '../types';
+
+// Mensajes anormalmente largos (ej. transcripciones pegadas por error) se
+// truncan visualmente para que una sola burbuja no rompa el scroll del chat.
+const LONG_MESSAGE_THRESHOLD = 600;
 
 interface MessageBubbleProps {
   message: Message;
@@ -29,6 +34,7 @@ const senderConfig = {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const cfg  = senderConfig[message.senderType];
   const time = formatMessageTime(message.createdAt);
+  const [expanded, setExpanded] = useState(false);
 
   // Mensajes de sistema — centrados sin burbuja
   if (message.senderType === 'system') {
@@ -48,6 +54,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     message.mediaKind === 'sticker' ||
     (isWebp(message.mediaType) && !message.content?.trim())
   );
+  const isLong = (message.content?.length ?? 0) > LONG_MESSAGE_THRESHOLD;
+  const displayContent = isLong && !expanded
+    ? `${message.content!.slice(0, LONG_MESSAGE_THRESHOLD).trimEnd()}…`
+    : message.content;
   const bubbleClass = isSticker
     ? 'p-0 bg-transparent border-0 shadow-none'
     : `rounded-2xl px-3 py-2.5 text-sm ${cfg.bubble} ${hasMedia ? 'overflow-hidden' : 'leading-relaxed whitespace-pre-wrap'}`;
@@ -73,7 +83,18 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             Sticker no disponible
           </span>
         ) : hasContent ? (
-          message.content
+          <>
+            {displayContent}
+            {isLong && (
+              <button
+                type="button"
+                onClick={() => setExpanded((prev) => !prev)}
+                className="mt-1 block text-xs font-medium underline underline-offset-2 opacity-80 hover:opacity-100"
+              >
+                {expanded ? 'Ver menos' : 'Ver mensaje completo'}
+              </button>
+            )}
+          </>
         ) : (
           <span className="sr-only">Mensaje sin contenido</span>
         )}

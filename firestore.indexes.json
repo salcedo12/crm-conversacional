@@ -4,52 +4,129 @@
       "collectionGroup": "leads",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        { "fieldPath": "status",        "order": "ASCENDING"  },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
       ]
     },
     {
       "collectionGroup": "leads",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        { "fieldPath": "assignedTo",    "order": "ASCENDING"  },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
       ]
     },
     {
-      "collectionGroup": "conversations",
+      "collectionGroup": "leads",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "leadId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        { "fieldPath": "aiEnabled",     "order": "ASCENDING"  },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "leads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "inboxId",       "order": "ASCENDING"  },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "leads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tags",          "arrayConfig": "CONTAINS" },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "leads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source",        "order": "ASCENDING"  },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "leads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "listIds",       "arrayConfig": "CONTAINS" },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "direction",     "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",     "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "calls",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId",     "order": "ASCENDING"  },
+        { "fieldPath": "status",       "order": "ASCENDING"  }
+      ]
+    },
+    {
+      "collectionGroup": "calls",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "provider",      "order": "ASCENDING"  },
+        { "fieldPath": "status",        "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",     "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId",      "order": "ASCENDING"  },
+        { "fieldPath": "externalMsgId",  "order": "ASCENDING"  }
+      ]
+    },
+    {
+      "collectionGroup": "calls",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId",     "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",     "order": "DESCENDING" }
       ]
     },
     {
       "collectionGroup": "appointments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "startTime", "order": "ASCENDING" }
+        { "fieldPath": "status",        "order": "ASCENDING"  },
+        { "fieldPath": "scheduledAt",   "order": "ASCENDING"  }
       ]
     },
     {
-      "collectionGroup": "users",
+      "collectionGroup": "assignmentRules",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "role", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        { "fieldPath": "enabled",       "order": "ASCENDING"  },
+        { "fieldPath": "priority",      "order": "ASCENDING"  }
       ]
     },
     {
-      "collectionGroup": "users",
+      "collectionGroup": "followUpTasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "role", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "assignedLeadsCount", "order": "ASCENDING" }
+        { "fieldPath": "leadId",        "order": "ASCENDING"  },
+        { "fieldPath": "status",        "order": "ASCENDING"  }
+      ]
+    },
+    {
+      "collectionGroup": "followUpTasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status",        "order": "ASCENDING"  },
+        { "fieldPath": "scheduledAt",   "order": "ASCENDING"  }
       ]
     }
   ],

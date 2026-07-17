@@ -1,19 +1,29 @@
 import { useState, useMemo } from 'react';
-import type { Lead, LeadStatus } from '@/features/inbox/types';
+import type { Lead, LeadSource, LeadStatus } from '@/features/inbox/types';
 
 export type SortField = 'lastMessageAt' | 'createdAt' | 'name' | 'status';
 export type SortDir   = 'asc' | 'desc';
 
 export interface LeadsFilters {
-  search:    string;
-  status:    LeadStatus | 'all';
-  aiEnabled: 'all' | 'active' | 'manual';
+  search:     string;
+  status:     LeadStatus | 'all';
+  aiEnabled:  'all' | 'active' | 'manual';
+  assignedTo: string;        // 'all' | 'unassigned' | <advisorId>
+  tags:       string[];      // etiquetas seleccionadas (coincide con cualquiera)
+  inboxId:    string;        // 'all' | <número de negocio>
+  listId:     string;        // 'all' | <lista importada>
+  source:     LeadSource | 'all';
 }
 
 const DEFAULT_FILTERS: LeadsFilters = {
-  search:    '',
-  status:    'all',
-  aiEnabled: 'all',
+  search:     '',
+  status:     'all',
+  aiEnabled:  'all',
+  assignedTo: 'all',
+  tags:       [],
+  inboxId:    'all',
+  listId:     'all',
+  source:     'all',
 };
 
 export function useLeadsPage(leads: Lead[]) {
@@ -47,6 +57,35 @@ export function useLeadsPage(leads: Lead[]) {
       list = list.filter((l) => l.aiEnabled);
     } else if (filters.aiEnabled === 'manual') {
       list = list.filter((l) => !l.aiEnabled);
+    }
+
+    // Filtro asesor asignado
+    if (filters.assignedTo === 'unassigned') {
+      list = list.filter((l) => !l.assignedTo);
+    } else if (filters.assignedTo !== 'all') {
+      list = list.filter((l) => l.assignedTo === filters.assignedTo);
+    }
+
+    // Filtro por número (inbox)
+    if (filters.inboxId !== 'all') {
+      list = list.filter((l) => l.inboxId === filters.inboxId);
+    }
+
+    // Filtro por origen
+    if (filters.source !== 'all') {
+      list = list.filter((l) => l.source === filters.source);
+    }
+
+    if (filters.listId !== 'all') {
+      list = list.filter((l) => l.listIds?.includes(filters.listId));
+    }
+
+    // Filtro por etiquetas: el lead debe tener al menos una de las seleccionadas
+    if (filters.tags.length > 0) {
+      const wanted = filters.tags.map((t) => t.toLowerCase());
+      list = list.filter((l) =>
+        l.tags?.some((t) => wanted.includes(t.toLowerCase()))
+      );
     }
 
     // Ordenamiento

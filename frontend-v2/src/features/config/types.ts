@@ -8,6 +8,7 @@ export interface FollowUpStep {
 export interface AiConfig {
   enabled:            boolean;
   assistantName:      string;
+  businessName:       string;
   basePrompt:         string;
   tone:               AiTone;
   knowledgeBase:      string;

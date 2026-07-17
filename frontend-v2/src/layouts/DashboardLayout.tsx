@@ -1,18 +1,24 @@
 import { NavLink, Outlet }  from 'react-router-dom';
 import { useAuth }          from '@/features/auth/hooks/useAuth';
 import { isAdminRole }      from '@/features/auth/types';
+import { CallOverlay }      from '@/features/calls/components/CallOverlay';
+import { CallSessionProvider } from '@/features/calls/providers/CallSessionProvider';
 
 interface NavItem {
   to:        string;
   icon:      string;
   label:     string;
   adminOnly?: boolean;
+  end?:      boolean;
 }
 
 const navItems: NavItem[] = [
+  { to: '/dashboard',           icon: '📊', label: 'Resumen', end: true },
   { to: '/dashboard/inbox',     icon: '💬', label: 'Bandeja'    },
   { to: '/dashboard/leads',     icon: '👥', label: 'Leads'      },
+  { to: '/dashboard/calls',     icon: '📞', label: 'Llamadas IA' },
   { to: '/dashboard/templates', icon: '📋', label: 'Plantillas', adminOnly: true },
+  { to: '/dashboard/broadcasts', icon: '📣', label: 'Masivos',   adminOnly: true },
   { to: '/dashboard/calendar',  icon: '📅', label: 'Calendario' },
   { to: '/dashboard/config',    icon: '⚙️',  label: 'Config'     },
 ];
@@ -22,7 +28,8 @@ export function DashboardLayout() {
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdminRole(role));
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
+    <CallSessionProvider>
+    <div className="flex h-dvh bg-zinc-950 text-zinc-100 overflow-hidden overscroll-none">
       {/* ── Sidebar (escritorio) ───────────────────────────────────────────── */}
       <aside className="hidden md:flex flex-col w-56 shrink-0 border-r border-zinc-800 bg-zinc-950">
         {/* Logo */}
@@ -42,6 +49,7 @@ export function DashboardLayout() {
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.end}
               className={({ isActive }) => `
                 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors
                 ${isActive
@@ -72,6 +80,9 @@ export function DashboardLayout() {
         </div>
       </aside>
 
+      {/* Banner de llamada entrante / barra de llamada activa (WhatsApp Calling) */}
+      <CallOverlay />
+
       {/* ── Contenido ──────────────────────────────────────────────────────── */}
       {/* pb-16 en móvil para no quedar tapado por la barra inferior */}
       <main className="flex-1 overflow-hidden pb-14 md:pb-0">
@@ -95,5 +106,6 @@ export function DashboardLayout() {
         ))}
       </nav>
     </div>
+    </CallSessionProvider>
   );
 }

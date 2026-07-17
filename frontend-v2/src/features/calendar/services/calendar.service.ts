@@ -34,11 +34,22 @@ export interface CreateEventInput {
   withMeet:        boolean;
 }
 
+export interface BookAppointmentInput {
+  leadId: string;
+  startISO: string;
+  durationMinutes?: number;
+  title?: string;
+}
+
 const _startGoogleAuth   = httpsCallable<{ companyId: string }, { url: string }>(functions, 'startGoogleAuth');
 const _getGoogleConn     = httpsCallable<{ companyId: string }, { connected: boolean; email: string | null }>(functions, 'getGoogleConnection');
 const _disconnectGoogle  = httpsCallable<{ companyId: string }, { ok: boolean }>(functions, 'disconnectGoogle');
 const _listAppointments  = httpsCallable<{ companyId: string; fromISO: string; toISO: string }, { appointments: AppointmentDTO[] }>(functions, 'listAppointments');
 const _cancelAppointment = httpsCallable<{ companyId: string; appointmentId: string }, { ok: boolean }>(functions, 'cancelAppointment');
+const _bookAppointmentManual = httpsCallable<
+  { companyId: string } & BookAppointmentInput,
+  { appointmentId: string; googleMeetLink: string | null }
+>(functions, 'bookAppointmentManual');
 
 export async function startGoogleAuth(companyId: string): Promise<string> {
   const r = await _startGoogleAuth({ companyId });
@@ -61,6 +72,11 @@ export async function listAppointments(companyId: string, from: Date, to: Date):
 
 export async function cancelAppointment(companyId: string, appointmentId: string): Promise<void> {
   await _cancelAppointment({ companyId, appointmentId });
+}
+
+export async function bookAppointmentManual(companyId: string, input: BookAppointmentInput) {
+  const r = await _bookAppointmentManual({ companyId, ...input });
+  return r.data;
 }
 
 const _listCalendarEvents  = httpsCallable<{ companyId: string; fromISO: string; toISO: string }, { connected: boolean; events: CalendarEvent[] }>(functions, 'listCalendarEvents');

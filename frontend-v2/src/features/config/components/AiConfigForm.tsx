@@ -82,6 +82,22 @@ export function AiConfigForm({
           />
         </FormField>
 
+        {/* Nombre del negocio */}
+        <FormField
+          label="Nombre del negocio"
+          htmlFor="businessName"
+          hint="Aparece en las confirmaciones y recordatorios de citas"
+        >
+          <input
+            id="businessName"
+            type="text"
+            value={draft.businessName}
+            onChange={(e) => onUpdate('businessName', e.target.value)}
+            placeholder="Grupo Constructor Meraki"
+            className={inputClass}
+          />
+        </FormField>
+
         {/* Tono */}
         <FormField label="Tono de comunicación" htmlFor="tone">
           <div className="grid grid-cols-2 gap-2">

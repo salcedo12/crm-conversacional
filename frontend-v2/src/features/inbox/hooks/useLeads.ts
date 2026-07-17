@@ -5,20 +5,26 @@ import {
   orderBy,
   limit,
   onSnapshot,
+  where,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/config/firebase';
+import type { UserRole } from '@/features/auth/types';
 import type { Lead } from '../types';
 
 /**
- * Escucha en tiempo real los últimos 50 leads de una empresa.
+ * Escucha en tiempo real los leads recientes de una empresa.
  * Ruta: companies/{companyId}/leads
  *
  * Optimizaciones:
- * - limit(50) evita cargar todos los leads en memoria.
+ * - limit(maxLeads) evita cargar todos los leads en memoria.
  * - orderBy('lastMessageAt', 'desc') muestra primero los más activos.
  */
-export function useLeads(companyId: string | null) {
+export function useLeads(
+  companyId: string | null,
+  maxLeads = 50,
+  scope?: { uid: string | null; role: UserRole | null }
+) {
   const [leads,   setLeads]   = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -29,14 +35,28 @@ export function useLeads(companyId: string | null) {
       return;
     }
 
+    if (scope?.role === 'advisor' && !scope.uid) {
+      setLeads([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
-    const q = query(
-      collection(db, 'companies', companyId, 'leads'),
-      orderBy('lastMessageAt', 'desc'),
-      limit(50)
-    );
+    const leadCol = collection(db, 'companies', companyId, 'leads');
+    const q = scope?.role === 'advisor' && scope.uid
+      ? query(
+          leadCol,
+          where('assignedTo', '==', scope.uid),
+          orderBy('lastMessageAt', 'desc'),
+          limit(maxLeads)
+        )
+      : query(
+          leadCol,
+          orderBy('lastMessageAt', 'desc'),
+          limit(maxLeads)
+        );
 
     const unsub = onSnapshot(
       q,
@@ -55,7 +75,7 @@ export function useLeads(companyId: string | null) {
     );
 
     return unsub;
-  }, [companyId]);
+  }, [companyId, maxLeads, scope?.role, scope?.uid]);
 
   return { leads, loading, error };
 }

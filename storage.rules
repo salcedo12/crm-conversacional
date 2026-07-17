@@ -1,0 +1,24 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Media de conversaciones: solo usuarios autenticados pueden leer/escribir
+    // dentro de su propia empresa
+    match /companies/{companyId}/media/{leadId}/{allPaths=**} {
+      allow read:  if request.auth != null;
+      allow write: if request.auth != null
+                   && request.resource.size < 50 * 1024 * 1024  // máx 50MB
+                   && (
+                        request.resource.contentType.matches('image/.*')  ||
+                        request.resource.contentType.matches('video/.*')  ||
+                        request.resource.contentType.matches('audio/.*')  ||
+                        request.resource.contentType == 'application/pdf'
+                      );
+    }
+
+    // Todo lo demás: denegado
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

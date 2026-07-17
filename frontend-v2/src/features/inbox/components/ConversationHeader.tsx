@@ -1,8 +1,10 @@
 import { useState }        from 'react';
+import { UserRound }       from 'lucide-react';
 import { formatPhone }     from '@/shared/utils/formatPhone';
 import { AiStatusBadge }  from './AiStatusBadge';
 import { Spinner }        from '@/shared/components/Spinner';
 import { isWindowOpen, windowTimeLeft, windowClosedAgo } from '../utils/conversationWindow';
+import { channelBadge }  from '../utils/inboxes';
 import type { Lead }      from '../types';
 
 interface ConversationHeaderProps {
@@ -10,13 +12,16 @@ interface ConversationHeaderProps {
   onPauseAi:       () => Promise<void>;
   onResumeAi:      () => Promise<void>;
   onOpenTemplates: () => void;
+  onOpenLeadDetails?: () => void;
   onBack?:         () => void;
 }
 
-export function ConversationHeader({ lead, onPauseAi, onResumeAi, onOpenTemplates, onBack }: ConversationHeaderProps) {
+export function ConversationHeader({ lead, onPauseAi, onResumeAi, onOpenTemplates, onOpenLeadDetails, onBack }: ConversationHeaderProps) {
   const [toggling, setToggling] = useState(false);
 
   const displayName  = lead.name ?? formatPhone(lead.phone);
+  const badge        = channelBadge(lead.channel);
+  const isWhatsapp   = !lead.channel || lead.channel === 'whatsapp';
   // lastInboundAt es el campo exacto (seteado desde ahora en adelante).
   // Para leads existentes sin ese campo, usar lastMessageAt como aproximación.
   const windowTs   = lead.lastInboundAt ?? lead.lastMessageAt ?? null;
@@ -65,23 +70,43 @@ export function ConversationHeader({ lead, onPauseAi, onResumeAi, onOpenTemplate
             <span className={`shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full ${statusColor[lead.status] ?? statusColor.active}`}>
               {statusLabel[lead.status] ?? lead.status}
             </span>
+            {badge && (
+              <span className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">
+                {badge.icon} {badge.label}
+              </span>
+            )}
           </div>
-          <span className="text-xs text-zinc-500 truncate">{lead.phone}</span>
+          <span className="text-xs text-zinc-500 truncate">
+            {isWhatsapp ? lead.phone : badge?.label}
+          </span>
         </div>
 
         {/* Acciones */}
         <div className="flex items-center gap-2 shrink-0">
+          {onOpenLeadDetails && (
+            <button
+              onClick={onOpenLeadDetails}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/60 px-2.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700"
+              title="Ver datos del cliente"
+            >
+              <UserRound size={14} />
+              <span className="hidden lg:inline">Datos</span>
+            </button>
+          )}
+
           <AiStatusBadge aiEnabled={lead.aiEnabled} />
 
-          {/* Plantillas */}
-          <button
-            onClick={onOpenTemplates}
-            className="flex items-center gap-1.5 text-xs font-medium px-2.5 sm:px-3 py-1.5 rounded-lg
-              border border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 transition-colors"
-            title="Enviar plantilla de WhatsApp"
-          >
-            📋 <span className="hidden sm:inline">Plantilla</span>
-          </button>
+          {/* Plantillas (solo WhatsApp — Messenger/Instagram no tienen sistema de plantillas) */}
+          {isWhatsapp && (
+            <button
+              onClick={onOpenTemplates}
+              className="flex items-center gap-1.5 text-xs font-medium px-2.5 sm:px-3 py-1.5 rounded-lg
+                border border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              title="Enviar plantilla de WhatsApp"
+            >
+              📋 <span className="hidden sm:inline">Plantilla</span>
+            </button>
+          )}
 
           {/* Toggle IA */}
           <button
@@ -104,8 +129,8 @@ export function ConversationHeader({ lead, onPauseAi, onResumeAi, onOpenTemplate
         </div>
       </div>
 
-      {/* Barra de ventana de 24h — siempre visible si hay actividad */}
-      {windowTs && (
+      {/* Barra de ventana de 24h — solo WhatsApp (Messenger/Instagram no tienen plantillas ni ese límite en el CRM) */}
+      {isWhatsapp && windowTs && (
         <div className={`px-4 py-1.5 flex items-center justify-between text-[11px] ${
           windowOpen
             ? 'bg-green-500/5 border-t border-green-500/10'

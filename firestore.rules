@@ -1,11 +1,131 @@
 rules_version = '2';
 
-// MODO DESARROLLO — abrir para MVP sin login.
-// TODO: Restaurar reglas de producción cuando se implemente Firebase Auth.
+// ─────────────────────────────────────────────────────────────────────────────
+// Reglas de producción — aislamiento por empresa (multi-tenant) vía custom claims.
+//
+// Fuente de verdad: los custom claims `companyId` y `role` del ID token, que el
+// backend (trigger onUserProfileWritten) sincroniza desde
+// companies/{companyId}/users/{uid}.
+//
+// El cliente solo lee directo: su propio perfil, los leads y los mensajes de SU
+// empresa. Todo lo demás (plantillas, config IA, citas, conexiones con tokens,
+// follow-ups) pasa por Cloud Functions con Admin SDK, que ignora estas reglas;
+// por eso aquí se deniega el acceso directo del cliente a esas colecciones.
+// ─────────────────────────────────────────────────────────────────────────────
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    // Empresa donde se permite el bootstrap automático del perfil al primer login
+    // (la empresa demo de un solo tenant). Las empresas adicionales se aprovisionan
+    // server-side: un admin crea el doc del usuario y el trigger setea sus claims.
+    function bootstrapCompany() {
+      return 'empresa_demo';
+    }
+
+    // El usuario pertenece a la empresa (según su claim companyId)
+    function inCompany(companyId) {
+      return signedIn() && request.auth.token.companyId == companyId;
+    }
+
+    // Rol administrativo dentro de la empresa
+    function isAdmin(companyId) {
+      return inCompany(companyId)
+             && request.auth.token.role in ['admin', 'manager'];
+    }
+
+    function isAssignedAdvisor(companyId) {
+      return inCompany(companyId)
+             && request.auth.token.role == 'advisor'
+             && resource.data.assignedTo == request.auth.uid;
+    }
+
+    function canReadLead(companyId, leadId) {
+      return isAdmin(companyId)
+             || (inCompany(companyId)
+                 && request.auth.token.role == 'advisor'
+                 && get(/databases/$(database)/documents/companies/$(companyId)/leads/$(leadId)).data.assignedTo == request.auth.uid);
+    }
+
+    match /companies/{companyId} {
+
+      // ── Perfiles de usuario ────────────────────────────────────────────────
+      // Cada usuario puede leer y bootstrappear su propio perfil (necesario para
+      // el primer login y el backfill de claims), pero NO puede auto-asignarse un
+      // rol elevado ni reactivarse: el rol propio queda fijado a 'advisor'.
+      // Los admins/managers gestionan a todos los usuarios de su empresa.
+      match /users/{userId} {
+        allow read:   if isSelf(userId) || isAdmin(companyId);
+        allow create: if isAdmin(companyId)
+                      || (isSelf(userId)
+                          && companyId == bootstrapCompany()
+                          && request.resource.data.role == 'advisor'
+                          && request.resource.data.active == true);
+        allow update: if isAdmin(companyId)
+                      || (isSelf(userId)
+                          && request.resource.data.role   == resource.data.role
+                          && request.resource.data.active == resource.data.active);
+        allow delete: if isAdmin(companyId);
+      }
+
+      // ── Leads y mensajes ───────────────────────────────────────────────────
+      // Lectura para cualquier miembro de la empresa (la bandeja del CRM).
+      // Las escrituras solo ocurren vía Cloud Functions (Admin SDK), por eso el
+      // cliente no puede escribir directamente.
+      match /leads/{leadId} {
+        allow read:  if isAdmin(companyId) || isAssignedAdvisor(companyId);
+        allow write: if false;
+
+        match /messages/{messageId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Historial de llamadas con IA (Dapta). Solo lectura desde el cliente;
+        // las escrituras las hace el webhook/callable vía Admin SDK.
+        match /calls/{callId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+      }
+
+      // ── Resto de subcolecciones de la empresa ──────────────────────────────
+      // aiConfigs, templates, appointments, googleConnections
+      // (incluyen tokens sensibles), followups, etc. → solo backend.
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // ── Llamadas — regla de collection group ───────────────────────────────
+    // La regla anidada de arriba (companies/{cid}/leads/{lid}/calls/{id}) solo
+    // aplica a consultas directas a esa subcolección. El banner global de
+    // llamada de WhatsApp entrante usa collectionGroup('calls'), que necesita
+    // su propia regla explícita. Se evalúa solo con campos propios del doc
+    // (companyId/assignedTo, ya denormalizados) para no depender de un get()
+    // al lead padre.
+    match /{path=**}/calls/{callId} {
+      allow read: if signedIn()
+                  && request.auth.token.companyId == resource.data.companyId
+                  && (
+                    request.auth.token.role in ['admin', 'manager']
+                    || !('assignedTo' in resource.data)
+                    || resource.data.assignedTo == request.auth.uid
+                  );
+      allow write: if false;
+    }
+
+    // ── Todo lo que esté fuera de /companies ─────────────────────────────────
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

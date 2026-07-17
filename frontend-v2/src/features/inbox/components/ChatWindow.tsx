@@ -14,10 +14,11 @@ import { sendManualMessage, pauseAi, resumeAi } from '../services/messages.servi
 interface ChatWindowProps {
   lead:      Lead;
   companyId: string;
+  onOpenLeadDetails?: () => void;
   onBack?:   () => void;
 }
 
-export function ChatWindow({ lead, companyId, onBack }: ChatWindowProps) {
+export function ChatWindow({ lead, companyId, onOpenLeadDetails, onBack }: ChatWindowProps) {
   const { messages, loading } = useMessages(companyId, lead.id);
   const bottomRef             = useRef<HTMLDivElement>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -27,6 +28,7 @@ export function ChatWindow({ lead, companyId, onBack }: ChatWindowProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const isWhatsapp = !lead.channel || lead.channel === 'whatsapp';
   const windowTs   = lead.lastInboundAt ?? lead.lastMessageAt ?? null;
   const windowOpen = isWindowOpen(windowTs);
 
@@ -46,10 +48,11 @@ export function ChatWindow({ lead, companyId, onBack }: ChatWindowProps) {
         onPauseAi={handlePauseAi}
         onResumeAi={handleResumeAi}
         onOpenTemplates={() => setShowTemplates(true)}
+        onOpenLeadDetails={onOpenLeadDetails}
       />
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
+      <div className="relative flex-1 overflow-y-auto overscroll-contain px-4 py-4 flex flex-col gap-2">
         {loading && (
           <div className="flex justify-center p-6"><Spinner /></div>
         )}
@@ -69,8 +72,8 @@ export function ChatWindow({ lead, companyId, onBack }: ChatWindowProps) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Compositor o aviso de ventana cerrada */}
-      {windowOpen || !lead.lastInboundAt ? (
+      {/* Compositor o aviso de ventana cerrada (Messenger/Instagram: siempre abierto, no hay plantillas) */}
+      {!isWhatsapp || windowOpen || !lead.lastInboundAt ? (
         <MessageComposer
           leadId={lead.id}
           companyId={companyId}
