@@ -5,6 +5,7 @@ import { leadsRepository } from '../leads/leads.repository';
 import type { Lead } from '../leads/leads.types';
 import { messagesRepository } from '../messages/messages.repository';
 import { sendTextToLeadChannel } from '../messages/outboundText.service';
+import { sendAdvisorPush } from '../messages/pushNotifications.service';
 import type { SendTextResult } from '../messages/outboundText.service';
 import { followUpsRepository } from '../followups/followups.repository';
 import { getAiConfig } from './aiConfig.repository';
@@ -422,7 +423,7 @@ async function runAppointmentTool(
 async function saveAndSendAiResponse(
   companyId: string,
   leadId:    string,
-  lead:      Pick<Lead, 'phone' | 'inboxProvider' | 'channel' | 'externalId'>,
+  lead:      Pick<Lead, 'phone' | 'inboxProvider' | 'channel' | 'externalId' | 'name' | 'assignedTo'>,
   content:   string
 ): Promise<Timestamp> {
   const now = Timestamp.now();
@@ -443,6 +444,15 @@ async function saveAndSendAiResponse(
       via:   lead.channel ?? 'whatsapp',
       error: sendError,
     });
+    // Avisar al asesor asignado: el mensaje quedó como fallido y debe responder a mano.
+    // (No reintentamos el envío para no arriesgar mensajes duplicados al cliente.)
+    await sendAdvisorPush(companyId, lead.assignedTo, {
+      title:  `⚠️ Envío fallido a ${lead.name?.trim() || lead.phone || 'un lead'}`,
+      body:   'La IA respondió pero WhatsApp rechazó el envío. Abre la conversación y responde manualmente.',
+      url:    `/dashboard/inbox?lead=${leadId}`,
+      type:   'send-failed',
+      leadId,
+    }).catch(() => { /* el aviso es best-effort */ });
   }
 
   await messagesRepository.create({

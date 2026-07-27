@@ -36,4 +36,16 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Separar librerías grandes en chunks propios: cambian poco, así el
+        // navegador las cachea entre despliegues y solo re-descarga el código de la app.
+        manualChunks: {
+          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/functions', 'firebase/messaging'],
+          react:    ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
+  },
 });

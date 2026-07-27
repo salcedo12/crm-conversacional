@@ -1,3 +1,5 @@
+import { reportError } from '../lib/sentry';
+
 /** Campos que nunca deben aparecer en logs */
 const SENSITIVE_KEYS = ['authToken', 'apiKey', 'token', 'password', 'secret', 'authorization'];
 
@@ -17,15 +19,18 @@ function emit(
   message: string,
   context?: Record<string, unknown>
 ): void {
+  const safeContext = context ? sanitize(context) : undefined;
   const entry = JSON.stringify({
     severity: level.toUpperCase(),
     message,
-    ...(context ? { context: sanitize(context) } : {}),
+    ...(safeContext ? { context: safeContext } : {}),
     timestamp: new Date().toISOString(),
   });
 
-  if (level === 'error') console.error(entry);
-  else if (level === 'warn')  console.warn(entry);
+  if (level === 'error') {
+    console.error(entry);
+    reportError(message, safeContext); // → Sentry si está configurado
+  } else if (level === 'warn') console.warn(entry);
   else console.log(entry);
 }
 

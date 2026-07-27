@@ -135,6 +135,8 @@ export const env = {
 
   // ── Comunes ───────────────────────────────────────────────────────────────
   openaiApiKey:      () => process.env.OPENAI_API_KEY      ?? '',
+  /** DSN de Sentry para monitoreo de errores. Vacío = desactivado (no-op). */
+  sentryDsn:         () => process.env.SENTRY_DSN ?? '',
   /**
    * Proveedores/números cuyos leads reciben respuesta automática de IA (lista por coma).
    * Default: solo 'ycloud' (sistemas meraki).
