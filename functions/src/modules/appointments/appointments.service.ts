@@ -9,6 +9,7 @@ import { appointmentsRepository } from './appointments.repository';
 import { assertAppointmentAvailability } from './availability.service';
 import { buildEventTitle, buildEventDescription } from './appointmentMessages';
 import { getAiConfig } from '../ai/aiConfig.repository';
+import { postLeadSmartHomeBitacora } from '../smarthome/smarthomeEvents.service';
 import type { Appointment } from './appointments.types';
 
 export interface BookInput {
@@ -100,6 +101,28 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
   });
 
   await leadsRepository.update(companyId, leadId, { status: 'scheduled' });
+
+  const when = new Intl.DateTimeFormat('es-CO', {
+    timeZone: env.calendarTimeZone(),
+    dateStyle: 'full',
+    timeStyle: 'short',
+  }).format(startTime);
+  try {
+    await postLeadSmartHomeBitacora(
+      { ...lead, assignedTo: advisorId, companyId, id: leadId },
+      [
+        `Registro automático enviado desde CRM Meraki: ${fromAi ? 'el asistente IA agendó una cita' : 'se agendó una cita desde el CRM'} para ${when}.`,
+        `Duración: ${durationMinutes} minutos.`,
+        googleMeetLink ? `Enlace Meet: ${googleMeetLink}` : '',
+      ].filter(Boolean).join('\n')
+    );
+  } catch (err) {
+    logger.warn('[Appointments] SmartHome bitacora no registrada', {
+      companyId,
+      leadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   logger.info('[Appointments] Cita agendada', {
     companyId, leadId, appointmentId: appointment.id, meet: googleMeetLink, tz: env.calendarTimeZone(),

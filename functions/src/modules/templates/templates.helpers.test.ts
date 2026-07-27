@@ -1,25 +1,17 @@
-/* Test manual (sin framework): npx ts-node src/modules/templates/templates.helpers.test.ts */
 import assert from 'assert';
+import { test } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
 import {
   mapYcloudStatus, buildYcloudCreateComponents, buildPositionalComponents,
 } from './templates.helpers';
 import type { WhatsAppTemplate } from './templates.types';
 
-let passed = 0;
-function test(name: string, fn: () => void) {
-  try { fn(); passed++; console.log(`  ✓ ${name}`); }
-  catch (e) { console.error(`  ✗ ${name}\n    ${(e as Error).message}`); process.exitCode = 1; }
-}
-
-console.log('mapYcloudStatus');
 test('APPROVED → approved', () => assert.equal(mapYcloudStatus('APPROVED'), 'approved'));
 test('REJECTED → rejected', () => assert.equal(mapYcloudStatus('REJECTED'), 'rejected'));
 test('PENDING → pending',   () => assert.equal(mapYcloudStatus('PENDING'), 'pending'));
 test('PAUSED/desconocido → pending', () => assert.equal(mapYcloudStatus('PAUSED'), 'pending'));
 test('undefined → pending', () => assert.equal(mapYcloudStatus(undefined), 'pending'));
 
-console.log('buildYcloudCreateComponents');
 test('convierte {{nombre}},{{proyecto}} → {{1}},{{2}} en orden', () => {
   const comps = buildYcloudCreateComponents({
     header: 'Meraki',
@@ -93,7 +85,6 @@ test('botones URL / PHONE_NUMBER / QUICK_REPLY → component BUTTONS', () => {
   ]);
 });
 
-console.log('buildPositionalComponents');
 const baseTemplate: WhatsAppTemplate = {
   id: 't1', companyId: 'c1', name: 'reactivacion', displayName: 'Reactivación',
   category: 'utility', language: 'es',
@@ -148,5 +139,3 @@ test('envío con headerType video → component header con link de video', () =>
   assert.equal(comps[0].type, 'header');
   assert.deepEqual(comps[0].parameters, [{ type: 'video', video: { link: 'https://cdn.meraki.com/clip.mp4' } }]);
 });
-
-console.log(`\n${passed} pruebas OK`);

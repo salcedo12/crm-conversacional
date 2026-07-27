@@ -2,6 +2,8 @@ import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { logger } from '../utils/logger';
 import { orchestrateAiResponse } from '../modules/ai/aiOrchestrator.service';
 import { followUpsRepository } from '../modules/followups/followups.repository';
+import { leadsRepository } from '../modules/leads/leads.repository';
+import { sendInboundLeadPush } from '../modules/messages/pushNotifications.service';
 import type { Message } from '../modules/messages/messages.types';
 
 /**
@@ -45,6 +47,18 @@ export const onMessageCreated = onDocumentCreated(
     await followUpsRepository.cancelPendingForLead(companyId, leadId).catch((err) => {
       logger.warn('[Trigger] No se pudieron cancelar follow-ups', { leadId, err });
     });
+
+    const lead = await leadsRepository.findById(companyId, leadId);
+    if (lead) {
+      await sendInboundLeadPush(companyId, lead, data).catch((err) => {
+        logger.warn('[Trigger] No se pudo enviar push inbound', {
+          companyId,
+          leadId,
+          messageId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
 
     // Si ya fue procesado (idempotencia), saltar
     if (data.aiProcessed === true) {

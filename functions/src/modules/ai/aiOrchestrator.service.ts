@@ -27,6 +27,15 @@ export interface OrchestratorInput {
 }
 
 /**
+ * Ventana de agrupación de ráfagas: si el lead escribe varios mensajes seguidos,
+ * cada uno espera este tiempo; solo el ÚLTIMO responde (con toda la ráfaga en el
+ * contexto), evitando respuestas múltiples y pisadas.
+ */
+const DEBOUNCE_MS = 6000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
  * Orquestador principal de respuestas de IA.
  *
  * Flujo:
@@ -43,24 +52,6 @@ export async function orchestrateAiResponse(
   input: OrchestratorInput
 ): Promise<void> {
   let { companyId, leadId, messageId, userMessage, mediaUrl, mediaType } = input;
-
-  // ── Procesar media antes de llamar a la IA ────────────────────────────────
-  if (mediaUrl && mediaType) {
-    if (mediaType.startsWith('audio/')) {
-      // Transcribir audio con Whisper
-      try {
-        logger.info('[AI] Transcribiendo audio con Whisper', { leadId });
-        userMessage = await transcribeAudio(mediaUrl, mediaType);
-        logger.info('[AI] Transcripción lista', { leadId, length: userMessage.length });
-      } catch (err) {
-        logger.error('[AI] Error transcribiendo audio', { error: String(err) });
-        userMessage = '[El lead envió un audio]';
-      }
-      mediaUrl  = undefined; // ya está en texto, no enviar como imagen
-      mediaType = undefined;
-    }
-    // Para imágenes: se pasa mediaUrl al buildOpenAiMessages para usar vision
-  }
 
   // 1. Verificar que la IA sigue activa (puede haber cambiado desde que llegó el mensaje)
   const lead = await leadsRepository.findById(companyId, leadId);
@@ -87,6 +78,55 @@ export async function orchestrateAiResponse(
   if (!config.enabled) {
     logger.info('[AI] IA deshabilitada para la empresa', { companyId });
     return;
+  }
+
+  // 2b. Debounce: agrupar ráfagas. Esperamos y, si ya llegó un mensaje más
+  //     nuevo del lead, dejamos que ESE responda toda la ráfaga (incluye este
+  //     mensaje en su historial). Así no contestamos 3 veces a 3 globos seguidos.
+  await sleep(DEBOUNCE_MS);
+  const latest = await messagesRepository.getLatest(companyId, leadId);
+  if (latest && latest.id !== messageId && latest.direction === 'inbound' && latest.senderType === 'lead') {
+    logger.info('[AI] Mensaje más nuevo durante el debounce — lo maneja ese', { leadId, messageId, latestId: latest.id });
+    return;
+  }
+
+  // Revalidar que la IA no fue pausada durante la espera (asesor tomó el control).
+  const freshLead = await leadsRepository.findById(companyId, leadId);
+  if (!freshLead?.aiEnabled) {
+    logger.info('[AI] IA pausada durante el debounce — no se responde', { leadId });
+    return;
+  }
+
+  // 2c. Procesar media (tras el debounce, para no gastar en mensajes descartados)
+  if (mediaUrl && mediaType) {
+    if (mediaType.startsWith('audio/')) {
+      // Transcribir audio con Whisper
+      try {
+        logger.info('[AI] Transcribiendo audio con Whisper', { leadId });
+        userMessage = await transcribeAudio(mediaUrl, mediaType);
+        logger.info('[AI] Transcripción lista', { leadId, length: userMessage.length });
+      } catch (err) {
+        logger.error('[AI] Error transcribiendo audio', { error: String(err) });
+        userMessage = '[El lead envió un audio que no se pudo transcribir]';
+      }
+      mediaUrl  = undefined; // ya está en texto, no enviar como imagen
+      mediaType = undefined;
+    } else if (!mediaType.startsWith('image/')) {
+      // Documentos, video, stickers: la IA no puede abrirlos → darle contexto en texto.
+      const kind =
+        mediaType.startsWith('video/')                                  ? 'un video' :
+        /(pdf|word|document|sheet|excel|presentation)/i.test(mediaType) ? 'un documento' :
+        mediaType.includes('sticker')                                   ? 'un sticker' :
+                                                                          'un archivo';
+      if (!userMessage.trim()) {
+        userMessage =
+          `[El lead envió ${kind} que no puedo abrir. Reconócelo con naturalidad ` +
+          `y pregúntale en qué puedes ayudarle o pídele que te lo cuente por texto.]`;
+      }
+      mediaUrl  = undefined;
+      mediaType = undefined;
+    }
+    // Imágenes: se pasan a buildOpenAiMessages para usar vision.
   }
 
   // 3. Detectar keyword de transferencia a humano

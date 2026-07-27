@@ -2,9 +2,11 @@ import { onRequest }  from 'firebase-functions/v2/https';
 import { Timestamp }  from 'firebase-admin/firestore';
 import { env }        from '../config/env';
 import { logger }     from '../utils/logger';
+import { db }         from '../lib/admin';
 import { toNormalizedPhone } from '../utils/phone';
 import { leadsRepository }   from '../modules/leads/leads.repository';
 import { callsRepository }   from '../modules/calls/calls.repository';
+import { postLeadSmartHomeBitacora } from '../modules/smarthome/smarthomeEvents.service';
 import type { CallStatus }   from '../modules/calls/calls.types';
 
 /**
@@ -73,6 +75,35 @@ function friendlyOutcome(stage: string | undefined): string | undefined {
     'call-ia-citapresencial':  'Cita presencial',
   };
   return map[stage.toLowerCase().trim()] ?? stage;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
+async function closePendingDaptaCalls(
+  companyId: string,
+  leadId: string,
+  exceptCallId: string | null,
+  callData: Record<string, unknown>
+): Promise<void> {
+  const snap = await db
+    .collection('companies').doc(companyId)
+    .collection('leads').doc(leadId)
+    .collection('calls')
+    .where('provider', '==', 'dapta')
+    .where('status', '==', 'initiated')
+    .get();
+
+  await Promise.all(snap.docs
+    .filter((doc) => doc.id !== exceptCallId)
+    .map((doc) => doc.ref.update({
+      ...callData,
+      updatedAt: Timestamp.now(),
+    })));
 }
 
 // ─── Webhook ─────────────────────────────────────────────────────────────────
@@ -208,11 +239,15 @@ async function processDaptaCall(body: Json): Promise<void> {
     raw: root,
   };
 
+  let callIdForBitacora: string | null = existing?.id ?? null;
+  const shouldPostSmartHomeBitacora = !existing?.smartHomeBitacoraAt;
+
   if (existing) {
     await callsRepository.update(companyId, lead.id, existing.id, callData);
+    await closePendingDaptaCalls(companyId, lead.id, existing.id, callData);
     logger.info('[Dapta Webhook] Llamada actualizada', { leadId: lead.id, externalId, status });
   } else {
-    await callsRepository.create({
+    const created = await callsRepository.create({
       companyId,
       leadId:    lead.id,
       direction: 'outbound',
@@ -221,6 +256,8 @@ async function processDaptaCall(body: Json): Promise<void> {
       createdAt: now,
       ...callData,
     });
+    callIdForBitacora = created.id;
+    await closePendingDaptaCalls(companyId, lead.id, created.id, callData);
     logger.info('[Dapta Webhook] Llamada registrada', { leadId: lead.id, externalId, status });
   }
 
@@ -229,4 +266,30 @@ async function processDaptaCall(body: Json): Promise<void> {
     lastMessageText: summary ? `📞 ${summary.slice(0, 80)}` : '📞 Llamada IA',
     lastMessageAt:   now,
   });
+
+  if (shouldPostSmartHomeBitacora && callIdForBitacora) {
+    try {
+      const posted = await withTimeout(postLeadSmartHomeBitacora(
+        lead,
+        [
+          'Llamada realizada por IA.',
+          outcome ? `Resultado: ${outcome}.` : `Estado: ${status}.`,
+          durationSec ? `Duracion: ${Math.round(durationSec)} segundos.` : '',
+          summary ? `Resumen: ${summary}` : '',
+          recordingUrl ? `Grabacion: ${recordingUrl}` : '',
+        ].filter(Boolean).join('\n')
+      ), 8000);
+      if (posted) {
+        await callsRepository.update(companyId, lead.id, callIdForBitacora, { smartHomeBitacoraAt: now });
+      } else if (posted === null) {
+        logger.warn('[Dapta Webhook] SmartHome bitacora omitida por timeout', { leadId: lead.id, callId: callIdForBitacora });
+      }
+    } catch (err) {
+      logger.warn('[Dapta Webhook] SmartHome bitacora no registrada', {
+        leadId: lead.id,
+        callId: callIdForBitacora,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }

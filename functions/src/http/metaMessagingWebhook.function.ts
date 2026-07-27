@@ -10,7 +10,7 @@ import { leadsRepository }    from '../modules/leads/leads.repository';
 import { assignLead }         from '../modules/leads/leadAssignment.service';
 import { messagesRepository } from '../modules/messages/messages.repository';
 import { uploadMediaBuffer, mimeToExt } from '../utils/storageUpload';
-import type { LeadChannel } from '../modules/leads/leads.types';
+import type { LeadChannel, LeadSourceMeta } from '../modules/leads/leads.types';
 import type { MessageMediaKind } from '../modules/messages/messages.types';
 
 // ─── Tipos del payload de Meta (Messenger Platform / Instagram Messaging) ─────
@@ -21,11 +21,22 @@ interface MetaAttachment {
   payload: { url?: string };
 }
 
+// Presente cuando el mensaje llega desde un anuncio "Click to Messenger/Instagram".
+// Docs: https://developers.facebook.com/docs/messenger-platform/reference/webhook-events/messaging_referrals
+interface MetaReferral {
+  ref?:    string;
+  ad_id?:  string;   // id del anuncio (para atribución)
+  source?: string;   // 'ADS' | 'SHORTLINK' | ...
+  type?:   string;   // 'OPEN_THREAD'
+  ads_context_data?: { ad_title?: string; photo_url?: string; video_url?: string };
+}
+
 interface MetaMessage {
   mid:          string;
   text?:        string;
   attachments?: MetaAttachment[];
   is_echo?:     boolean; // eco de un mensaje enviado por la Página (solo si se suscribe message_echoes)
+  referral?:    MetaReferral; // anuncio de origen cuando el 1er mensaje viene de un ad
 }
 
 interface MetaMessagingEvent {
@@ -33,6 +44,7 @@ interface MetaMessagingEvent {
   recipient:  { id: string };
   timestamp:  number;
   message?:   MetaMessage;
+  referral?:  MetaReferral; // evento de referral (m.me/ad) sin mensaje asociado
 }
 
 interface MetaWebhookEntry {
@@ -193,6 +205,13 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
 
   const defaultName = channel === 'messenger' ? 'Lead Messenger' : 'Lead Instagram';
 
+  // Atribución del anuncio de origen (Click to Messenger/Instagram).
+  const refMeta = resolveMetaAdReferral(event.referral ?? msg.referral);
+  const organicSource = channel === 'messenger' ? 'facebook' : 'instagram';
+  if (refMeta) {
+    logger.info(`[Meta Webhook] Lead desde anuncio (${channel})`, { adId: refMeta.adId, headline: refMeta.headline });
+  }
+
   // Buscar o crear lead por PSID/IGSID
   let lead = await leadsRepository.findByExternalId(companyId, channel, senderId);
   if (!lead) {
@@ -203,7 +222,8 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
       normalizedPhone:  '',
       name:             profileName ?? defaultName,
       status:           'new',
-      source:           channel === 'messenger' ? 'facebook' : 'instagram',
+      source:           refMeta ? 'meta_ads' : organicSource,
+      ...(refMeta ? { sourceMeta: refMeta } : {}),
       channel,
       externalId:       senderId,
       channelExternalId: `${channel}:${senderId}`,
@@ -213,7 +233,7 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
       createdAt:        now,
       updatedAt:        now,
     });
-    logger.info(`[Meta Webhook] Nuevo lead creado (${channel})`, { leadId: lead.id, senderId });
+    logger.info(`[Meta Webhook] Nuevo lead creado (${channel})`, { leadId: lead.id, senderId, source: refMeta ? 'meta_ads' : organicSource });
     lead.assignedTo = (await assignLead(companyId, lead.id)) ?? undefined;
   }
 
@@ -245,6 +265,8 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
     lastMessageAt:   now,
     lastInboundAt:   now,
     ...(nameUpdate ? { name: nameUpdate } : {}),
+    // Re-atribución si un lead existente reescribe desde un anuncio.
+    ...(refMeta ? { source: 'meta_ads', sourceMeta: refMeta } : {}),
   });
 
   logger.info(`[Meta Webhook] Mensaje procesado (${channel})`, { leadId: lead.id, msgId });
@@ -293,6 +315,18 @@ async function fetchInstagramProfileName(igsid: string): Promise<string | undefi
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Deriva la atribución de anuncio a partir del referral de Meta. Solo cuenta si
+// trae ad_id (es lo que se cruza con el gasto en el módulo de Marketing).
+function resolveMetaAdReferral(referral?: MetaReferral): LeadSourceMeta | undefined {
+  if (!referral?.ad_id) return undefined;
+  const title = referral.ads_context_data?.ad_title;
+  return {
+    adId: referral.ad_id,
+    ...(title ? { headline: title } : {}),
+    ...(referral.ref ? { sourceUrl: referral.ref } : {}),
+  };
+}
 
 function attachmentTypeToMediaKind(type: string): MessageMediaKind {
   if (type === 'image') return 'image';

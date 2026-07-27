@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase-admin/firestore';
+import type { LeadAnalysis } from '../ai/leadAnalysis.types';
 
 export type LeadStatus = 'new' | 'active' | 'qualified' | 'scheduled' | 'lost' | 'closed';
 export type LeadSource = 'whatsapp' | 'manual' | 'web' | 'facebook' | 'instagram' | 'meta_ads';
@@ -16,6 +17,22 @@ export interface LeadSourceMeta {
   sourceUrl?: string;   // referral.source_url
   mediaType?: string;   // referral.media_type
   ctwaClid?:  string;   // referral.ctwa_clid — click id para atribución de conversiones
+}
+
+export interface SmartHomeDuplicateMatch {
+  prospectId?:    string;
+  customerId?:    string;
+  ownerId?:       string;
+  ownerName?:     string;
+  firstName?:     string;
+  lastName?:      string;
+  mobileNumber?:  string;
+  phoneNumber?:   string;
+  email?:         string;
+  moduleName?:    string;
+  projectName?:   string;
+  stageName?:     string;
+  saleCycleName?: string;
 }
 
 export interface Lead {
@@ -49,6 +66,7 @@ export interface Lead {
   lastMessageAt?:   Timestamp;
   /** Último mensaje ENTRANTE del lead — usado para calcular la ventana de 24h de WhatsApp */
   lastInboundAt?:   Timestamp;
+  readBy?:          Record<string, Timestamp>;
   createdAt:        Timestamp;
   updatedAt:        Timestamp;
   tags:             string[];
@@ -56,6 +74,18 @@ export interface Lead {
   metadata:         Record<string, string>;
   /** Permiso de llamada de voz WhatsApp otorgado por el lead (requerido para llamar saliente). */
   callPermission?:  LeadCallPermission;
+  /** Radiografía IA más reciente del lead (score + análisis de la conversación). */
+  aiAnalysis?:      LeadAnalysis;
+  /** Conversiones ya enviadas a Meta (CAPI) por nombre de evento — idempotencia. */
+  capiEvents?:      Record<string, Timestamp>;
+  /** Id del cliente/prospecto creado en SmartHome (idempotencia; ausente = no sincronizado). */
+  smartHomeCustomerId?: string;
+  /** Cuándo se creó en SmartHome. */
+  smartHomeSyncedAt?:   Timestamp;
+  /** Último error de sincronización con SmartHome (vacío = sin error). */
+  smartHomeSyncError?:  string;
+  /** Coincidencias encontradas en SmartHome cuando se bloquea una creacion por duplicado. */
+  smartHomeDuplicateMatches?: SmartHomeDuplicateMatch[];
 }
 
 export interface LeadCallPermission {

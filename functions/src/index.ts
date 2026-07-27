@@ -18,9 +18,12 @@ export { metaMessagingWebhook } from './http/metaMessagingWebhook.function';
 export { daptaWebhook }       from './http/daptaWebhook.function';
 export { onMessageCreated }   from './triggers/messageCreated.trigger';
 export { onUserProfileWritten } from './triggers/userClaims.trigger';
+export { onLeadStatusChanged } from './triggers/leadStatusChanged.trigger';
+export { onLeadSmartHomeSync } from './triggers/leadSmartHomeSync.trigger';
 export { sendManualMessage }  from './http/manualMessage.function';
 export { pauseLeadAi, resumeLeadAi } from './http/aiControl.function';
 export { updateLead }                from './http/updateLead.function';
+export { markLeadRead, markLeadsRead, registerPushToken } from './http/notifications.function';
 export { listLeadsPage }             from './http/leads.function';
 export {
   getAiConfigCallable   as getAiConfig,
@@ -65,6 +68,7 @@ export {
 } from './http/users.function';
 export { listContactFields, saveContactFields } from './http/contactFields.function';
 export { startAiCall, listRecentCalls } from './http/calls.function';
+export { analyzeLead } from './http/leadAnalysis.function';
 export { daptaGetFreeSlots, daptaBookAppointment } from './http/daptaScheduling.function';
 export {
   requestCallPermission,
@@ -76,12 +80,21 @@ export {
 } from './http/whatsappCalling.function';
 export { listBroadcasts, countBroadcastAudience, sendBroadcast } from './http/broadcasts.function';
 export { getDashboardMetrics } from './http/metrics.function';
+export { generateLossInsight } from './http/leadInsights.function';
+export { getMarketingMetrics } from './http/marketing.function';
+export { getAdvisorReports } from './http/advisorReports.function';
+export {
+  syncLeadToSmartHomeCallable as syncLeadToSmartHome,
+  listSmartHomeAdvisors,
+} from './http/smarthome.function';
 export {
   listLeadLists,
   createLeadList,
   deleteLeadList,
   importLeadsChunk,
+  createContact,
 } from './http/leadLists.function';
 export { processReminders }   from './scheduled/reminders';
 export { processFollowUps }   from './scheduled/processFollowUps';
 export { processBroadcasts }  from './scheduled/processBroadcasts';
+export { processLeadAnalysis } from './scheduled/processLeadAnalysis';

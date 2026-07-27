@@ -118,6 +118,71 @@ export const deleteLeadList = onCall(
   }
 );
 
+export const createContact = onCall(
+  { region: 'us-central1', timeoutSeconds: 30 },
+  async (request) => {
+    const ctx = requireAuth(request);
+    requireRole(ctx, WRITE_ROLES);
+    const data = z.object({
+      companyId: z.string().min(1),
+      name: z.string().trim().max(120).optional().default(''),
+      phone: z.string().trim().min(7).max(40),
+      email: z.string().trim().max(160).optional().default(''),
+      company: z.string().trim().max(160).optional().default(''),
+    }).parse(request.data);
+    assertCompany(ctx, data.companyId);
+
+    const normalized = normalizeImportedPhone(data.phone);
+    if (!normalized) {
+      throw new HttpsError(
+        'invalid-argument',
+        'El número no es válido. Usa formato internacional, ej: +573001112233.'
+      );
+    }
+
+    // Si ya existe un lead con ese número, no duplicar: devolver el existente.
+    const existing = await leadCollection(data.companyId)
+      .where('normalizedPhone', '==', normalized.normalizedPhone)
+      .limit(1)
+      .get();
+    if (!existing.empty) {
+      return { leadId: existing.docs[0].id, existed: true };
+    }
+
+    const now = Timestamp.now();
+    const metadata: Record<string, string> = {
+      ...(data.email ? { email: data.email } : {}),
+      ...(data.company ? { company: data.company } : {}),
+    };
+    const ref = leadCollection(data.companyId).doc();
+    await ref.set({
+      companyId: data.companyId,
+      name: data.name || `Lead ${normalized.phone}`,
+      phone: normalized.phone,
+      normalizedPhone: normalized.normalizedPhone,
+      status: 'new',
+      source: 'manual',
+      channel: 'whatsapp',
+      aiEnabled: false,
+      // Se asigna a quien lo crea para que aparezca en su bandeja (los asesores
+      // solo ven sus leads). Un admin puede reasignarlo después.
+      assignedTo: ctx.uid,
+      lastMessageText: 'Contacto agregado manualmente',
+      lastMessageAt: now,
+      createdAt: now,
+      updatedAt: now,
+      tags: [],
+      listIds: [],
+      metadata,
+    });
+
+    logger.info('[Contacts] Contacto manual creado', {
+      companyId: data.companyId, leadId: ref.id, by: ctx.uid,
+    });
+    return { leadId: ref.id, existed: false };
+  }
+);
+
 export const importLeadsChunk = onCall(
   { region: 'us-central1', timeoutSeconds: 120, memory: '512MiB' },
   async (request) => {

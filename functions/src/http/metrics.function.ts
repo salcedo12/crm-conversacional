@@ -57,6 +57,14 @@ export const getDashboardMetrics = onCall(
       dailyMap.set(d.toISOString().slice(0, 10), 0);
     }
 
+    // ── Insights de IA (radiografía de leads) ──────────────────────────────────
+    let analyzedCount = 0;
+    let scoreSum = 0;
+    let lostTotal = 0;
+    let lostAnalyzed = 0;
+    const tempCount: Record<'hot' | 'warm' | 'cold', number> = { hot: 0, warm: 0, cold: 0 };
+    const lossCount = new Map<string, number>();
+
     for (const lead of leads) {
       if (lead.status in statusCount) statusCount[lead.status]++;
       if (lead.source && lead.source in sourceCount) sourceCount[lead.source]++;
@@ -69,7 +77,34 @@ export const getDashboardMetrics = onCall(
       if (createdMs >= since30) newLeads30d++;
       const dayKey = new Date(createdMs).toISOString().slice(0, 10);
       if (dailyMap.has(dayKey)) dailyMap.set(dayKey, (dailyMap.get(dayKey) ?? 0) + 1);
+
+      const ai = lead.aiAnalysis;
+      if (lead.status === 'lost') lostTotal++;
+      if (ai && typeof ai.score === 'number') {
+        analyzedCount++;
+        scoreSum += ai.score;
+        if (ai.temperature === 'hot' || ai.temperature === 'warm' || ai.temperature === 'cold') {
+          tempCount[ai.temperature]++;
+        }
+        if (lead.status === 'lost') {
+          lostAnalyzed++;
+          if (ai.lossCategory && ai.lossCategory !== 'ninguno') {
+            lossCount.set(ai.lossCategory, (lossCount.get(ai.lossCategory) ?? 0) + 1);
+          }
+        }
+      }
     }
+
+    const aiInsights = {
+      analyzedCount,
+      avgScore:     analyzedCount > 0 ? Math.round(scoreSum / analyzedCount) : 0,
+      temperature:  tempCount,
+      lostTotal,
+      lostAnalyzed,
+      lossReasons:  [...lossCount.entries()]
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count),
+    };
 
     // ── Citas ─────────────────────────────────────────────────────────────────
     let upcoming = 0, completed = 0, canceled = 0;
@@ -137,6 +172,7 @@ export const getDashboardMetrics = onCall(
       newLeads7d,
       newLeads30d,
       dailyNewLeads: [...dailyMap.entries()].map(([date, count]) => ({ date, count })),
+      aiInsights,
       generatedAt:   now,
     };
   }

@@ -1,5 +1,6 @@
-import { onRequest } from 'firebase-functions/v2/https';
+import { onRequest, type Request } from 'firebase-functions/v2/https';
 import { Timestamp }  from 'firebase-admin/firestore';
+import * as crypto from 'crypto';
 import { db }         from '../lib/admin';
 import { env }        from '../config/env';
 import { logger }     from '../utils/logger';
@@ -149,6 +150,30 @@ function toMediaKind(type: string): MessageMediaKind {
 
 // ─── Webhook ──────────────────────────────────────────────────────────────────
 
+/** Compara dos strings en tiempo constante (evita fugas por timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+/**
+ * Autentica el webhook con el secreto compartido (YCLOUD_WEBHOOK_SECRET).
+ * Acepta ?secret=... o header X-Webhook-Secret. Si no hay secreto configurado,
+ * no se exige (compatibilidad) pero se registra una advertencia para que se active.
+ */
+function verifyYcloudRequest(req: Request): boolean {
+  const secret = env.ycloudWebhookSecret();
+  if (!secret) {
+    logger.warn('[ycloud Webhook] Sin YCLOUD_WEBHOOK_SECRET — endpoint sin autenticar. Configúralo para protegerlo.');
+    return true;
+  }
+  const fromQuery  = typeof req.query.secret === 'string' ? req.query.secret : '';
+  const provided   = fromQuery || req.get('x-webhook-secret') || '';
+  return safeEqual(provided, secret);
+}
+
 export const ycloudWebhook = onRequest(
   {
     region:         'us-central1',
@@ -160,11 +185,32 @@ export const ycloudWebhook = onRequest(
   async (req, res) => {
     if (req.method !== 'POST') { res.sendStatus(405); return; }
 
-    // ycloud espera 200 rápido
-    res.sendStatus(200);
+    // Autenticación: bloquea payloads no firmados si hay secreto configurado.
+    if (!verifyYcloudRequest(req)) {
+      logger.warn('[ycloud Webhook] Secreto inválido — rechazado');
+      res.sendStatus(401);
+      return;
+    }
 
     const body = req.body as YcloudWebhookEvent & YcloudInboundMessage;
 
+    // Procesar ANTES de responder: en gen2 el CPU se limita tras enviar la
+    // respuesta, así que el trabajo async posterior puede no completarse. La
+    // idempotencia por id de mensaje evita duplicados si ycloud reintenta.
+    try {
+      await handleYcloudEvent(body);
+    } catch (err) {
+      logger.error('[ycloud Webhook] Error no controlado', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    res.sendStatus(200);
+  }
+);
+
+/** Enruta un evento de ycloud (echo, llamada, actualización o mensaje inbound). */
+async function handleYcloudEvent(body: YcloudWebhookEvent & YcloudInboundMessage): Promise<void> {
     logger.info('[ycloud Webhook] Payload recibido', {
       topType:    body.type,
       hasWrapper: !!body.whatsappInboundMessage,
@@ -255,8 +301,7 @@ export const ycloudWebhook = onRequest(
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }
-);
+}
 
 // ─── Procesamiento ────────────────────────────────────────────────────────────
 
@@ -314,12 +359,13 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
       mediaType = mediaData.mime_type;
       content   = mediaData.caption ?? '';
 
-      // Usar el link firmado de ycloud directamente — es una URL pública pre-firmada
-      // con validez de ~1 año, sin necesidad de descargar ni re-subir a Storage.
+      // Las URLs firmadas de ycloud son temporales (se firman en cada webhook y
+      // caducan). Para que el historial sea viable a futuro, descargamos TODA la
+      // media entrante y la re-hospedamos en Firebase Storage (permanente).
       // Si no viene link, construir desde id.
       const mediaSource = getYcloudMediaSource(mediaData);
 
-      if (mediaSource && msg.type === 'sticker') {
+      if (mediaSource) {
         try {
           const buffer = await downloadUrl(mediaSource, env.ycloudApiKey());
           const ext    = mimeToExt(mediaType);
@@ -327,13 +373,13 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
           const result = await uploadMediaBuffer(buffer, mediaType, path);
           mediaUrl         = result.downloadUrl;
           mediaStoragePath = result.storagePath;
-          logger.info('[ycloud] Sticker guardado en Storage', { type: msg.type, msgId });
+          logger.info('[ycloud] Media guardada en Storage', { type: msg.type, msgId });
         } catch (err) {
-          logger.error('[ycloud] Error descargando sticker', { error: String(err), msgId });
+          // Fallback: si falla la descarga, conservar la URL temporal de ycloud
+          // para no perder el mensaje (aunque pueda caducar).
+          mediaUrl = mediaSource;
+          logger.error('[ycloud] Error descargando media, se usa URL temporal de ycloud', { error: String(err), msgId, type: msg.type });
         }
-      } else if (mediaSource) {
-        mediaUrl = mediaSource;
-        logger.info('[ycloud] Media URL asignada directamente', { type: msg.type, msgId });
       } else {
         logger.warn('[ycloud] Media sin link ni id', { type: msg.type, msgId });
       }
@@ -348,18 +394,28 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
 
   const now = Timestamp.now();
 
+  // Atribución del anuncio de origen (solo si el mensaje llega desde un
+  // "Click to WhatsApp" de Meta; msg.referral trae el id del anuncio).
+  const { source: refSource, sourceMeta: refMeta } = resolveLeadSource(msg.referral);
+  if (msg.referral) {
+    logger.info('[ycloud] Lead desde anuncio de Meta (referral)', {
+      adId:     msg.referral.source_id,
+      headline: msg.referral.headline,
+      ctwaClid: msg.referral.ctwa_clid,
+    });
+  }
+
   // Buscar o crear lead
   let lead = await leadsRepository.findByNormalizedPhone(companyId, normPhone);
   if (!lead) {
-    const { source, sourceMeta } = resolveLeadSource(msg.referral);
     lead = await leadsRepository.create(companyId, {
       companyId,
       phone,
       normalizedPhone: normPhone,
       name:            profileName ?? `Lead ${phone}`,
       status:          'new',
-      source,
-      ...(sourceMeta ? { sourceMeta } : {}),
+      source:          refSource,
+      ...(refMeta ? { sourceMeta: refMeta } : {}),
       inboxProvider:   'ycloud',
       ...(inboxId ? { inboxId } : {}),
       aiEnabled:       true,
@@ -368,7 +424,7 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
       createdAt:       now,
       updatedAt:       now,
     });
-    logger.info('[ycloud] Nuevo lead creado', { leadId: lead.id, phone });
+    logger.info('[ycloud] Nuevo lead creado', { leadId: lead.id, phone, source: refSource });
     lead.assignedTo = (await assignLead(companyId, lead.id)) ?? undefined;
   }
 
@@ -398,6 +454,9 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
     inboxProvider:   'ycloud',
     ...(inboxId ? { inboxId } : {}),
     ...(profileName && lead.name?.startsWith('Lead ') ? { name: profileName } : {}),
+    // Re-atribución: si un lead existente reescribe desde un anuncio, registrar
+    // el toque de anuncio más reciente (no perder la atribución).
+    ...(refMeta ? { source: 'meta_ads', sourceMeta: refMeta } : {}),
   });
 
   logger.info('[ycloud] Mensaje procesado', { leadId: lead.id, msgId, type: msg.type });

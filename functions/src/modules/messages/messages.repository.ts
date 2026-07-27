@@ -71,6 +71,23 @@ export const messagesRepository = {
   },
 
   /**
+   * Último mensaje de la conversación (por createdAt). Usado por el debounce:
+   * si al despertar el último mensaje ya no es el que estamos procesando, otro
+   * mensaje más nuevo llegó y él se encargará de responder la ráfaga completa.
+   */
+  async getLatest(
+    companyId: string,
+    leadId: string
+  ): Promise<Message | null> {
+    const snap = await col(companyId, leadId)
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    return { id: snap.docs[0].id, ...snap.docs[0].data() } as Message;
+  },
+
+  /**
    * Marca el mensaje como ya procesado por la IA (idempotencia del trigger).
    */
   async markAiProcessed(

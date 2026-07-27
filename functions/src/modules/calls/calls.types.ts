@@ -47,6 +47,8 @@ export interface Call {
   triggeredBy?:  string;
   /** Payload crudo del webhook, por si hace falta mapear campos nuevos sin redeploy. */
   raw?:          Record<string, unknown>;
+  /** Bitacora de SmartHome ya enviada para esta llamada. */
+  smartHomeBitacoraAt?: Timestamp;
   // ── Señalización WebRTC (solo provider = 'ycloud_whatsapp') ────────────────
   /** SDP offer — de quien inicia la llamada. */
   sdpOffer?:     string;
