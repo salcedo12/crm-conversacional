@@ -62,6 +62,10 @@ export interface Lead {
   assignedTo?:      string;           // userId del asesor asignado
   aiEnabled:        boolean;          // true = IA responde automáticamente
   takeoverBy?:      string;           // userId que tomó control manual
+  /** Control de costo IA: nº de respuestas automáticas en la ventana horaria actual. */
+  aiHourlyCount?:       number;
+  /** Inicio de la ventana horaria del contador anti-loop de la IA. */
+  aiHourlyWindowStart?: Timestamp;
   lastMessageText?: string;
   lastMessageAt?:   Timestamp;
   /** Último mensaje ENTRANTE del lead — usado para calcular la ventana de 24h de WhatsApp */

@@ -1,6 +1,15 @@
 {
   "indexes": [
     {
+      "collectionGroup": "notes",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "kind",     "order": "ASCENDING" },
+        { "fieldPath": "notified", "order": "ASCENDING" },
+        { "fieldPath": "dueAt",    "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "leads",
       "queryScope": "COLLECTION",
       "fields": [

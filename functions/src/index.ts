@@ -24,6 +24,7 @@ export { sendManualMessage }  from './http/manualMessage.function';
 export { pauseLeadAi, resumeLeadAi } from './http/aiControl.function';
 export { updateLead }                from './http/updateLead.function';
 export { markLeadRead, markLeadsRead, registerPushToken } from './http/notifications.function';
+export { addLeadNote, deleteLeadNote, setReminderDone } from './http/leadNotes.function';
 export { listLeadsPage }             from './http/leads.function';
 export {
   getAiConfigCallable   as getAiConfig,
@@ -95,6 +96,8 @@ export {
   createContact,
 } from './http/leadLists.function';
 export { processReminders }   from './scheduled/reminders';
+export { processLeadReminders } from './scheduled/leadReminders';
+export { scheduledFirestoreBackup } from './scheduled/firestoreBackup';
 export { processFollowUps }   from './scheduled/processFollowUps';
 export { processBroadcasts }  from './scheduled/processBroadcasts';
 export { processLeadAnalysis } from './scheduled/processLeadAnalysis';

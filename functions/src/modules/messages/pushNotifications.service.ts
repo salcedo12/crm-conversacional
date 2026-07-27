@@ -23,8 +23,15 @@ function preview(message: Message): string {
   return 'Nuevo mensaje entrante';
 }
 
-export async function sendInboundLeadPush(companyId: string, lead: Lead, message: Message): Promise<void> {
-  const advisorId = lead.assignedTo;
+/**
+ * Envía una notificación push a todos los dispositivos de un asesor.
+ * Limpia tokens inválidos. Núcleo reutilizable (mensajes inbound, recordatorios…).
+ */
+export async function sendAdvisorPush(
+  companyId: string,
+  advisorId: string | undefined,
+  payload: { title: string; body: string; url: string; type: string; leadId?: string }
+): Promise<void> {
   if (!advisorId) return;
 
   const snap = await db
@@ -41,16 +48,14 @@ export async function sendInboundLeadPush(companyId: string, lead: Lead, message
 
   const response = await messaging.sendEachForMulticast({
     tokens,
-    webpush: {
-      headers: { Urgency: 'high' },
-    },
+    webpush: { headers: { Urgency: 'high' } },
     data: {
       companyId,
-      leadId: lead.id,
-      type: 'inbound-message',
-      title: `Nuevo mensaje de ${leadName(lead)}`,
-      body: preview(message),
-      url: `/dashboard/inbox?lead=${lead.id}`,
+      ...(payload.leadId ? { leadId: payload.leadId } : {}),
+      type:  payload.type,
+      title: payload.title,
+      body:  payload.body,
+      url:   payload.url,
     },
   });
 
@@ -72,12 +77,20 @@ export async function sendInboundLeadPush(companyId: string, lead: Lead, message
       .catch(() => {})
   ));
 
-  logger.info('[Push] Notificacion inbound enviada', {
-    companyId,
-    leadId: lead.id,
-    advisorId,
+  logger.info('[Push] Notificacion enviada', {
+    companyId, advisorId, type: payload.type,
     successCount: response.successCount,
     failureCount: response.failureCount,
     staleCount: staleTokens.length,
+  });
+}
+
+export async function sendInboundLeadPush(companyId: string, lead: Lead, message: Message): Promise<void> {
+  await sendAdvisorPush(companyId, lead.assignedTo, {
+    title:  `Nuevo mensaje de ${leadName(lead)}`,
+    body:   preview(message),
+    url:    `/dashboard/inbox?lead=${lead.id}`,
+    type:   'inbound-message',
+    leadId: lead.id,
   });
 }

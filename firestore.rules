@@ -95,6 +95,13 @@ service cloud.firestore {
           allow read:  if canReadLead(companyId, leadId);
           allow write: if false;
         }
+
+        // Notas internas y recordatorios del lead. Lectura en tiempo real desde
+        // el cliente; escrituras solo vía callables (addLeadNote, etc.).
+        match /notes/{noteId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
       }
 
       // ── Resto de subcolecciones de la empresa ──────────────────────────────

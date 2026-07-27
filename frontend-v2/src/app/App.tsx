@@ -14,6 +14,8 @@ import { CalendarPage }     from '@/features/calendar/pages/CalendarPage';
 import { CallsPage }        from '@/features/calls/pages/CallsPage';
 import { MarketingPage }    from '@/features/marketing/pages/MarketingPage';
 import { ReportsPage }      from '@/features/reports/pages/ReportsPage';
+import { PrivacyPolicyPage } from '@/features/legal/pages/PrivacyPolicyPage';
+import { TermsPage }        from '@/features/legal/pages/TermsPage';
 
 export default function App() {
   return (
@@ -22,6 +24,8 @@ export default function App() {
         <Routes>
           {/* Public */}
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/privacy" element={<PrivacyPolicyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
 
           {/* Protected */}
           <Route element={<ProtectedRoute />}>

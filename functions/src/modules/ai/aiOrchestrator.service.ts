@@ -33,6 +33,14 @@ export interface OrchestratorInput {
  */
 const DEBOUNCE_MS = 6000;
 
+/**
+ * Guarda de costo / anti-loop: máximo de respuestas automáticas de la IA a un
+ * mismo lead dentro de una ventana de 1 hora. Si se supera (spam o bucle entre
+ * bots), se pausa la IA del lead para cortar el gasto y que un asesor lo revise.
+ */
+const AI_HOURLY_CAP = 25;
+const AI_WINDOW_MS  = 60 * 60 * 1000;
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -94,6 +102,19 @@ export async function orchestrateAiResponse(
   const freshLead = await leadsRepository.findById(companyId, leadId);
   if (!freshLead?.aiEnabled) {
     logger.info('[AI] IA pausada durante el debounce — no se responde', { leadId });
+    return;
+  }
+
+  // 2b-bis. Guarda de costo / anti-loop: si la IA ya respondió demasiado en la
+  //         última hora a este lead, se pausa y no se responde (spam o bucle).
+  const nowMs        = Date.now();
+  const windowActive = nowMs - (freshLead.aiHourlyWindowStart?.toMillis?.() ?? 0) < AI_WINDOW_MS;
+  const priorCount   = windowActive ? (freshLead.aiHourlyCount ?? 0) : 0;
+  if (priorCount >= AI_HOURLY_CAP) {
+    logger.warn('[AI] Tope horario de respuestas alcanzado — se pausa la IA (posible loop/spam)', {
+      leadId, count: priorCount,
+    });
+    await leadsRepository.update(companyId, leadId, { aiEnabled: false });
     return;
   }
 
@@ -221,6 +242,14 @@ export async function orchestrateAiResponse(
 
   // 7. Guardar respuesta IA + enviar por el canal del lead
   const aiSentAt = await saveAndSendAiResponse(companyId, leadId, lead, aiReply);
+
+  // 7b. Actualizar el contador de la guarda de costo (ventana horaria).
+  await leadsRepository.update(companyId, leadId, {
+    aiHourlyCount:       priorCount + 1,
+    aiHourlyWindowStart: windowActive
+      ? (freshLead.aiHourlyWindowStart ?? Timestamp.fromMillis(nowMs))
+      : Timestamp.fromMillis(nowMs),
+  });
 
   // 8. Marcar mensaje original como procesado (idempotencia)
   await messagesRepository.markAiProcessed(companyId, leadId, messageId);
