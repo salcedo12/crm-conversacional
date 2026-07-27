@@ -12,6 +12,8 @@ import { TemplatesPage }    from '@/features/templates/pages/TemplatesPage';
 import { BroadcastsPage }   from '@/features/broadcasts/pages/BroadcastsPage';
 import { CalendarPage }     from '@/features/calendar/pages/CalendarPage';
 import { CallsPage }        from '@/features/calls/pages/CallsPage';
+import { MarketingPage }    from '@/features/marketing/pages/MarketingPage';
+import { ReportsPage }      from '@/features/reports/pages/ReportsPage';
 
 export default function App() {
   return (
@@ -33,6 +35,8 @@ export default function App() {
 
               {/* Solo admin/manager */}
               <Route element={<RoleRoute allowed={['admin', 'manager']} />}>
+                <Route path="/dashboard/marketing"  element={<MarketingPage />} />
+                <Route path="/dashboard/reports"    element={<ReportsPage />} />
                 <Route path="/dashboard/templates"  element={<TemplatesPage />} />
                 <Route path="/dashboard/broadcasts" element={<BroadcastsPage />} />
               </Route>

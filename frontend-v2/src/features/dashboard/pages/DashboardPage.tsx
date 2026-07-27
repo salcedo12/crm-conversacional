@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useAuth }   from '@/features/auth/hooks/useAuth';
+import { isAdminRole } from '@/features/auth/types';
 import { Spinner }   from '@/shared/components/Spinner';
 import { getDashboardMetrics, type DashboardMetrics } from '../services/metrics.service';
+import { AiInsightsPanel } from '../components/AiInsightsPanel';
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
   new:       { label: 'Nuevo',      color: 'bg-sky-500'     },
@@ -17,7 +19,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 export function DashboardPage() {
-  const { companyId, profile } = useAuth();
+  const { companyId, profile, role } = useAuth();
   const [data,    setData]    = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -69,6 +71,15 @@ export function DashboardPage() {
             <KpiCard label="Citas próximas"  value={data.appointments.upcoming} hint={`${data.appointments.total} en total`} />
             <KpiCard label="Nuevos (30d)"    value={data.newLeads30d}           hint="últimos 30 días" />
           </div>
+
+          {/* ── Análisis IA de leads (score, temperatura, pérdidas) ──────── */}
+          {data.aiInsights && (
+            <AiInsightsPanel
+              insights={data.aiInsights}
+              companyId={companyId ?? ''}
+              canGenerate={isAdminRole(role)}
+            />
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* ── Leads por estado ───────────────────────────────────────── */}

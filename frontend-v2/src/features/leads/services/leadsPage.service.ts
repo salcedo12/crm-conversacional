@@ -2,7 +2,7 @@ import { Timestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/config/firebase';
 import type { Lead } from '@/features/inbox/types';
-import type { LeadsFilters, SortDir, SortField } from '../hooks/useLeadsPage';
+import type { LeadsFilters, SortDir, ServerSortField } from '../hooks/useLeadsPage';
 
 export interface LeadsPageCursor {
   id: string;
@@ -13,7 +13,7 @@ export interface ListLeadsPageInput {
   companyId:  string;
   pageSize:   number;
   cursor?:    LeadsPageCursor | null;
-  sortField:  SortField;
+  sortField:  ServerSortField;
   sortDir:    SortDir;
   filters:    LeadsFilters;
 }
@@ -49,13 +49,17 @@ function reviveTimestamp(value: unknown): Timestamp {
 }
 
 function reviveLead(raw: Record<string, unknown>): Lead {
-  return {
+  const lead: Lead = {
     ...(raw as unknown as Lead),
     createdAt: reviveTimestamp(raw.createdAt),
     updatedAt: reviveTimestamp(raw.updatedAt),
     lastMessageAt: raw.lastMessageAt ? reviveTimestamp(raw.lastMessageAt) : undefined,
     lastInboundAt: raw.lastInboundAt ? reviveTimestamp(raw.lastInboundAt) : undefined,
   };
+  if (lead.aiAnalysis?.analyzedAt) {
+    lead.aiAnalysis = { ...lead.aiAnalysis, analyzedAt: reviveTimestamp(lead.aiAnalysis.analyzedAt) };
+  }
+  return lead;
 }
 
 export async function listLeadsPage(input: ListLeadsPageInput): Promise<ListLeadsPageResult> {

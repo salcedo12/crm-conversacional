@@ -64,7 +64,7 @@ export function ConfigPage() {
 
       <div className="flex-1 overflow-y-auto">
         {tab === 'ia' && (
-          <div className="mx-auto max-w-2xl px-6 py-6">
+          <div className="max-w-3xl px-6 py-6">
             {status === 'loading' ? (
               <div className="flex justify-center py-16"><Spinner /></div>
             ) : !draft ? (
@@ -86,7 +86,7 @@ export function ConfigPage() {
         )}
 
         {tab === 'conexiones' && (
-          <div className="mx-auto max-w-2xl px-6 py-6">
+          <div className="max-w-2xl px-6 py-6">
             <div className="mb-6">
               <h2 className="text-sm font-semibold text-zinc-100">Conexiones</h2>
               <p className="mt-1 text-xs text-zinc-500">
@@ -98,7 +98,7 @@ export function ConfigPage() {
         )}
 
         {tab === 'agenda' && (
-          <div className="mx-auto max-w-2xl px-6 py-6">
+          <div className="max-w-2xl px-6 py-6">
             <div className="mb-6">
               <h2 className="text-sm font-semibold text-zinc-100">Horario de atencion</h2>
               <p className="mt-1 text-xs text-zinc-500">
@@ -110,13 +110,13 @@ export function ConfigPage() {
         )}
 
         {tab === 'usuarios' && (
-          <div className="mx-auto max-w-4xl px-6 py-6">
+          <div className="max-w-4xl px-6 py-6">
             <UserManagementPanel companyId={resolvedCompanyId} />
           </div>
         )}
 
         {tab === 'campos' && (
-          <div className="mx-auto max-w-4xl px-6 py-6">
+          <div className="max-w-4xl px-6 py-6">
             <ContactFieldsPanel companyId={resolvedCompanyId} />
           </div>
         )}

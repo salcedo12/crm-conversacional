@@ -41,6 +41,7 @@ export interface Lead {
   lastMessageText?: string;
   lastMessageAt?:   Timestamp;
   lastInboundAt?:   Timestamp;
+  readBy?:          Record<string, Timestamp>;
   createdAt:        Timestamp;
   updatedAt:        Timestamp;
   tags:             string[];
@@ -48,6 +49,8 @@ export interface Lead {
   metadata:         Record<string, string>;
   /** Permiso de llamada de voz WhatsApp otorgado por el lead (requerido para llamar saliente). */
   callPermission?:  LeadCallPermission;
+  /** Radiografía IA más reciente del lead. */
+  aiAnalysis?:      LeadAnalysis;
 }
 
 export interface LeadCallPermission {
@@ -56,6 +59,33 @@ export interface LeadCallPermission {
   expiresAt?:       Timestamp | null;
   grantedAt?:       Timestamp;
   lastRequestedAt?: Timestamp;
+}
+
+export type LeadTemperature = 'hot' | 'warm' | 'cold';
+
+export type LeadLossCategory =
+  | 'precio' | 'ubicacion' | 'competencia' | 'sin_respuesta'
+  | 'tiempo' | 'no_califica' | 'atencion' | 'otro' | 'ninguno';
+
+/** Radiografía IA del lead (score + análisis de la conversación) guardada en el doc. */
+export interface LeadAnalysis {
+  score:            number;
+  temperature:      LeadTemperature;
+  summary:          string;
+  interestLevel:    string;
+  buyingSignals:    string[];
+  objections:       string[];
+  budget:           string | null;
+  interestArea:     string | null;
+  nextAction:       string;
+  nextActionReason: string;
+  lossRisk:         string;
+  lossCategory:     LeadLossCategory;
+  scoreReasons:     string[];
+  messageCount:     number;
+  model:            string;
+  analyzedBy:       string;
+  analyzedAt:       Timestamp;
 }
 
 export type MessageDirection  = 'inbound' | 'outbound';

@@ -10,17 +10,20 @@ import type { Lead }            from '../types';
 import type { MediaUploadResult } from '../services/media.service';
 import { useMessages }          from '../hooks/useMessages';
 import { sendManualMessage, pauseAi, resumeAi } from '../services/messages.service';
+import { markLeadRead }         from '../services/notifications.service';
 
 interface ChatWindowProps {
   lead:      Lead;
   companyId: string;
   onOpenLeadDetails?: () => void;
   onBack?:   () => void;
+  onMarkedRead?: (leadId: string, readAtMillis: number) => void;
 }
 
-export function ChatWindow({ lead, companyId, onOpenLeadDetails, onBack }: ChatWindowProps) {
+export function ChatWindow({ lead, companyId, onOpenLeadDetails, onBack, onMarkedRead }: ChatWindowProps) {
   const { messages, loading } = useMessages(companyId, lead.id);
   const bottomRef             = useRef<HTMLDivElement>(null);
+  const markedReadKeyRef      = useRef<string | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
 
   // Auto-scroll to bottom when new messages arrive
@@ -28,9 +31,24 @@ export function ChatWindow({ lead, companyId, onOpenLeadDetails, onBack }: ChatW
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    if (!companyId || !lead.lastInboundAt) return;
+    const readAtMillis = lead.lastInboundAt.toMillis();
+    const markKey = `${companyId}:${lead.id}:${readAtMillis}`;
+    if (markedReadKeyRef.current === markKey) return;
+
+    markedReadKeyRef.current = markKey;
+    onMarkedRead?.(lead.id, readAtMillis);
+    markLeadRead(companyId, lead.id, readAtMillis).catch((err) => {
+      console.warn('[ChatWindow] No se pudo marcar el lead como leido:', err);
+    });
+  }, [companyId, lead.id, lead.lastInboundAt, onMarkedRead]);
+
   const isWhatsapp = !lead.channel || lead.channel === 'whatsapp';
-  const windowTs   = lead.lastInboundAt ?? lead.lastMessageAt ?? null;
-  const windowOpen = isWindowOpen(windowTs);
+  // La ventana de 24h SOLO la abre un mensaje entrante real del lead. Un lead sin
+  // lastInboundAt (contacto agregado manualmente / importado) está fuera de ventana:
+  // el primer mensaje debe ser una plantilla, no texto libre (WhatsApp lo rechaza).
+  const windowOpen = isWindowOpen(lead.lastInboundAt ?? null);
 
   const handleSend = async (content: string, media?: MediaUploadResult) => {
     await sendManualMessage(companyId, lead.id, content, media?.downloadUrl, media?.contentType);
@@ -73,7 +91,7 @@ export function ChatWindow({ lead, companyId, onOpenLeadDetails, onBack }: ChatW
       </div>
 
       {/* Compositor o aviso de ventana cerrada (Messenger/Instagram: siempre abierto, no hay plantillas) */}
-      {!isWhatsapp || windowOpen || !lead.lastInboundAt ? (
+      {!isWhatsapp || windowOpen ? (
         <MessageComposer
           leadId={lead.id}
           companyId={companyId}

@@ -62,7 +62,9 @@ export function LeadsPage() {
         companyId,
         pageSize: 50,
         cursor,
-        sortField,
+        // El score se ordena en cliente (sobre la página cargada); el servidor
+        // pagina por actividad reciente.
+        sortField: sortField === 'score' ? 'lastMessageAt' : sortField,
         sortDir,
         filters,
       });

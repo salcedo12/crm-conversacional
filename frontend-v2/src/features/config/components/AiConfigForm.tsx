@@ -38,9 +38,12 @@ export function AiConfigForm({
 
       {/* ── Sección: General ────────────────────────────────────────── */}
       <section className="flex flex-col gap-5">
-        <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-          General
-        </h3>
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+            General
+          </h3>
+          <p className="mt-1 text-xs text-zinc-500">Quién es tu asistente y cómo suena al escribir.</p>
+        </div>
 
         {/* Enable toggle */}
         <div className="flex items-center justify-between rounded-xl bg-zinc-800/60 border border-zinc-700/50 px-4 py-3">
@@ -125,12 +128,26 @@ export function AiConfigForm({
       {/* ── Sección: Prompt principal ────────────────────────────────── */}
       <section className="flex flex-col gap-5">
         <div className="flex items-baseline justify-between">
-          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-            Prompt principal
-          </h3>
-          <span className="text-[10px] text-zinc-600">
+          <div>
+            <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+              Cómo debe contestar
+            </h3>
+            <p className="mt-1 text-xs text-zinc-500">Lo más importante: aquí defines qué dice y cómo se comporta la IA.</p>
+          </div>
+          <span className="shrink-0 text-[10px] text-zinc-600">
             {draft.basePrompt.length} / 20 000 caracteres
           </span>
+        </div>
+
+        {/* Guía rápida para escribir buenas instrucciones */}
+        <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3 text-xs leading-relaxed text-zinc-400">
+          <p className="mb-1.5 font-medium text-violet-200">💡 Cómo escribir buenas instrucciones</p>
+          <ul className="list-disc space-y-0.5 pl-4">
+            <li>Háblale de “tú” a la IA: <span className="text-zinc-300">“Eres el asistente de… Tu objetivo es…”</span></li>
+            <li>Di <span className="text-zinc-300">qué hacer</span> y también <span className="text-zinc-300">qué NO hacer</span> (ej: “nunca inventes precios”).</li>
+            <li>Pon ejemplos de respuestas ideales para casos comunes.</li>
+            <li>Los precios, horarios y FAQs mejor ponlos en <span className="text-zinc-300">Base de conocimiento</span> (abajo).</li>
+          </ul>
         </div>
 
         <FormField
@@ -161,9 +178,12 @@ export function AiConfigForm({
 
       {/* ── Sección: Comportamiento ─────────────────────────────────── */}
       <section className="flex flex-col gap-5">
-        <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-          Comportamiento
-        </h3>
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+            Comportamiento
+          </h3>
+          <p className="mt-1 text-xs text-zinc-500">Reglas de seguridad: cuándo pasar a un humano y qué temas evitar.</p>
+        </div>
 
         {/* Fallback */}
         <FormField
@@ -251,7 +271,7 @@ export function AiConfigForm({
         </p>
       )}
 
-      <div className="flex items-center gap-3 pt-2 pb-6">
+      <div className="sticky bottom-0 z-10 -mx-6 flex flex-wrap items-center gap-3 border-t border-zinc-800 bg-zinc-950/95 px-6 py-4 backdrop-blur">
         <Button
           onClick={onSave}
           disabled={!isDirty || saving}
@@ -270,8 +290,11 @@ export function AiConfigForm({
           Restaurar prompt original
         </Button>
 
+        {saved && !isDirty && (
+          <span className="ml-auto text-xs text-emerald-400">✓ Cambios guardados</span>
+        )}
         {isDirty && !saving && (
-          <span className="text-xs text-amber-400 ml-auto">● Cambios sin guardar</span>
+          <span className="ml-auto text-xs text-amber-400">● Cambios sin guardar</span>
         )}
       </div>
     </div>

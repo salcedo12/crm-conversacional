@@ -22,9 +22,9 @@ export function ConversationHeader({ lead, onPauseAi, onResumeAi, onOpenTemplate
   const displayName  = lead.name ?? formatPhone(lead.phone);
   const badge        = channelBadge(lead.channel);
   const isWhatsapp   = !lead.channel || lead.channel === 'whatsapp';
-  // lastInboundAt es el campo exacto (seteado desde ahora en adelante).
-  // Para leads existentes sin ese campo, usar lastMessageAt como aproximación.
-  const windowTs   = lead.lastInboundAt ?? lead.lastMessageAt ?? null;
+  // La ventana de 24h solo la abre un mensaje entrante real del lead. Un lead sin
+  // lastInboundAt (contacto manual/importado) se muestra como fuera de ventana.
+  const windowTs   = lead.lastInboundAt ?? null;
   const windowOpen = isWindowOpen(windowTs);
   const timeLeft   = windowTimeLeft(windowTs);
   const closedAgo  = windowClosedAgo(windowTs);

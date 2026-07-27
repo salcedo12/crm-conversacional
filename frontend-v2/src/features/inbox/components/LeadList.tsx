@@ -1,22 +1,31 @@
 import { useState, useMemo } from 'react';
+import { UserPlus, CheckCheck } from 'lucide-react';
 import { Spinner }       from '@/shared/components/Spinner';
 import { EmptyState }    from '@/shared/components/EmptyState';
+import { useAuth }       from '@/features/auth/hooks/useAuth';
 import { LeadListItem }  from './LeadListItem';
 import { collectInboxes, inboxLabel } from '../utils/inboxes';
+import { countUnreadLeads, isLeadUnreadForUser } from '../utils/readState';
 import type { Lead }     from '../types';
 
 interface LeadListProps {
-  leads:       Lead[];
-  loading:     boolean;
-  selectedId:  string | null;
-  onSelect:    (id: string) => void;
+  leads:         Lead[];
+  loading:       boolean;
+  selectedId:    string | null;
+  onSelect:      (id: string) => void;
+  /** Si se provee, muestra el botón "Nuevo contacto" (oculto para roles sin permiso de escritura). */
+  onNewContact?: () => void;
+  /** Marca como leídos todos los leads con mensajes sin leer del usuario. */
+  onMarkAllRead?: () => void;
 }
 
-export function LeadList({ leads, loading, selectedId, onSelect }: LeadListProps) {
+export function LeadList({ leads, loading, selectedId, onSelect, onNewContact, onMarkAllRead }: LeadListProps) {
   const [search, setSearch]   = useState('');
   const [inbox,  setInbox]    = useState<string>('all'); // 'all' | inboxId
+  const { user } = useAuth();
 
   const inboxes = useMemo(() => collectInboxes(leads), [leads]);
+  const unreadCount = useMemo(() => countUnreadLeads(leads, user?.uid), [leads, user?.uid]);
 
   const filtered = leads.filter((l) => {
     // Filtro por número (inbox)
@@ -37,14 +46,40 @@ export function LeadList({ leads, loading, selectedId, onSelect }: LeadListProps
     <div className="flex flex-col h-full border-r border-zinc-800">
       {/* Header */}
       <div className="px-4 py-3 border-b border-zinc-800">
-        <h2 className="text-sm font-semibold text-zinc-100 mb-2">
-          Bandeja de Entrada
-          {!loading && (
-            <span className="ml-2 text-xs text-zinc-500 font-normal">
-              ({leads.length})
-            </span>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-zinc-100">
+            Bandeja de Entrada
+            {!loading && (
+              <span className="ml-2 text-xs text-zinc-500 font-normal">
+                ({leads.length})
+              </span>
+            )}
+            {!loading && unreadCount > 0 && (
+              <span className="ml-2 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300">
+                {unreadCount} sin leer
+              </span>
+            )}
+          </h2>
+          {onNewContact && (
+            <button
+              onClick={onNewContact}
+              title="Nuevo contacto"
+              className="flex shrink-0 items-center gap-1 rounded-lg border border-violet-500/40 bg-violet-600/15 px-2 py-1 text-[11px] font-medium text-violet-200 transition-colors hover:bg-violet-600/25"
+            >
+              <UserPlus size={13} /> Nuevo
+            </button>
           )}
-        </h2>
+        </div>
+
+        {/* Marcar todo como leído — solo si hay pendientes */}
+        {onMarkAllRead && !loading && unreadCount > 0 && (
+          <button
+            onClick={onMarkAllRead}
+            className="mb-2 flex items-center gap-1 text-[11px] text-zinc-400 transition-colors hover:text-violet-300"
+          >
+            <CheckCheck size={13} /> Marcar todo como leído
+          </button>
+        )}
 
         {/* Selector de número (solo si hay 2+ números/inboxes) */}
         {inboxes.length > 1 && (
@@ -113,6 +148,7 @@ export function LeadList({ leads, loading, selectedId, onSelect }: LeadListProps
             key={lead.id}
             lead={lead}
             isSelected={lead.id === selectedId}
+            isUnread={isLeadUnreadForUser(lead, user?.uid)}
             onClick={() => onSelect(lead.id)}
           />
         ))}

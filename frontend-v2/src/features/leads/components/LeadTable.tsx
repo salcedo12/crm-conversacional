@@ -4,6 +4,7 @@ import { formatPhone } from '@/shared/utils/formatPhone';
 import { AiStatusBadge } from '@/features/inbox/components/AiStatusBadge';
 import { LeadStatusBadge } from './LeadStatusBadge';
 import { LeadSourceBadge } from './LeadSourceBadge';
+import { LeadScoreBadge } from './LeadScoreBadge';
 import type { Lead } from '@/features/inbox/types';
 import type { SortField, SortDir } from '../hooks/useLeadsPage';
 import type { Advisor } from '../services/advisors.service';
@@ -65,10 +66,11 @@ export function LeadTable({
 
   return (
     <div className="flex-1 overflow-auto overscroll-contain">
-      <table className="w-full min-w-[1220px] border-collapse text-sm">
+      <table className="w-full min-w-[1320px] border-collapse text-sm">
         <thead className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-900/95 backdrop-blur">
           <tr>
             <Th label="Contacto" field="name" sortField={sortField} sortDir={sortDir} onSort={onSort} className="w-64" />
+            <Th label="Score IA" field="score" sortField={sortField} sortDir={sortDir} onSort={onSort} className="w-24" />
             <Th label="Estado" field="status" sortField={sortField} sortDir={sortDir} onSort={onSort} className="w-32" />
             <Th label="Origen" sortField={sortField} sortDir={sortDir} onSort={onSort} className="w-28" />
             <Th label="Atención" sortField={sortField} sortDir={sortDir} onSort={onSort} className="w-32" />
@@ -102,6 +104,9 @@ export function LeadTable({
                       <p className="mt-0.5 text-[10px] text-zinc-500">{formatPhone(lead.phone)}</p>
                     </div>
                   </div>
+                </td>
+                <td className="px-4 py-3">
+                  <LeadScoreBadge score={lead.aiAnalysis?.score} temperature={lead.aiAnalysis?.temperature} />
                 </td>
                 <td className="px-4 py-3"><LeadStatusBadge status={lead.status} /></td>
                 <td className="px-4 py-3"><LeadSourceBadge source={lead.source} /></td>

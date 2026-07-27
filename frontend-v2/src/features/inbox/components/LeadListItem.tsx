@@ -7,10 +7,11 @@ import type { Lead }          from '../types';
 interface LeadListItemProps {
   lead:       Lead;
   isSelected: boolean;
+  isUnread:   boolean;
   onClick:    () => void;
 }
 
-export function LeadListItem({ lead, isSelected, onClick }: LeadListItemProps) {
+export function LeadListItem({ lead, isSelected, isUnread, onClick }: LeadListItemProps) {
   const displayName = lead.name ?? formatPhone(lead.phone);
   const preview     = lead.lastMessageText ?? '—';
   const time        = formatMessageTime(lead.lastMessageAt);
@@ -23,18 +24,22 @@ export function LeadListItem({ lead, isSelected, onClick }: LeadListItemProps) {
         w-full text-left px-4 py-3 transition-colors border-b border-zinc-800/60
         hover:bg-zinc-800/50 focus:outline-none
         ${isSelected ? 'bg-zinc-800 border-l-2 border-l-violet-500' : ''}
+        ${isUnread && !isSelected ? 'bg-violet-500/[0.04]' : ''}
       `}
     >
       <div className="flex items-start justify-between gap-2 mb-1">
-        <span className="text-sm font-medium text-zinc-100 truncate flex-1">
+        <span className={`text-sm truncate flex-1 ${isUnread ? 'font-semibold text-white' : 'font-medium text-zinc-100'}`}>
           {displayName}
         </span>
         {time && (
-          <span className="text-[10px] text-zinc-500 shrink-0">{time}</span>
+          <span className={`text-[10px] shrink-0 ${isUnread ? 'font-medium text-violet-300' : 'text-zinc-500'}`}>{time}</span>
         )}
       </div>
 
-      <p className="text-xs text-zinc-400 truncate mb-1.5">{preview}</p>
+      <div className="mb-1.5 flex items-center gap-2">
+        {isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-violet-400" aria-label="Sin leer" />}
+        <p className={`truncate text-xs ${isUnread ? 'font-medium text-zinc-200' : 'text-zinc-400'}`}>{preview}</p>
+      </div>
 
       <div className="flex items-center gap-1.5">
         <AiStatusBadge aiEnabled={lead.aiEnabled} />

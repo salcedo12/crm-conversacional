@@ -1,8 +1,11 @@
 import { useState, useMemo } from 'react';
 import type { Lead, LeadSource, LeadStatus } from '@/features/inbox/types';
 
-export type SortField = 'lastMessageAt' | 'createdAt' | 'name' | 'status';
+export type SortField = 'lastMessageAt' | 'createdAt' | 'name' | 'status' | 'score';
 export type SortDir   = 'asc' | 'desc';
+
+/** Campos que el backend (listLeadsPage) sabe ordenar. 'score' se ordena en cliente. */
+export type ServerSortField = 'lastMessageAt' | 'createdAt' | 'name' | 'status';
 
 export interface LeadsFilters {
   search:     string;
@@ -105,6 +108,10 @@ export function useLeadsPage(leads: Lead[]) {
       } else if (sortField === 'status') {
         valA = a.status;
         valB = b.status;
+      } else if (sortField === 'score') {
+        // Sin análisis → -1, para que caigan al fondo en orden descendente.
+        valA = a.aiAnalysis?.score ?? -1;
+        valB = b.aiAnalysis?.score ?? -1;
       }
 
       if (valA < valB) return sortDir === 'asc' ? -1 : 1;

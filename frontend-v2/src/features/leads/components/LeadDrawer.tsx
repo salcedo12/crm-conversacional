@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, CalendarDays, CalendarPlus, Clock3, MessageCircle, Pause, Phone, PhoneCall, PhoneOutgoing, Play, Save, Tags, UserRound, X } from 'lucide-react';
+import { Bot, CalendarDays, CalendarPlus, Clock3, MessageCircle, Pause, Phone, PhoneCall, PhoneOutgoing, Play, Save, Sparkles, Tags, UserRound, X } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { LeadStatusBadge } from './LeadStatusBadge';
 import { LeadSourceBadge } from './LeadSourceBadge';
 import { AiStatusBadge } from '@/features/inbox/components/AiStatusBadge';
 import { CallHistory } from './CallHistory';
+import { LeadAnalysisCard } from './LeadAnalysisCard';
 import { BookAppointmentModal } from './BookAppointmentModal';
 import { formatMessageTime } from '@/shared/utils/date';
 import { formatPhone } from '@/shared/utils/formatPhone';
@@ -377,6 +378,13 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
             )}
 
             {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
+          </section>
+
+          <section className="border-t border-zinc-800 px-5 py-4">
+            <p className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
+              <Sparkles size={12} /> Radiografía IA
+            </p>
+            <LeadAnalysisCard lead={lead} companyId={companyId} />
           </section>
 
           <section className="border-t border-zinc-800 px-5 py-4">
