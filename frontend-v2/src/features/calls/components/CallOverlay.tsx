@@ -12,8 +12,8 @@ import { useCallSession } from '../providers/CallSessionProvider';
  * para que sobreviva la navegación entre páginas.
  */
 export function CallOverlay() {
-  const { user, companyId, role } = useAuth();
-  const isAdmin = isAdminRole(role);
+  const { user, companyId, role, platformAdmin } = useAuth();
+  const isAdmin = platformAdmin || isAdminRole(role);
   const ringingCalls = useRingingCalls(companyId, user?.uid ?? null, isAdmin);
   const session = useCallSession();
   const [answering, setAnswering] = useState(false);

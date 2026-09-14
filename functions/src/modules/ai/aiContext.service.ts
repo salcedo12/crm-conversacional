@@ -54,12 +54,19 @@ export function buildOpenAiMessages(
     content: msg.content || (msg.mediaType?.startsWith('image/') ? '[Imagen adjunta]' : msg.mediaType?.startsWith('audio/') ? '[Audio]' : ''),
   }));
 
-  // Verificar si el mensaje actual ya está en el historial
+  // Verificar si el mensaje actual ya está en el historial.
+  // Si trae imagen, necesitamos reemplazar la versión textual del historial por
+  // el mensaje vision; de lo contrario el modelo no ve el terreno señalado.
   const lastMsg = historyMessages[historyMessages.length - 1];
   const alreadyIncluded = lastMsg?.role === 'user' && lastMsg?.content === newUserMessage;
+  const currentHasImage = !!mediaUrl && mediaType?.startsWith('image/');
 
-  if (!alreadyIncluded) {
-    if (mediaUrl && mediaType?.startsWith('image/')) {
+  if (currentHasImage && alreadyIncluded) {
+    historyMessages.pop();
+  }
+
+  if (!alreadyIncluded || currentHasImage) {
+    if (currentHasImage) {
       // Mensaje actual con imagen — usar formato vision de OpenAI
       const parts: OpenAI.Chat.ChatCompletionContentPart[] = [
         { type: 'image_url', image_url: { url: mediaUrl } },

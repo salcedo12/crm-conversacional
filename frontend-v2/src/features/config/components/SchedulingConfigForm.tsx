@@ -138,6 +138,67 @@ export function SchedulingConfigForm({ companyId }: { companyId: string }) {
         </p>
       </div>
 
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <label className="flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={draft.autoReassignFirstContactEnabled}
+            onChange={(e) => update('autoReassignFirstContactEnabled', e.target.checked)}
+          />
+          Reasignar si el asesor no hace primer contacto
+        </label>
+        <p className="mt-1 pl-6 text-xs text-zinc-500">
+          Aplica solo hasta que un asesor envie su primer mensaje humano al lead. Cuando eso pasa, el lead ya no rota automaticamente.
+        </p>
+
+        {draft.autoReassignFirstContactEnabled && (
+          <div className="mt-4 pl-6 space-y-4">
+            <div className="max-w-xs">
+              <label className={labelCls}>Tiempo maximo sin contacto (min)</label>
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                className={inputCls}
+                value={draft.firstContactTimeoutMinutes}
+                onChange={(e) => update('firstContactTimeoutMinutes', Number(e.target.value))}
+              />
+            </div>
+
+            <div>
+              <label className={labelCls}>Horario en que se puede reasignar</label>
+              <div className="grid grid-cols-2 gap-4 max-w-xs">
+                <div>
+                  <label className="block text-[11px] text-zinc-500 mb-1">Desde</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    className={inputCls}
+                    value={draft.reassignStartHour}
+                    onChange={(e) => update('reassignStartHour', Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-zinc-500 mb-1">Hasta</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    className={inputCls}
+                    value={draft.reassignEndHour}
+                    onChange={(e) => update('reassignEndHour', Number(e.target.value))}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-zinc-500 mt-1">
+                Fuera de esta franja (hora de Colombia) no se reasigna, para no notificar a los asesores de madrugada. Ej.: de 7 a 22.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Almuerzo */}
       <div>
         <label className="flex items-center gap-2 text-sm text-zinc-300 mb-2">

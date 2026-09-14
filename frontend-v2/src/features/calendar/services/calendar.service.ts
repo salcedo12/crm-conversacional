@@ -45,6 +45,7 @@ const _startGoogleAuth   = httpsCallable<{ companyId: string }, { url: string }>
 const _getGoogleConn     = httpsCallable<{ companyId: string }, { connected: boolean; email: string | null }>(functions, 'getGoogleConnection');
 const _disconnectGoogle  = httpsCallable<{ companyId: string }, { ok: boolean }>(functions, 'disconnectGoogle');
 const _listAppointments  = httpsCallable<{ companyId: string; fromISO: string; toISO: string }, { appointments: AppointmentDTO[] }>(functions, 'listAppointments');
+const _listLeadAppointments = httpsCallable<{ companyId: string; leadId: string }, { appointments: AppointmentDTO[] }>(functions, 'listLeadAppointments');
 const _cancelAppointment = httpsCallable<{ companyId: string; appointmentId: string }, { ok: boolean }>(functions, 'cancelAppointment');
 const _bookAppointmentManual = httpsCallable<
   { companyId: string } & BookAppointmentInput,
@@ -67,6 +68,11 @@ export async function disconnectGoogle(companyId: string): Promise<void> {
 
 export async function listAppointments(companyId: string, from: Date, to: Date): Promise<AppointmentDTO[]> {
   const r = await _listAppointments({ companyId, fromISO: from.toISOString(), toISO: to.toISOString() });
+  return r.data.appointments;
+}
+
+export async function listLeadAppointments(companyId: string, leadId: string): Promise<AppointmentDTO[]> {
+  const r = await _listLeadAppointments({ companyId, leadId });
   return r.data.appointments;
 }
 

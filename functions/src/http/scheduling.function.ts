@@ -13,6 +13,10 @@ const SaveSchema = z.object({
   slotMinutes:   z.number().int().min(5).max(240),
   lookaheadDays: z.number().int().min(1).max(60),
   minAdvanceMinutes: z.number().int().min(0).max(10_080),
+  autoReassignFirstContactEnabled: z.boolean().default(false),
+  firstContactTimeoutMinutes: z.number().int().min(1).max(1440).default(15),
+  reassignStartHour: z.number().int().min(0).max(23).default(7),
+  reassignEndHour:   z.number().int().min(1).max(24).default(22),
   lunch:         z.object({
     startHour: z.number().int().min(0).max(23),
     endHour:   z.number().int().min(1).max(24),
@@ -24,6 +28,8 @@ const SaveSchema = z.object({
   message: 'La hora de cierre debe ser mayor que la de apertura.',
 }).refine((d) => !d.lunch || d.lunch.endHour > d.lunch.startHour, {
   message: 'El fin del almuerzo debe ser mayor que el inicio.',
+}).refine((d) => d.reassignEndHour > d.reassignStartHour, {
+  message: 'La hora de fin de reasignación debe ser mayor que la de inicio.',
 });
 
 // ─── getSchedulingConfig ──────────────────────────────────────────────────────

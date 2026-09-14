@@ -52,7 +52,9 @@ export const processReminders = onSchedule(
         let due: ReminderKey | null = null;
         if      (minutesUntil <= 30  && !done.m30) due = 'm30';
         else if (minutesUntil <= 120 && minutesUntil > 30  && !done.h2)  due = 'h2';
-        else if (minutesUntil <= 1440 && minutesUntil > 120 && !done.h24) due = 'h24';
+        // No enviar el recordatorio "24h" para citas cercanas del mismo día.
+        // Si se agenda a pocas horas, basta con los recordatorios de 2h/30min.
+        else if (minutesUntil <= 1440 && minutesUntil > 12 * 60 && !done.h24) due = 'h24';
         if (!due) continue;
 
         try {

@@ -1,11 +1,12 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import * as https             from 'https';
 import { z }                  from 'zod';
 import { logger }             from '../utils/logger';
-import { env }                from '../config/env';
 import { templatesRepository }   from '../modules/templates/templates.repository';
 import { leadsRepository }       from '../modules/leads/leads.repository';
-import { getYcloudClient }       from '../integrations/ycloud/ycloud.client';
+import { getYcloudClientForCompany } from '../integrations/ycloud/ycloud.client';
+import { getYcloudConfigForCompany }  from '../modules/companies/channelCredentials.repository';
+import { listAdvisorLines, getChannelRoute } from '../modules/companies/companyRouting';
+import { normalizeBusinessNumber } from '../modules/whatsapp/inbox';
 import type { YcloudTemplateCategory } from '../integrations/ycloud/ycloud.client';
 import type { WhatsAppTemplate } from '../modules/templates/templates.types';
 import {
@@ -43,6 +44,9 @@ const TemplateSchema = z.object({
   buttons:     z.array(ButtonSchema).max(10).optional(),
   variables:   z.array(VariableSchema).max(10),
   twilioContentSid: z.string().optional(),
+  // Línea/inbox (+E.164) para la que se crea la plantilla. Determina el WABA donde
+  // se registra. Si se omite, va al WABA principal (317).
+  inboxId:     z.string().optional(),
   status:      z.enum(['approved', 'pending', 'rejected', 'local']),
 });
 
@@ -59,6 +63,38 @@ export const listTemplates = onCall(
   }
 );
 
+// ─── listMessagingLines ────────────────────────────────────────────────────────
+
+/**
+ * Líneas de WhatsApp de la empresa: la principal (317) y las de coexistencia de
+ * asesores. Alimenta el selector "para qué línea" al crear una plantilla y el
+ * badge de línea en el listado. Cada plantilla se registra/lista por su WABA.
+ */
+export const listMessagingLines = onCall(
+  { region: 'us-central1', timeoutSeconds: 15 },
+  async (request) => {
+    const ctx = requireAuth(request);
+    const { companyId } = z.object({ companyId: z.string().min(1) }).parse(request.data);
+    assertCompany(ctx, companyId);
+
+    const cfg = await getYcloudConfigForCompany(companyId);
+    const lines = [
+      {
+        number:    normalizeBusinessNumber(cfg.fromNumber) ?? cfg.fromNumber,
+        wabaId:    cfg.wabaId,
+        isDefault: true,
+      },
+      ...(await listAdvisorLines(companyId)).map((l) => ({
+        number:    l.number,
+        wabaId:    l.wabaId,
+        isDefault: false,
+        advisorId: l.advisorId,
+      })),
+    ];
+    return { lines };
+  }
+);
+
 // ─── createTemplate ───────────────────────────────────────────────────────────
 
 export const createTemplate = onCall(
@@ -70,15 +106,35 @@ export const createTemplate = onCall(
     const parse = TemplateSchema.safeParse(request.data);
     if (!parse.success) throw new HttpsError('invalid-argument', parse.error.message);
 
-    const { companyId, ...fields } = parse.data;
+    const { companyId, inboxId, ...fields } = parse.data;
     assertCompany(ctx, companyId);
     let status: WhatsAppTemplate['status'] = fields.status ?? 'local';
 
+    // ── Resolver la LÍNEA/WABA destino ────────────────────────────────────────
+    // Por defecto la línea principal (317). Si se pide una línea de asesor
+    // (coexistencia), la plantilla se registra en SU WABA y se etiqueta con su
+    // número para que solo aparezca en su línea.
+    const ycloudCfg = await getYcloudConfigForCompany(companyId);
+    let targetWaba       = ycloudCfg.wabaId;
+    let targetLineNumber = normalizeBusinessNumber(ycloudCfg.fromNumber);
+    const requestedNumber = normalizeBusinessNumber(inboxId);
+    if (requestedNumber && requestedNumber !== targetLineNumber) {
+      const route = await getChannelRoute('ycloud', requestedNumber);
+      if (route?.wabaId && route.companyId === companyId && route.active !== false) {
+        targetWaba       = route.wabaId;
+        targetLineNumber = requestedNumber;
+      } else {
+        throw new HttpsError('failed-precondition',
+          'Esa línea no tiene un WABA registrado. Regístralo antes de crear plantillas para ella.');
+      }
+    }
+
     // ── Registrar en ycloud para aprobación de Meta ───────────────────────────
-    if (env.useYcloud() && env.ycloudWabaId()) {
+    if (ycloudCfg.apiKey && targetWaba) {
       try {
-        const created = await getYcloudClient().createTemplate({
-          wabaId:     env.ycloudWabaId(),
+        const client  = await getYcloudClientForCompany(companyId);
+        const created = await client.createTemplate({
+          wabaId:     targetWaba,
           name:       fields.name,
           language:   fields.language ?? 'es',
           category:   fields.category.toUpperCase() as YcloudTemplateCategory,
@@ -86,7 +142,7 @@ export const createTemplate = onCall(
         });
         status = mapYcloudStatus(created.status);
         logger.info('[Templates] Plantilla registrada en ycloud', {
-          name: fields.name, status: created.status,
+          name: fields.name, status: created.status, wabaId: targetWaba,
         });
       } catch (err) {
         logger.error('[Templates] Error registrando plantilla en ycloud', {
@@ -103,6 +159,8 @@ export const createTemplate = onCall(
     const template = await templatesRepository.create(companyId, {
       ...fields,
       companyId,
+      wabaId: targetWaba,
+      ...(targetLineNumber ? { lineNumber: targetLineNumber } : {}),
       status,
     });
 
@@ -164,101 +222,87 @@ export const syncTemplatesFromTwilio = onCall(
     let synced = 0;
 
     // ── Sincronizar desde ycloud ──────────────────────────────────────────
-    if (env.useYcloud() && env.ycloudWabaId()) {
-      const ycloudTemplates = await getYcloudClient().listTemplates(env.ycloudWabaId());
+    const ycloudCfg = await getYcloudConfigForCompany(companyId);
+    if (ycloudCfg.apiKey && ycloudCfg.wabaId) {
+      const client = await getYcloudClientForCompany(companyId);
 
-      for (const t of ycloudTemplates) {
-        const bodyComp   = t.components.find((c) => c.type === 'BODY');
-        const headerComp = t.components.find((c) => c.type === 'HEADER');
-        const footerComp = t.components.find((c) => c.type === 'FOOTER');
-        const body = bodyComp?.text ?? '';
-        if (!body) continue;
-
-        // Variables {{1}}, {{2}} → ejemplos desde example.body_text
-        const varKeys   = [...new Set([...body.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))];
-        const examples  = bodyComp?.example?.body_text?.[0] ?? [];
-        const variables = varKeys.map((k, i) => ({ key: k, example: examples[i] ?? `[${k}]` }));
-
-        // Header: texto o media
-        const headerType = ycloudHeaderType(headerComp?.format);
-        const headerMediaUrl = headerComp?.example?.header_url?.[0];
-
-        // Botones
-        const buttonsComp = t.components.find((c) => c.type === 'BUTTONS');
-        const buttons = (buttonsComp?.buttons ?? []).map((b) => ({
-          type: b.type,
-          text: b.text ?? '',
-          ...(b.url ? { url: b.url } : {}),
-          ...(b.phone_number ? { phoneNumber: b.phone_number } : {}),
-        }));
-
-        await templatesRepository.upsertByName(companyId, {
-          companyId,
-          name:        t.name,
-          displayName: t.name.replace(/_/g, ' '),
-          category:    t.category.toLowerCase() as 'marketing' | 'utility' | 'authentication',
-          language:    t.language,
-          body,
-          variables,
-          status:      mapYcloudStatus(t.status),
-          headerType,
-          // campos opcionales solo si existen — Firestore rechaza undefined en update()
-          ...(headerComp?.text ? { header: headerComp.text } : {}),
-          ...(headerMediaUrl ? { headerMediaUrl } : {}),
-          ...(footerComp?.text ? { footer: footerComp.text } : {}),
-          ...(buttons.length > 0 ? { buttons } : {}),
-        });
-        synced++;
+      // Sincroniza TODOS los WABAs de la empresa: el principal (317) y las líneas
+      // de coexistencia de asesores (cada una en su propio WABA). Cada plantilla
+      // se etiqueta con su `wabaId` + `lineNumber` para que el selector muestre a
+      // cada línea las suyas. Misma API key → un solo cliente sirve para todos.
+      const targets: { wabaId: string; lineNumber?: string }[] = [
+        { wabaId: ycloudCfg.wabaId, lineNumber: normalizeBusinessNumber(ycloudCfg.fromNumber) },
+      ];
+      for (const line of await listAdvisorLines(companyId)) {
+        if (line.wabaId && !targets.some((t) => t.wabaId === line.wabaId)) {
+          targets.push({ wabaId: line.wabaId, lineNumber: line.number });
+        }
       }
 
-      logger.info('[Templates] Sync ycloud completado', { synced });
+      for (const target of targets) {
+        let ycloudTemplates: Awaited<ReturnType<typeof client.listTemplates>> = [];
+        try {
+          ycloudTemplates = await client.listTemplates(target.wabaId);
+        } catch (err) {
+          logger.warn('[Templates] No se pudieron listar plantillas de un WABA', {
+            wabaId: target.wabaId, error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+
+        for (const t of ycloudTemplates) {
+          const bodyComp   = t.components.find((c) => c.type === 'BODY');
+          const headerComp = t.components.find((c) => c.type === 'HEADER');
+          const footerComp = t.components.find((c) => c.type === 'FOOTER');
+          const body = bodyComp?.text ?? '';
+          if (!body) continue;
+
+          // Variables {{1}}, {{2}} → ejemplos desde example.body_text
+          const varKeys   = [...new Set([...body.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))];
+          const examples  = bodyComp?.example?.body_text?.[0] ?? [];
+          const variables = varKeys.map((k, i) => ({ key: k, example: examples[i] ?? `[${k}]` }));
+
+          // Header: texto o media
+          const headerType = ycloudHeaderType(headerComp?.format);
+          const headerMediaUrl = headerComp?.example?.header_url?.[0];
+
+          // Botones
+          const buttonsComp = t.components.find((c) => c.type === 'BUTTONS');
+          const buttons = (buttonsComp?.buttons ?? []).map((b) => ({
+            type: b.type,
+            text: b.text ?? '',
+            ...(b.url ? { url: b.url } : {}),
+            ...(b.phone_number ? { phoneNumber: b.phone_number } : {}),
+          }));
+
+          await templatesRepository.upsertByName(companyId, {
+            companyId,
+            name:        t.name,
+            displayName: t.name.replace(/_/g, ' '),
+            category:    t.category.toLowerCase() as 'marketing' | 'utility' | 'authentication',
+            language:    t.language,
+            body,
+            variables,
+            status:      mapYcloudStatus(t.status),
+            headerType,
+            wabaId:      target.wabaId,
+            // campos opcionales solo si existen — Firestore rechaza undefined en update()
+            ...(target.lineNumber ? { lineNumber: target.lineNumber } : {}),
+            ...(headerComp?.text ? { header: headerComp.text } : {}),
+            ...(headerMediaUrl ? { headerMediaUrl } : {}),
+            ...(footerComp?.text ? { footer: footerComp.text } : {}),
+            ...(buttons.length > 0 ? { buttons } : {}),
+          });
+          synced++;
+        }
+      }
+
+      logger.info('[Templates] Sync ycloud completado', { synced, wabas: targets.length });
       return { synced, source: 'ycloud' };
     }
 
-    // ── Fallback: Twilio Content API ──────────────────────────────────────
-    const accountSid = env.twilioAccountSid();
-    const authToken  = env.twilioAuthToken();
-    if (!accountSid || !authToken) {
-      throw new HttpsError('failed-precondition', 'Configura YCLOUD_WABA_ID o credenciales de Twilio.');
-    }
-
-    const auth    = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
-    const rawData = await new Promise<string>((resolve, reject) => {
-      const req = https.request({
-        hostname: 'content.twilio.com',
-        path:     '/v1/Content',
-        method:   'GET',
-        headers:  { Authorization: `Basic ${auth}` },
-      }, (res) => {
-        let d = ''; res.on('data', (c: string) => d += c); res.on('end', () => resolve(d));
-      });
-      req.on('error', reject); req.end();
-    });
-
-    interface TwilioContent {
-      sid: string; friendly_name: string; language: string;
-      variables?: Record<string, string>;
-      types?: Record<string, { body?: string }>;
-    }
-    const data = JSON.parse(rawData) as { contents?: TwilioContent[] };
-
-    for (const c of data.contents ?? []) {
-      const body = c.types?.['twilio/text']?.body ?? c.types?.['twilio/quick-reply']?.body ?? '';
-      if (!body) continue;
-      const varKeys  = [...new Set([...body.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))];
-      const variables = varKeys.map((k) => ({ key: k, example: c.variables?.[k] ?? `[${k}]` }));
-      await templatesRepository.upsertByName(companyId, {
-        companyId,
-        name: c.sid.toLowerCase().replace(/[^a-z0-9]/g, '_'),
-        displayName: c.friendly_name,
-        category: 'utility', language: c.language ?? 'es',
-        body, variables, twilioContentSid: c.sid, status: 'approved',
-      });
-      synced++;
-    }
-
-    logger.info('[Templates] Sync Twilio completado', { synced });
-    return { synced, source: 'twilio' };
+    // Sin YCloud configurado no hay de dónde sincronizar (Twilio fue removido).
+    throw new HttpsError('failed-precondition', 'Configura YCLOUD_WABA_ID para sincronizar plantillas.');
   }
 );
 
@@ -269,11 +313,14 @@ export const sendTemplateMessage = onCall(
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, WRITE_ROLES);
-    const { companyId, leadId, templateId, variables } = z.object({
+    const { companyId, leadId, templateId, variables, fromInboxId } = z.object({
       companyId:  z.string().min(1),
       leadId:     z.string().min(1),
       templateId: z.string().min(1),
       variables:  z.record(z.string(), z.string()).default({}),
+      // Línea (+E.164) elegida por el asesor para enviar; opcional. Si se omite se
+      // usa la del lead. El backend valida propiedad de la línea (coexistencia).
+      fromInboxId: z.string().min(1).optional(),
     }).parse(request.data);
     assertCompany(ctx, companyId);
 
@@ -292,6 +339,7 @@ export const sendTemplateMessage = onCall(
         template,
         variables: variables as Record<string, string>,
         advisorId: ctx.uid,
+        fromInboxId,
       });
       return { messageId };
     } catch (err) {

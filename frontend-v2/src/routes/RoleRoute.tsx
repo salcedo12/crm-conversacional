@@ -12,9 +12,9 @@ interface RoleRouteProps {
  * Siempre usar dentro de un <ProtectedRoute> (el usuario ya está autenticado).
  */
 export function RoleRoute({ allowed }: RoleRouteProps) {
-  const { role } = useAuth();
+  const { role, platformAdmin } = useAuth();
 
-  if (!role || !allowed.includes(role)) {
+  if (!platformAdmin && (!role || !allowed.includes(role))) {
     return <Navigate to="/dashboard/inbox" replace />;
   }
 

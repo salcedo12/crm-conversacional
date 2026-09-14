@@ -1,0 +1,92 @@
+{
+  "expo": {
+    "name": "Meraki CRM",
+    "slug": "meraki-crm",
+    "scheme": "merakicrm",
+    "version": "1.0.25",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/ccee0a93-0c8f-4b70-b4b1-d72b62a1dba7"
+    },
+    "newArchEnabled": false,
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.meraki.crm",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "supportsTablet": false,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification",
+          "remote-notification"
+        ],
+        "NSMicrophoneUsageDescription": "Meraki CRM usa el microfono para enviar notas de voz a tus clientes.",
+        "NSPhotoLibraryUsageDescription": "Meraki CRM usa tus fotos para enviarlas a tus clientes.",
+        "NSCameraUsageDescription": "Meraki CRM usa la camara para tomar fotos de evidencia para la bitacora de tus clientes."
+      }
+    },
+    "android": {
+      "package": "com.meraki.crm",
+      "versionCode": 25,
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.CAMERA"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#08090A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": true,
+      "softwareKeyboardLayoutMode": "pan"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Permite que Meraki CRM grabe notas de voz para tus clientes."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permite que Meraki CRM seleccione imagenes para tus clientes.",
+          "cameraPermission": "Permite que Meraki CRM tome fotos para tus clientes."
+        }
+      ],
+      "expo-document-picker",
+      "expo-secure-store",
+      "expo-font",
+      "expo-asset",
+      "./plugins/withMerakiReleaseSigning",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#08090A",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180
+        }
+      ],
+      "expo-video",
+      "expo-image"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ccee0a93-0c8f-4b70-b4b1-d72b62a1dba7"
+      }
+    },
+    "owner": "eduardo211s-team"
+  }
+}

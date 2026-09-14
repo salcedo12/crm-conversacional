@@ -28,3 +28,82 @@
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 }
+
+@layer utilities {
+  .bg-violet-600,
+  .bg-violet-500 {
+    background-color: rgb(var(--brand-primary-rgb, 124 58 237)) !important;
+  }
+
+  .hover\:bg-violet-500:hover,
+  .hover\:bg-violet-600:hover {
+    background-color: var(--brand-primary-hover, #8b5cf6) !important;
+  }
+
+  .bg-violet-600\/25,
+  .bg-violet-600\/20,
+  .bg-violet-600\/15,
+  .bg-violet-500\/25,
+  .bg-violet-500\/20,
+  .bg-violet-500\/15,
+  .bg-violet-500\/10,
+  .bg-violet-500\/5,
+  .bg-violet-500\/\[0\.06\],
+  .bg-violet-500\/\[0\.04\],
+  .bg-violet-500\/\[0\.04\] {
+    background-color: var(--brand-primary-soft, rgb(124 58 237 / 0.16)) !important;
+  }
+
+  .hover\:bg-violet-500\/25:hover,
+  .hover\:bg-violet-500\/20:hover,
+  .hover\:bg-violet-500\/10:hover,
+  .hover\:bg-violet-600\/25:hover,
+  .hover\:bg-violet-600\/20:hover {
+    background-color: color-mix(in srgb, var(--brand-primary, #7c3aed) 24%, transparent) !important;
+  }
+
+  .text-violet-100,
+  .text-violet-200,
+  .text-violet-300,
+  .text-violet-400 {
+    color: var(--brand-primary-text, #c4b5fd) !important;
+  }
+
+  .hover\:text-violet-200:hover,
+  .hover\:text-violet-300:hover,
+  .hover\:text-violet-400:hover {
+    color: var(--brand-primary-hover, #ddd6fe) !important;
+  }
+
+  .border-violet-500,
+  .border-violet-500\/40,
+  .border-violet-500\/30,
+  .border-violet-500\/25,
+  .border-violet-500\/20,
+  .border-violet-600\/30 {
+    border-color: var(--brand-primary-border, rgb(124 58 237 / 0.38)) !important;
+  }
+
+  .border-l-violet-500 {
+    border-left-color: rgb(var(--brand-primary-rgb, 124 58 237)) !important;
+  }
+
+  .focus\:border-violet-500\/60:focus,
+  .focus\:border-violet-500\/50:focus,
+  .focus-within\:border-violet-500\/50:focus-within {
+    border-color: var(--brand-primary-border, rgb(124 58 237 / 0.38)) !important;
+  }
+
+  .focus\:ring-violet-500\/50:focus {
+    --tw-ring-color: var(--brand-primary-border, rgb(124 58 237 / 0.38)) !important;
+  }
+
+  .shadow-violet-500\/30,
+  .hover\:shadow-violet-500\/30:hover {
+    --tw-shadow-color: color-mix(in srgb, var(--brand-primary, #7c3aed) 30%, transparent) !important;
+  }
+
+  .accent-violet-500 {
+    accent-color: rgb(var(--brand-primary-rgb, 124 58 237)) !important;
+  }
+}

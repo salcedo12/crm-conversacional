@@ -17,7 +17,7 @@ const STATUS_OPTIONS = [
   { value: 'qualified', label: 'Calificado' },
   { value: 'scheduled', label: 'Agendado'   },
   { value: 'lost',      label: 'Perdido'    },
-  { value: 'closed',    label: 'Cerrado'    },
+  { value: 'closed',    label: 'Vendido'    },
 ];
 
 /** Variables que el backend rellena automáticamente con el nombre del lead. */

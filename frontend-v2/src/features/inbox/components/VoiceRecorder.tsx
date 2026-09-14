@@ -81,7 +81,7 @@ export function VoiceRecorder({
   // ── Estado: grabando ────────────────────────────────────────────────────────
   if (state === 'recording') {
     return (
-      <div className="flex items-center gap-2 px-3 py-2.5 bg-zinc-950 border-t border-zinc-800">
+      <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950 px-3 py-2.5 pb-[calc(env(safe-area-inset-bottom)+0.625rem)]">
 
         {/* Botón cancelar */}
         <button
@@ -120,7 +120,7 @@ export function VoiceRecorder({
   // ── Estado: preview (grabación lista para enviar) ───────────────────────────
   if (state === 'stopped' && audioBlob) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2.5 bg-zinc-950 border-t border-zinc-800">
+      <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950 px-3 py-2.5 pb-[calc(env(safe-area-inset-bottom)+0.625rem)]">
 
         {/* Botón descartar */}
         <button

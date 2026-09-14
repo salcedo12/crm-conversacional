@@ -1,7 +1,9 @@
-import { useState }        from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth }         from '@/features/auth/hooks/useAuth';
 import { Button }          from '@/shared/components/Button';
 import { uploadMedia }     from '@/features/inbox/services/media.service';
+import { listMessagingLines, type MessagingLine } from '../services/templates.service';
+import { inboxLabel }      from '@/features/inbox/utils/inboxes';
 import type {
   CreateTemplateInput, TemplateVariable, TemplateHeaderType,
   TemplateButton, TemplateButtonType,
@@ -9,7 +11,8 @@ import type {
 
 interface TemplateFormProps {
   initial?: Partial<CreateTemplateInput>;
-  onSave:   (data: Omit<CreateTemplateInput, 'companyId'>) => Promise<void>;
+  /** `inboxId` = número (+E.164) de la línea/WABA donde se registra la plantilla. */
+  onSave:   (data: Omit<CreateTemplateInput, 'companyId'>, inboxId?: string) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -50,6 +53,21 @@ export function TemplateForm({ initial, onSave, onCancel }: TemplateFormProps) {
   const [saving,  setSaving]  = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
+  // Líneas disponibles (317 + líneas de asesor). La plantilla se registra en el
+  // WABA de la línea elegida; la aprobación de Meta es POR WABA.
+  const [lines, setLines] = useState<MessagingLine[]>([]);
+  const [selectedLine, setSelectedLine] = useState<string>('');
+
+  useEffect(() => {
+    if (!companyId) return;
+    listMessagingLines(companyId)
+      .then((ls) => {
+        setLines(ls);
+        const def = ls.find((l) => l.isDefault) ?? ls[0];
+        if (def) setSelectedLine(def.number);
+      })
+      .catch(() => { /* si falla, se usa la línea por defecto (317) en el backend */ });
+  }, [companyId]);
 
   const detectedKeys = extractVars(form.body);
   const headerType   = form.headerType ?? 'none';
@@ -138,7 +156,7 @@ export function TemplateForm({ initial, onSave, onCancel }: TemplateFormProps) {
     setSaving(true);
     setError(null);
     try {
-      await onSave({ ...form, headerType: cleanHeader, buttons: cleanButtons });
+      await onSave({ ...form, headerType: cleanHeader, buttons: cleanButtons }, selectedLine || undefined);
     } catch (err) {
       setError((err as { message?: string })?.message || 'Error al guardar la plantilla.');
     } finally {
@@ -153,6 +171,29 @@ export function TemplateForm({ initial, onSave, onCancel }: TemplateFormProps) {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Línea / WABA — solo si hay más de una línea (317 + líneas de asesor) */}
+      {lines.length > 1 && (
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium text-zinc-400">
+            Línea <span className="text-zinc-600">(¿de qué número saldrá esta plantilla?)</span>
+          </label>
+          <select
+            value={selectedLine}
+            onChange={(e) => setSelectedLine(e.target.value)}
+            className={inputClass}
+          >
+            {lines.map((l) => (
+              <option key={l.number} value={l.number}>
+                {inboxLabel(l.number)}{l.isDefault ? ' — principal' : ''}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-zinc-600">
+            Las plantillas son por WABA: se aprueban y envían solo desde la línea elegida.
+          </p>
+        </div>
+      )}
+
       {/* Nombre y categoría */}
       <div className="grid grid-cols-2 gap-4">
         <div className="flex flex-col gap-1.5">

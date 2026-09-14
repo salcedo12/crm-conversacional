@@ -1,9 +1,9 @@
 import type { Timestamp } from 'firebase/firestore';
 
-export type UserRole = 'admin' | 'manager' | 'advisor' | 'viewer';
+export type UserRole = 'admin' | 'manager' | 'advisor' | 'viewer' | 'platformAdmin';
 
 /** Roles con permisos administrativos (config IA, plantillas, conexión WhatsApp). */
-export const ADMIN_ROLES: UserRole[] = ['admin', 'manager'];
+export const ADMIN_ROLES: UserRole[] = ['admin', 'manager', 'platformAdmin'];
 
 /** True si el rol tiene permisos administrativos. */
 export function isAdminRole(role: UserRole | null | undefined): boolean {
@@ -17,6 +17,7 @@ export interface UserProfile {
   displayName: string;
   role:        UserRole;
   active:      boolean;
+  platformAdmin?: boolean | string;
   createdAt:   Timestamp;
   updatedAt:   Timestamp;
 }

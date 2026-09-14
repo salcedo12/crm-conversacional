@@ -6,6 +6,7 @@ import { TemplateForm } from '../components/TemplateForm';
 import {
   listTemplates, createTemplate, deleteTemplate, syncTemplates,
 } from '../services/templates.service';
+import { inboxLabel } from '@/features/inbox/utils/inboxes';
 import type { WhatsAppTemplate, CreateTemplateInput } from '../types';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -41,9 +42,9 @@ export function TemplatesPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleCreate = async (data: Omit<CreateTemplateInput, 'companyId'>) => {
+  const handleCreate = async (data: Omit<CreateTemplateInput, 'companyId'>, inboxId?: string) => {
     if (!companyId) return;
-    await createTemplate(companyId, data);
+    await createTemplate(companyId, data, inboxId);
     setShowForm(false);
     load();
   };
@@ -139,6 +140,14 @@ export function TemplatesPage() {
                     <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-medium ${STATUS_COLOR[t.status]}`}>
                       {t.status}
                     </span>
+                    {t.lineNumber && (
+                      <span
+                        className="text-[9px] px-1.5 py-0.5 rounded-full border font-medium bg-violet-500/10 text-violet-300 border-violet-500/20"
+                        title={`Línea: ${inboxLabel(t.lineNumber)} (${t.lineNumber})`}
+                      >
+                        📱 {inboxLabel(t.lineNumber)}
+                      </span>
+                    )}
                     {t.twilioContentSid && (
                       <span className="text-[9px] text-zinc-500">SID: {t.twilioContentSid.slice(0, 12)}...</span>
                     )}

@@ -41,11 +41,13 @@ const ANALYSIS_SCHEMA = {
     lossRisk:         { type: 'string', description: 'Principal riesgo de pérdida; si el lead ya está perdido, la razón más probable por la que se perdió.' },
     lossCategory:     { type: 'string', enum: ['precio', 'ubicacion', 'competencia', 'sin_respuesta', 'tiempo', 'no_califica', 'atencion', 'otro', 'ninguno'], description: 'Categoría fija del riesgo/motivo de pérdida. Usa "ninguno" solo si el lead va bien y no hay riesgo claro.' },
     scoreReasons:     { type: 'array', items: { type: 'string' }, description: 'Factores clave que sustentan el puntaje.' },
+    suggestedStatus:  { type: 'string', enum: ['active', 'qualified', 'scheduled', 'lost', 'ninguno'], description: 'Estado comercial que la conversación respalda. Usa "ninguno" si el estado actual ya es correcto o no hay evidencia suficiente. NUNCA sugieras "closed"/Vendido.' },
+    suggestedStatusReason: { type: 'string', description: 'Frase breve que justifica el estado sugerido (vacío "" si suggestedStatus es "ninguno").' },
   },
   required: [
     'score', 'temperature', 'summary', 'interestLevel', 'buyingSignals',
     'objections', 'budget', 'interestArea', 'nextAction', 'nextActionReason',
-    'lossRisk', 'lossCategory', 'scoreReasons',
+    'lossRisk', 'lossCategory', 'scoreReasons', 'suggestedStatus', 'suggestedStatusReason',
   ],
 } as const;
 
@@ -133,8 +135,18 @@ export async function analyzeLeadConversation(
     `## DATOS DEL LEAD\n${leadFacts}\n\n` +
     (callsText ? `## LLAMADAS CON IA\n${callsText}\n\n` : '') +
     `## CONVERSACIÓN (más reciente al final)\n${transcript || '(sin mensajes de texto)'}\n\n` +
+    `## ESTADO COMERCIAL (suggestedStatus)\n` +
+    `Propón el estado que la conversación respalde. Significados:\n` +
+    `- "active" (Activo): el cliente está conversando/interesándose, sin señales claras aún de que califique.\n` +
+    `- "qualified" (Calificado): mostró interés real Y encaja (pide precios/visita, menciona presupuesto o decisión).\n` +
+    `- "scheduled" (Agendado): SOLO si hay una cita o visita concretada con fecha/hora acordada.\n` +
+    `- "lost" (Perdido): rechazó explícitamente, no califica, o dejó de responder tras varios intentos del asesor.\n` +
+    `Reglas estrictas:\n` +
+    `1. NUNCA sugieras "closed"/Vendido: una compra la confirma un humano, no tú.\n` +
+    `2. Usa "ninguno" si el estado actual del lead ya es correcto, o si no hay evidencia suficiente para moverlo. Ante la duda, "ninguno".\n` +
+    `3. No propongas un estado por optimismo: debe haber evidencia textual en la conversación.\n\n` +
     `Analiza este lead y devuelve el JSON con el score (0-100), la temperatura, el resumen, ` +
-    `señales de compra, objeciones, presupuesto/zona si se mencionaron, el próximo paso ideal y el riesgo de pérdida.`;
+    `señales de compra, objeciones, presupuesto/zona si se mencionaron, el próximo paso ideal, el riesgo de pérdida y el estado comercial sugerido.`;
 
   let raw: string | null | undefined;
   try {
@@ -170,6 +182,15 @@ export async function analyzeLeadConversation(
 
   // Blindaje del score (la IA debería respetar 0-100, pero por si acaso).
   parsed.score = Math.max(0, Math.min(100, Math.round(parsed.score)));
+
+  // Blindaje del estado sugerido: nunca "closed" (lo pone un humano) y nunca
+  // sugerir el mismo estado que ya tiene el lead (sería una sugerencia vacía).
+  if ((parsed.suggestedStatus as string) === 'closed' || parsed.suggestedStatus === lead.status) {
+    parsed.suggestedStatus = 'ninguno';
+  }
+  if (parsed.suggestedStatus === 'ninguno') {
+    parsed.suggestedStatusReason = '';
+  }
 
   return { analysis: parsed, messageCount: messages.length, model: MODEL };
 }

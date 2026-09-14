@@ -21,9 +21,11 @@ export const onLeadSmartHomeSync = onDocumentWritten(
     if (!after) return;
     const before = event.data?.before.data() as Lead | undefined;
 
-    // Solo cuando ya hay asesor, no se ha sincronizado y es una fuente elegible.
+    // Solo cuando ya hay primer contacto humano, asesor, no se ha sincronizado y es una fuente elegible.
+    if (!after.advisorFirstContactAt || !after.advisorFirstContactBy) return;
     if (!after.assignedTo) return;
     if (after.smartHomeCustomerId) return;
+    if (after.smartHomeSyncAttemptedAt) return;
     if (after.source && !SYNC_SOURCES.has(after.source)) return;
     if (
       after.smartHomeSyncError &&

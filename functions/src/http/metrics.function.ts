@@ -1,8 +1,10 @@
 import { onCall } from 'firebase-functions/v2/https';
 import { z }       from 'zod';
 import { db }      from '../lib/admin';
-import { requireAuth, assertCompany } from '../lib/authContext';
+import { requireAuth, assertCompany, ADMIN_ROLES } from '../lib/authContext';
+import { getCachedReport } from '../lib/reportCache';
 import type { Lead } from '../modules/leads/leads.types';
+import { countsAsBusinessLead } from '../modules/leads/leadClassification';
 import type { Appointment } from '../modules/appointments/appointments.types';
 
 const LEAD_STATUSES = ['new', 'active', 'qualified', 'scheduled', 'lost', 'closed'] as const;
@@ -17,9 +19,19 @@ export const getDashboardMetrics = onCall(
   { region: 'us-central1', timeoutSeconds: 60 },
   async (request) => {
     const ctx = requireAuth(request);
-    const { companyId } = z.object({ companyId: z.string().min(1) }).parse(request.data);
+    const { companyId, refresh } = z.object({
+      companyId: z.string().min(1),
+      refresh:   z.boolean().optional(),   // true = ignora caché y recalcula
+    }).parse(request.data);
     assertCompany(ctx, companyId);
 
+    const scopedToAdvisor = !(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role));
+    // Dashboard de asesor: filtrado a SUS leads → cachear por uid. Dashboard de
+    // admin/manager: a nivel empresa → una sola entrada compartida. TTL 5 min:
+    // se recalcula, como máximo, una vez cada 5 min por scope (antes: cada apertura).
+    const cacheKey = scopedToAdvisor ? `dashboard__${ctx.uid}` : 'dashboard__all';
+
+    return getCachedReport(companyId, cacheKey, 5 * 60_000, async () => {
     const companyRef = db.collection('companies').doc(companyId);
 
     const [leadsSnap, apptsSnap, usersSnap] = await Promise.all([
@@ -28,8 +40,15 @@ export const getDashboardMetrics = onCall(
       companyRef.collection('users').get(),
     ]);
 
-    const leads = leadsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Lead));
-    const appts = apptsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Appointment));
+    // Excluimos los leads que entraron DIRECTO al WhatsApp de un asesor (no por el
+    // 317): no cuentan como dato del negocio. Siguen visibles en el CRM (Bandeja),
+    // pero fuera de las métricas del tablero.
+    const allLeads = leadsSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as Lead))
+      .filter(countsAsBusinessLead);
+    const allAppts = apptsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Appointment));
+    const leads = scopedToAdvisor ? allLeads.filter((lead) => lead.assignedTo === ctx.uid) : allLeads;
+    const appts = scopedToAdvisor ? allAppts.filter((appt) => appt.advisorId === ctx.uid) : allAppts;
 
     // Mapa asesor → nombre
     const advisorName = new Map<string, string>();
@@ -175,5 +194,6 @@ export const getDashboardMetrics = onCall(
       aiInsights,
       generatedAt:   now,
     };
+    }, refresh);
   }
 );

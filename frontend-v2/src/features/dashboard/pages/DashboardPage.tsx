@@ -9,17 +9,17 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   new:       { label: 'Nuevo',      color: 'bg-sky-500'     },
   active:    { label: 'Activo',     color: 'bg-violet-500'  },
   qualified: { label: 'Calificado', color: 'bg-amber-500'   },
-  scheduled: { label: 'Agendado',   color: 'bg-emerald-500' },
+  scheduled: { label: 'Agendado',   color: 'bg-cyan-500'    },
   lost:      { label: 'Perdido',    color: 'bg-red-500'     },
-  closed:    { label: 'Cerrado',    color: 'bg-zinc-500'    },
+  closed:    { label: 'Vendido',    color: 'bg-emerald-500' },
 };
 
 const SOURCE_LABEL: Record<string, string> = {
-  whatsapp: 'WhatsApp', manual: 'Manual', web: 'Web', facebook: 'Facebook', instagram: 'Instagram',
+  whatsapp: 'WhatsApp', manual: 'Manual', web: 'Página web', facebook: 'Facebook', instagram: 'Instagram',
 };
 
 export function DashboardPage() {
-  const { companyId, profile, role } = useAuth();
+  const { companyId, profile, role, platformAdmin } = useAuth();
   const [data,    setData]    = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -77,7 +77,7 @@ export function DashboardPage() {
             <AiInsightsPanel
               insights={data.aiInsights}
               companyId={companyId ?? ''}
-              canGenerate={isAdminRole(role)}
+              canGenerate={platformAdmin || isAdminRole(role)}
             />
           )}
 

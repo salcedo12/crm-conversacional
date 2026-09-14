@@ -7,6 +7,7 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { Spinner } from '@/shared/components/Spinner';
 import { formatPhone } from '@/shared/utils/formatPhone';
 import { listRecentCalls, type RecentCall, type CallStatus } from '@/features/leads/services/calls.service';
+import { AutoCallPanel } from '../components/AutoCallPanel';
 
 const STATUS_META: Record<CallStatus, { label: string; icon: typeof PhoneCall; cls: string }> = {
   initiated:   { label: 'Marcando…',    icon: Loader2,        cls: 'text-violet-300' },
@@ -78,6 +79,7 @@ export function CallsPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto px-5 py-4">
+        <AutoCallPanel />
         {loading && calls.length === 0 ? (
           <div className="flex justify-center py-16"><Spinner /></div>
         ) : error ? (

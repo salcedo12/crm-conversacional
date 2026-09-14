@@ -1,7 +1,7 @@
 import { onCall } from 'firebase-functions/v2/https';
 import { z } from 'zod';
 import { leadsRepository } from '../modules/leads/leads.repository';
-import { requireAuth, assertCompany } from '../lib/authContext';
+import { requireAuth, assertCompany, ADMIN_ROLES } from '../lib/authContext';
 
 const LeadStatusSchema = z.enum(['new', 'active', 'qualified', 'scheduled', 'lost', 'closed']);
 const LeadSourceSchema = z.enum(['whatsapp', 'manual', 'web', 'facebook', 'instagram', 'meta_ads']);
@@ -29,12 +29,16 @@ export const listLeadsPage = onCall(
     }).parse(request.data);
 
     assertCompany(ctx, data.companyId);
+    const filters = (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))
+      ? data.filters
+      : { ...data.filters, assignedTo: ctx.uid };
+
     return leadsRepository.listPage(data.companyId, {
       pageSize: data.pageSize,
       cursor: data.cursor ?? undefined,
       sortField: data.sortField,
       sortDir: data.sortDir,
-      filters: data.filters,
+      filters,
     });
   }
 );

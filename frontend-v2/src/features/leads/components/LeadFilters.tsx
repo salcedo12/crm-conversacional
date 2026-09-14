@@ -11,6 +11,7 @@ interface LeadFiltersProps {
   advisors: Advisor[];
   allTags: string[];
   inboxes: { id: string; count: number }[];
+  canFilterByAdvisor?: boolean;
   onChange: (filters: Partial<LeadsFilters>) => void;
 }
 
@@ -21,23 +22,33 @@ const STATUS_OPTIONS: { value: LeadStatus | 'all'; label: string }[] = [
   { value: 'qualified', label: 'Calificado' },
   { value: 'scheduled', label: 'Agendado' },
   { value: 'lost', label: 'Perdido' },
-  { value: 'closed', label: 'Cerrado' },
+  { value: 'closed', label: 'Vendido' },
 ];
 
 const SOURCE_OPTIONS: { value: LeadSource | 'all'; label: string }[] = [
   { value: 'all', label: 'Todos los orígenes' },
   { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'meta_ads', label: 'Meta Ads' },
-  { value: 'web', label: 'Web' },
+  { value: 'web', label: 'Página web' },
   { value: 'manual', label: 'Manual' },
+  { value: 'advisor_whatsapp', label: 'WhatsApp asesor' },
 ];
 
 const selectClass = 'h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs text-zinc-200 outline-none transition-colors focus:border-violet-500/60';
 
-export function LeadFilters({ filters, total, filtered, advisors, allTags, inboxes, onChange }: LeadFiltersProps) {
+export function LeadFilters({
+  filters,
+  total,
+  filtered,
+  advisors,
+  allTags,
+  inboxes,
+  canFilterByAdvisor = true,
+  onChange,
+}: LeadFiltersProps) {
   const hasActiveFilters = Boolean(
     filters.search || filters.status !== 'all' || filters.aiEnabled !== 'all'
-    || filters.assignedTo !== 'all' || filters.inboxId !== 'all' || filters.tags.length
+    || (canFilterByAdvisor && filters.assignedTo !== 'all') || filters.inboxId !== 'all' || filters.tags.length
     || filters.source !== 'all'
   );
 
@@ -71,11 +82,13 @@ export function LeadFilters({ filters, total, filtered, advisors, allTags, inbox
           {SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
 
-        <select value={filters.assignedTo} onChange={(event) => onChange({ assignedTo: event.target.value })} className={selectClass}>
-          <option value="all">Todos los asesores</option>
-          <option value="unassigned">Sin asignar</option>
-          {advisors.map((advisor) => <option key={advisor.id} value={advisor.id}>{advisor.displayName}</option>)}
-        </select>
+        {canFilterByAdvisor && (
+          <select value={filters.assignedTo} onChange={(event) => onChange({ assignedTo: event.target.value })} className={selectClass}>
+            <option value="all">Todos los asesores</option>
+            <option value="unassigned">Sin asignar</option>
+            {advisors.map((advisor) => <option key={advisor.id} value={advisor.id}>{advisor.displayName}</option>)}
+          </select>
+        )}
 
         {inboxes.length > 1 && (
           <select value={filters.inboxId} onChange={(event) => onChange({ inboxId: event.target.value })} className={selectClass}>

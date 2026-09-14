@@ -11,6 +11,26 @@ interface LeadNotesPanelProps {
   leadId:    string;
 }
 
+function noteErrorMessage(err: unknown): string {
+  const code = (err as { code?: string })?.code;
+  const message = (err as { message?: string })?.message?.replace(/^FirebaseError:\s*/, '');
+
+  if (code === 'functions/internal' || message === 'INTERNAL') {
+    return 'No se pudo guardar la nota. Intentalo de nuevo en unos segundos.';
+  }
+  if (code === 'functions/permission-denied') {
+    return 'No tienes permiso para gestionar notas de este lead.';
+  }
+  if (code === 'functions/invalid-argument') {
+    return message || 'Revisa el texto de la nota e intentalo de nuevo.';
+  }
+  if (code === 'functions/unauthenticated') {
+    return 'Tu sesion expiro. Vuelve a iniciar sesion.';
+  }
+
+  return message || 'No se pudo guardar.';
+}
+
 export function LeadNotesPanel({ companyId, leadId }: LeadNotesPanelProps) {
   const { notes, loading } = useLeadNotes(companyId, leadId);
   const [kind, setKind]   = useState<LeadNoteKind>('note');
@@ -32,7 +52,8 @@ export function LeadNotesPanel({ companyId, leadId }: LeadNotesPanelProps) {
       setDueAt('');
       setKind('note');
     } catch (err) {
-      setError((err as { message?: string })?.message || 'No se pudo guardar.');
+      console.error('[Notes] add', err);
+      setError(noteErrorMessage(err));
     } finally {
       setBusy(false);
     }

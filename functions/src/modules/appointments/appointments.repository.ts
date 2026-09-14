@@ -1,4 +1,4 @@
-import { Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { db } from '../../lib/admin';
 import type { Appointment, CreateAppointmentInput } from './appointments.types';
 
@@ -57,5 +57,18 @@ export const appointmentsRepository = {
 
   async updateStatus(companyId: string, id: string, status: Appointment['status']): Promise<void> {
     await col(companyId).doc(id).update({ status, updatedAt: Timestamp.now() });
+  },
+
+  async reassignCalendarOwner(
+    companyId: string,
+    id: string,
+    input: { advisorId: string; googleEventId?: string; googleMeetLink?: string }
+  ): Promise<void> {
+    await col(companyId).doc(id).update({
+      advisorId: input.advisorId,
+      googleEventId: input.googleEventId ?? FieldValue.delete(),
+      googleMeetLink: input.googleMeetLink ?? FieldValue.delete(),
+      updatedAt: Timestamp.now(),
+    });
   },
 };

@@ -6,6 +6,7 @@ interface UpdateLeadInput {
   companyId:   string;
   leadId:      string;
   name?:       string;
+  phone?:      string;
   status?:     LeadStatus;
   assignedTo?: string | null;
   tags?:       string[];

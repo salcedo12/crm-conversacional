@@ -21,6 +21,8 @@ import type { Message }        from '../modules/messages/messages.types';
  * 4. Envía por WhatsApp y guarda en Firestore.
  * 5. Marca la tarea como 'sent'.
  */
+const MIN_FOLLOWUP_DELAY_MINUTES = 60;
+
 export const processFollowUps = onSchedule(
   {
     schedule:       'every 5 minutes',
@@ -110,6 +112,16 @@ async function processFollowUpTask(
 
   // 6. Calcular tiempo transcurrido para el contexto
   const minutesSinceLastAi = Math.round((Date.now() - aiSentAtMs) / 60_000);
+  if (minutesSinceLastAi < MIN_FOLLOWUP_DELAY_MINUTES) {
+    await followUpsRepository.markCancelled(companyId, taskId);
+    logger.info('[FollowUps] Cancelado por actividad demasiado reciente', {
+      leadId,
+      taskId,
+      minutesSinceLastAi,
+    });
+    return;
+  }
+
   const timeLabel = minutesSinceLastAi >= 60
     ? `${Math.round(minutesSinceLastAi / 60)} hora(s)`
     : `${minutesSinceLastAi} minuto(s)`;

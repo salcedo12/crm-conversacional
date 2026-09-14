@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CalendarPlus, X } from 'lucide-react';
+import { CalendarPlus, Check, Copy, Video, X } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { bookAppointmentManual } from '@/features/calendar/services/calendar.service';
 import type { Lead } from '@/features/inbox/types';
@@ -36,11 +36,25 @@ export function BookAppointmentModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meet, setMeet] = useState<string | null>(null);
+  const [booked, setBooked] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copyMeet = async () => {
+    if (!meet) return;
+    try {
+      await navigator.clipboard.writeText(meet);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard no disponible */
+    }
+  };
 
   const submit = async () => {
     setSaving(true);
     setError(null);
     setMeet(null);
+    setBooked(false);
     try {
       const start = new Date(`${date}T${time}:00`);
       const result = await bookAppointmentManual(companyId, {
@@ -50,6 +64,7 @@ export function BookAppointmentModal({
         title: title.trim() || undefined,
       });
       setMeet(result.googleMeetLink);
+      setBooked(true);
       onBooked?.();
     } catch (err) {
       console.error('[BookAppointment] error:', err);
@@ -99,9 +114,40 @@ export function BookAppointmentModal({
         </div>
 
         {error && <p className="mt-3 rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
-        {meet && (
-          <div className="mt-3 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            Cita agendada. {meet && <a href={meet} target="_blank" rel="noreferrer" className="underline underline-offset-2">Abrir Meet</a>}
+        {booked && (
+          <div className="mt-3 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-xs text-emerald-300">
+            <p className="flex items-center gap-1.5 font-medium"><Check size={14} /> Cita agendada</p>
+            {meet ? (
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Video size={14} className="shrink-0 text-emerald-400" />
+                  <input
+                    readOnly
+                    value={meet}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="min-w-0 flex-1 rounded border border-emerald-500/25 bg-emerald-950/30 px-2 py-1 font-mono text-[11px] text-emerald-200 outline-none"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <a
+                    href={meet}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-1 font-medium text-emerald-200 hover:bg-emerald-500/25"
+                  >
+                    <Video size={12} /> Abrir Meet
+                  </a>
+                  <button
+                    onClick={copyMeet}
+                    className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-medium text-emerald-200 hover:bg-emerald-500/20"
+                  >
+                    {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copiado' : 'Copiar enlace'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-emerald-400/80">Sin enlace de Meet (el asesor no tiene Google Calendar conectado).</p>
+            )}
           </div>
         )}
 

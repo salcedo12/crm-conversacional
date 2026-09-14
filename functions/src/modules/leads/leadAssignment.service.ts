@@ -1,10 +1,13 @@
 import { db } from '../../lib/admin';
+import { Timestamp } from 'firebase-admin/firestore';
 import { logger } from '../../utils/logger';
 import { googleConnectionRepository } from '../calendar/googleConnection.repository';
 import { leadsRepository } from './leads.repository';
+import { countsAs317LineLead, LINE_317_SOURCES } from './leadClassification';
+import type { Lead } from './leads.types';
 
-/** Roles que pueden recibir leads asignados (todos menos viewer). */
-const ASSIGNABLE_ROLES = ['admin', 'manager', 'advisor'];
+/** Solo los asesores reciben leads por asignacion automatica. */
+const ASSIGNABLE_ROLES = ['advisor'];
 
 const leadsCol = (companyId: string) =>
   db.collection('companies').doc(companyId).collection('leads');
@@ -12,49 +15,160 @@ const leadsCol = (companyId: string) =>
 const usersCol = (companyId: string) =>
   db.collection('companies').doc(companyId).collection('users');
 
-/**
- * Elige un asesor para un lead nuevo mediante round-robin por menor carga.
- *
- * Prefiere asesores con Google Calendar conectado, para que las citas que agende
- * la IA se creen en su calendario con enlace de Meet. Si ningún candidato tiene
- * Google conectado, reparte entre todos los usuarios activos con rol asignable
- * (la cita se guardará sin Meet, pero el lead queda con dueño).
- *
- * @returns uid del asesor elegido, o null si la empresa no tiene usuarios asignables.
- */
-export async function pickAdvisorForLead(companyId: string): Promise<string | null> {
+async function getAssignableAdvisorPool(
+  companyId: string,
+  options: { exclude?: string[]; requireGoogle?: boolean; preferGoogle?: boolean } = {}
+): Promise<string[]> {
+  const excluded = new Set(options.exclude ?? []);
   const usersSnap = await usersCol(companyId).get();
   const candidates = usersSnap.docs
     .filter((d) => {
       const u = d.data();
-      return ASSIGNABLE_ROLES.includes(u.role) && u.active !== false;
+      return ASSIGNABLE_ROLES.includes(u.role) && u.active !== false && !excluded.has(d.id);
     })
     .map((d) => d.id);
 
   if (candidates.length === 0) {
-    logger.warn('[LeadAssignment] Sin usuarios asignables', { companyId });
-    return null;
+    return [];
   }
 
-  // Preferir asesores con Google conectado (para que la cita tenga Meet)
+  if (!options.requireGoogle && !options.preferGoogle) {
+    return candidates;
+  }
+
   const withGoogle = await Promise.all(
     candidates.map((uid) =>
       googleConnectionRepository.getActive(companyId, uid).then((c) => !!c)
     )
   );
   const connected = candidates.filter((_, i) => withGoogle[i]);
-  const pool = connected.length > 0 ? connected : candidates;
+  return options.requireGoogle
+    ? connected
+    : (connected.length > 0 ? connected : candidates);
+}
 
-  // Round-robin por menor carga: contar leads ya asignados a cada candidato
+/**
+ * Cuenta solo la carga de leads de la linea 317 para no mezclar datos propios
+ * del WhatsApp del asesor ni otros canales manuales/organicos.
+ */
+async function countAssigned317Load(companyId: string, advisorId: string): Promise<number> {
+  const snap = await leadsCol(companyId)
+    .where('assignedTo', '==', advisorId)
+    .where('source', 'in', Array.from(LINE_317_SOURCES))
+    .get();
+
+  return snap.docs.filter((doc) => countsAs317LineLead(doc.data() as Pick<Lead, 'source' | 'metadata'>)).length;
+}
+
+async function pickLeastLoadedAdvisor(companyId: string, pool: string[]): Promise<string> {
   const loads = await Promise.all(
-    pool.map(async (uid) => {
-      const agg = await leadsCol(companyId).where('assignedTo', '==', uid).count().get();
-      return { uid, count: agg.data().count };
-    })
+    pool.map(async (uid) => ({ uid, count: await countAssigned317Load(companyId, uid) }))
   );
-  loads.sort((a, b) => a.count - b.count);
 
-  return loads[0].uid;
+  const minCount = Math.min(...loads.map((l) => l.count));
+  const leastLoaded = loads.filter((l) => l.count === minCount);
+  const chosen = leastLoaded[Math.floor(Math.random() * leastLoaded.length)];
+
+  logger.info('[LeadAssignment] Carga 317 para asignacion', {
+    companyId,
+    loads,
+    chosenAdvisorId: chosen.uid,
+  });
+
+  return chosen.uid;
+}
+
+/**
+ * Elige un asesor para un lead nuevo mediante round-robin por menor carga 317.
+ *
+ * Reparte entre todos los usuarios activos con rol asignable. La carga se mide
+ * solo con leads de la linea 317 (whatsapp/web/meta_ads) y excluye los espejos
+ * del WhatsApp personal del asesor.
+ *
+ * @returns uid del asesor elegido, o null si la empresa no tiene usuarios asignables.
+ */
+export async function pickAdvisorForLead(
+  companyId: string,
+  options: { exclude?: string[]; requireGoogle?: boolean } = {}
+): Promise<string | null> {
+  const pool = await getAssignableAdvisorPool(companyId, options);
+
+  if (pool.length === 0) {
+    logger.warn('[LeadAssignment] Sin usuarios asignables', { companyId });
+    return null;
+  }
+
+  // Siempre se asigna al que MENOS leads tenga (así todos llegan a 1 antes de que
+  // alguien tenga 2, a 2 antes de que alguien tenga 3, etc.). Cuando varios están
+  // empatados en la menor carga, se elige al azar entre ellos: si no, el orden fijo
+  // haría que el primero acaparara todos los leads que entran mientras hay empate.
+  return pickLeastLoadedAdvisor(companyId, pool);
+}
+
+async function getFirstContactTimeoutAdvisorIds(companyId: string, leadId: string): Promise<string[]> {
+  const snap = await db.collection('companies').doc(companyId)
+    .collection('leadReassignmentEvents')
+    .where('leadId', '==', leadId)
+    .get();
+
+  const ids = new Set<string>();
+  snap.docs.forEach((doc) => {
+    const event = doc.data();
+    if (event.reason === 'first-contact-timeout' && typeof event.previousAdvisorId === 'string') {
+      ids.add(event.previousAdvisorId);
+    }
+  });
+  return [...ids];
+}
+
+/**
+ * Elige el siguiente asesor para un lead que ya fue quitado por falta de primer
+ * contacto. Primero evita repetir asesores que ya dejaron vencer este mismo lead;
+ * entre los elegibles, asigna al de menor carga 317. Solo cuando el lead ya
+ * recorrio todos los asesores elegibles se reinicia el ciclo.
+ */
+export async function pickAdvisorForFirstContactReassignment(
+  companyId: string,
+  leadId: string,
+  currentAdvisorId: string,
+  options: { requireGoogle?: boolean } = {}
+): Promise<string | null> {
+  const alreadyTimedOut = await getFirstContactTimeoutAdvisorIds(companyId, leadId);
+  const excludeUntilCycleEnds = [...alreadyTimedOut, currentAdvisorId];
+  let pool = await getAssignableAdvisorPool(companyId, {
+    exclude: excludeUntilCycleEnds,
+    requireGoogle: options.requireGoogle,
+  });
+  let cycleReset = false;
+
+  if (pool.length === 0) {
+    cycleReset = true;
+    pool = await getAssignableAdvisorPool(companyId, {
+      exclude: [currentAdvisorId],
+      requireGoogle: options.requireGoogle,
+    });
+  }
+
+  if (pool.length === 0) {
+    logger.warn('[LeadAssignment] Sin asesor alterno para reasignacion', {
+      companyId,
+      leadId,
+      currentAdvisorId,
+      requireGoogle: options.requireGoogle === true,
+    });
+    return null;
+  }
+
+  const chosen = await pickLeastLoadedAdvisor(companyId, pool);
+  logger.info('[LeadAssignment] Asesor elegido para reasignacion por falta de contacto', {
+    companyId,
+    leadId,
+    currentAdvisorId,
+    advisorId: chosen,
+    skippedAdvisorCount: alreadyTimedOut.length,
+    cycleReset,
+  });
+  return chosen;
 }
 
 /**
@@ -70,7 +184,11 @@ export async function assignLead(companyId: string, leadId: string): Promise<str
   try {
     const advisorId = await pickAdvisorForLead(companyId);
     if (!advisorId) return null;
-    await leadsRepository.update(companyId, leadId, { assignedTo: advisorId });
+    await leadsRepository.update(companyId, leadId, {
+      assignedTo: advisorId,
+      advisorAssignedAt: Timestamp.now(),
+      pendingFirstContact: true,
+    });
     logger.info('[LeadAssignment] Lead asignado', { companyId, leadId, advisorId });
     return advisorId;
   } catch (err) {

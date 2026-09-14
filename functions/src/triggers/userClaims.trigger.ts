@@ -31,11 +31,13 @@ export const onUserProfileWritten = onDocumentWritten(
       }
 
       const data   = after.data() ?? {};
-      const role   = typeof data.role === 'string' ? data.role : 'advisor';
+      const rawRole = typeof data.role === 'string' ? data.role : 'advisor';
+      const platformAdmin = data.platformAdmin === true || data.platformAdmin === 'true' || rawRole === 'platformAdmin';
+      const role = rawRole === 'platformAdmin' ? 'admin' : rawRole;
       const active = data.active !== false;
 
-      await auth.setCustomUserClaims(userId, { companyId, role, active });
-      logger.info('[UserClaims] Claims actualizados', { userId, companyId, role, active });
+      await auth.setCustomUserClaims(userId, { companyId, role, active, platformAdmin });
+      logger.info('[UserClaims] Claims actualizados', { userId, companyId, role, active, platformAdmin });
     } catch (err) {
       // Si el uid no existe en Auth todavía (doc creado antes que la cuenta),
       // se registra y se reintentará en la próxima escritura del doc.

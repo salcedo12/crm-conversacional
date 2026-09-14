@@ -10,6 +10,16 @@ function cursorValueForClient(value: unknown): unknown {
   return value instanceof Timestamp ? value.toMillis() : value;
 }
 
+/** Normaliza un nombre para comparar: minúsculas, sin tildes/emojis, solo letras y espacios. */
+function normName(name: string): string {
+  return (name || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')     // quitar tildes
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')                             // solo letras
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function cursorValueForStartAfter(field: string, value: unknown): unknown {
   if ((field === 'lastMessageAt' || field === 'createdAt') && typeof value === 'number') {
     return Timestamp.fromMillis(value);
@@ -28,6 +38,48 @@ export const leadsRepository = {
       .get();
     if (snap.empty) return null;
     return { id: snap.docs[0].id, ...snap.docs[0].data() } as Lead;
+  },
+
+  /** Busca un lead por los últimos 10 dígitos del teléfono (número nacional), para
+   *  deduplicar a la misma persona aunque el indicativo difiera (+1 del formulario
+   *  vs +57 de WhatsApp). Excluye el propio lead si se pasa `excludeId`. */
+  async findByPhoneTail(
+    companyId: string,
+    tail: string,
+    excludeId?: string
+  ): Promise<Lead | null> {
+    if (!tail) return null;
+    const snap = await col(companyId)
+      .where('phoneTail', '==', tail)
+      .limit(2)
+      .get();
+    for (const d of snap.docs) {
+      if (d.id !== excludeId) return { id: d.id, ...d.data() } as Lead;
+    }
+    return null;
+  },
+
+  /**
+   * Para el caso raro de un lead de WhatsApp SIN número (usuario oculto): busca
+   * otro lead CON número que tenga (casi) el mismo nombre, para marcar "posible
+   * duplicado". No se puede unir automático (no hay número que comparar), así que
+   * solo se usa como pista para que el asesor lo revise. Coincidencia laxa por
+   * nombre normalizado (sin tildes/emojis, minúsculas), incluyendo subcadenas.
+   */
+  async findNameTwinWithPhone(companyId: string, name: string): Promise<Lead | null> {
+    const key = normName(name);
+    if (key.length < 4) return null;
+    const snap = await col(companyId).orderBy('createdAt', 'desc').limit(400).get();
+    for (const d of snap.docs) {
+      const x = d.data() as Lead;
+      if (!x.phone) continue;                        // solo leads CON número
+      const k2 = normName(x.name || '');
+      if (k2.length < 4) continue;
+      if (k2 === key || k2.includes(key) || key.includes(k2)) {
+        return { ...x, id: d.id } as Lead;
+      }
+    }
+    return null;
   },
 
   /** Busca un lead de Messenger/Instagram por su PSID/IGSID. Usa el campo compuesto
@@ -203,6 +255,72 @@ export const leadsRepository = {
     const ref = col(companyId).doc();
     await ref.set(input);
     return { id: ref.id, ...input };
+  },
+
+  /**
+   * Crea un lead RECLAMANDO de forma atómica una identidad (teléfono normalizado
+   * o BSUID) para cerrar la carrera de duplicados: si dos mensajes de un cliente
+   * NUEVO llegan casi a la vez, cada webhook corre en paralelo, ambos hacen
+   * "buscar-o-crear", ambos ven "no existe" y ambos crean un lead. Con el reclamo,
+   * el primero gana y el segundo REUSA ese mismo lead.
+   *
+   * La transacción escribe el doc índice y el lead en UN solo commit atómico, así
+   * el perdedor —al leer el índice ya reclamado— siempre encuentra el lead ganador
+   * ya persistido (sin ventana intermedia).
+   *
+   * Índice: companies/{companyId}/leadIndex/{claimKey}
+   *
+   * @returns { lead, created }. created=false ⇒ ya existía (reusado), NO reasignar.
+   */
+  async createWithIdentityClaim(
+    companyId: string,
+    claimKey: string,
+    input: CreateLeadInput,
+  ): Promise<{ lead: Lead; created: boolean }> {
+    // Sin identidad estable para reclamar (ni teléfono ni BSUID): se cae al create
+    // normal — no queda peor que el comportamiento histórico.
+    if (!claimKey) return { lead: await this.create(companyId, input), created: true };
+
+    const leadRef  = col(companyId).doc();
+    const indexRef = db
+      .collection('companies').doc(companyId)
+      .collection('leadIndex').doc(claimKey);
+
+    const result = await db.runTransaction(async (tx) => {
+      const idxSnap = await tx.get(indexRef);
+      if (idxSnap.exists) {
+        return { leadId: (idxSnap.data() as { leadId: string }).leadId, created: false };
+      }
+      tx.set(indexRef, { leadId: leadRef.id, createdAt: Timestamp.now() });
+      tx.set(leadRef, input);
+      return { leadId: leadRef.id, created: true };
+    });
+
+    if (result.created) return { lead: { id: leadRef.id, ...input }, created: true };
+
+    const winner = await col(companyId).doc(result.leadId).get();
+    if (winner.exists) {
+      return { lead: { id: winner.id, ...(winner.data() as object) } as Lead, created: false };
+    }
+    // Índice huérfano (lead borrado): crear normal como último recurso.
+    return { lead: await this.create(companyId, input), created: true };
+  },
+
+  /** Actualiza SOLO la identidad de teléfono (para unificar un duplicado al número
+   *  real de WhatsApp). `update()` normal no permite tocar phone/normalizedPhone. */
+  async updatePhoneIdentity(
+    companyId: string,
+    leadId: string,
+    phone: string,
+    normalizedPhone: string,
+    tail: string
+  ): Promise<void> {
+    await col(companyId).doc(leadId).update({
+      phone,
+      normalizedPhone,
+      ...(tail ? { phoneTail: tail } : {}),
+      updatedAt: Timestamp.now(),
+    });
   },
 
   async update(

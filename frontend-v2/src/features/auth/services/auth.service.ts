@@ -15,10 +15,23 @@ import { auth, db } from '@/config/firebase';
 import type { UserProfile, UserRole } from '../types';
 
 const DEFAULT_COMPANY_ID = import.meta.env.VITE_DEFAULT_COMPANY_ID ?? 'empresa_demo';
+const AUTH_TIMEOUT_MS = 12000;
+
+function withTimeout<T>(promise: Promise<T>, label: string, ms = AUTH_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(`${label} tardo demasiado en responder.`)), ms);
+    }),
+  ]);
+}
 
 /** Login con email y contraseña */
 export async function signIn(email: string, password: string): Promise<User> {
-  const cred = await signInWithEmailAndPassword(auth, email, password);
+  const cred = await withTimeout(
+    signInWithEmailAndPassword(auth, email, password),
+    'El inicio de sesion'
+  );
   return cred.user;
 }
 
@@ -40,7 +53,10 @@ export async function resetPassword(email: string): Promise<void> {
 async function waitForCompanyClaim(user: User, attempts = 5): Promise<ParsedToken> {
   let claims: ParsedToken = {};
   for (let i = 0; i < attempts; i++) {
-    const res = await user.getIdTokenResult(true); // force refresh
+    const res = await withTimeout(
+      user.getIdTokenResult(true),
+      'La actualizacion de permisos'
+    ); // force refresh
     claims = res.claims;
     if (typeof claims.companyId === 'string' && claims.companyId) return claims;
     // Espera incremental para dar tiempo al trigger (eventual consistency)
@@ -64,19 +80,22 @@ async function waitForCompanyClaim(user: User, attempts = 5): Promise<ParsedToke
  */
 export async function loadOrCreateUserProfile(user: User): Promise<UserProfile> {
   // 1. Resolver companyId desde los claims (con fallback al default para bootstrap)
-  let { claims } = await user.getIdTokenResult();
+  let { claims } = await withTimeout(user.getIdTokenResult(), 'La lectura de permisos');
   let companyId  = typeof claims.companyId === 'string' && claims.companyId
     ? claims.companyId
     : DEFAULT_COMPANY_ID;
 
   const ref  = doc(db, 'companies', companyId, 'users', user.uid);
-  const snap = await getDoc(ref);
+  const snap = await withTimeout(getDoc(ref), 'La carga del perfil');
 
   if (snap.exists()) {
     // Si el doc existe pero los claims aún no traen companyId, hacer backfill:
     // tocar el doc → el trigger setea los claims → refrescar el token.
     if (!claims.companyId) {
-      await setDoc(ref, { updatedAt: Timestamp.now() }, { merge: true });
+      await withTimeout(
+        setDoc(ref, { updatedAt: Timestamp.now() }, { merge: true }),
+        'La sincronizacion del perfil'
+      );
       claims = await waitForCompanyClaim(user);
       if (typeof claims.companyId === 'string' && claims.companyId) {
         companyId = claims.companyId;
@@ -103,7 +122,7 @@ export async function loadOrCreateUserProfile(user: User): Promise<UserProfile> 
     updatedAt:   now,
   };
 
-  await setDoc(ref, profile);
+  await withTimeout(setDoc(ref, profile), 'La creacion del perfil');
   // Esperar a que el trigger setee los claims del nuevo usuario.
   await waitForCompanyClaim(user);
   return { id: user.uid, ...profile };

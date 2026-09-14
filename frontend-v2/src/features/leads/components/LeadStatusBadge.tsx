@@ -11,7 +11,7 @@ const config: Record<LeadStatus, { label: string; classes: string }> = {
   qualified: { label: 'Calificado', classes: 'bg-violet-500/20 text-violet-300 border-violet-500/20' },
   scheduled: { label: 'Agendado',   classes: 'bg-amber-500/20  text-amber-300  border-amber-500/20'  },
   lost:      { label: 'Perdido',    classes: 'bg-red-500/20    text-red-300    border-red-500/20'    },
-  closed:    { label: 'Cerrado',    classes: 'bg-zinc-500/20   text-zinc-400   border-zinc-600/20'   },
+  closed:    { label: 'Vendido',    classes: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
 };
 
 export function LeadStatusBadge({ status, size = 'sm' }: LeadStatusBadgeProps) {

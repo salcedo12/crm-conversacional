@@ -11,7 +11,24 @@ import {
   AvailabilityError,
 } from '../modules/appointments/availability.service';
 import { bookAppointment } from '../modules/appointments/appointments.service';
+import { sendAppointmentConfirmationToLead } from '../modules/appointments/appointmentNotifier.service';
+import { getAiConfig } from '../modules/ai/aiConfig.repository';
 import { verifyDaptaRequest } from '../integrations/dapta/dapta.auth';
+import type { Appointment } from '../modules/appointments/appointments.types';
+
+/**
+ * Envía por WhatsApp la confirmación de la cita agendada durante una llamada IA.
+ * La IA de voz (Dapta) agenda vía HTTP y `bookAppointment` no notifica al lead por
+ * su cuenta. El notificador respeta la ventana de 24h: texto libre si está abierta,
+ * plantilla aprobada si está cerrada (lo habitual tras una llamada saliente).
+ * Best-effort: cualquier fallo se registra sin romper la respuesta a Dapta.
+ */
+async function sendBookingConfirmationWhatsApp(companyId: string, appointment: Appointment): Promise<void> {
+  const lead = await leadsRepository.findById(companyId, appointment.leadId);
+  if (!lead) return;
+  const businessName = (await getAiConfig(companyId)).businessName;
+  await sendAppointmentConfirmationToLead(companyId, lead, appointment, businessName);
+}
 
 /**
  * Devuelve horarios disponibles reales del asesor asignado a un lead (Google
@@ -110,6 +127,15 @@ export const daptaBookAppointment = onRequest(
     try {
       const appointment = await bookAppointment({ companyId, leadId, startTime, durationMinutes, source: 'ai' });
       logger.info('[daptaBookAppointment] Cita agendada', { leadId, appointmentId: appointment.id });
+
+      // Confirmar por WhatsApp (la IA de voz no lo hace sola). Best-effort: no debe
+      // tumbar la respuesta a Dapta si el envío falla (p. ej. ventana de 24h cerrada).
+      await sendBookingConfirmationWhatsApp(companyId, appointment).catch((err) => {
+        logger.warn('[daptaBookAppointment] Confirmación WhatsApp no enviada', {
+          leadId, error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
       res.status(200).json({
         ok: true,
         appointmentId: appointment.id,

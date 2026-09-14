@@ -43,8 +43,14 @@ export interface Call {
   agentName?:    string;
   /** ID de la llamada en Dapta, o wacid en YCloud (para correlación e idempotencia). */
   externalId?:   string;
-  /** userId del asesor que disparó la llamada desde el CRM (si aplica). */
+  /** userId del asesor que disparó la llamada desde el CRM, o 'auto' si la disparó el modo automático. */
   triggeredBy?:  string;
+  /** true = llamada disparada por el modo automático (no por un asesor). */
+  auto?:         boolean;
+  /** Número de intento del modo automático (1 = inicial, 2 = 1er reintento, …). */
+  autoAttempt?:  number;
+  /** Instante del PRIMER intento de la cadena automática (ancla para calcular los offsets de reintento). */
+  autoAnchorAt?: Timestamp;
   /** Payload crudo del webhook, por si hace falta mapear campos nuevos sin redeploy. */
   raw?:          Record<string, unknown>;
   /** Bitacora de SmartHome ya enviada para esta llamada. */

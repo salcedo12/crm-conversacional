@@ -91,7 +91,7 @@ export const listCalendarEvents = onCall(
     // Citas del CRM que NO estén ya en Google (evitar duplicados)
     const googleIds = new Set(googleEvents.map((e) => e.id));
     const allCrmAppts = await appointmentsRepository.listInRange(companyId, from, to);
-    const crmAppts = ADMIN_ROLES.includes(ctx.role)
+    const crmAppts = (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))
       ? allCrmAppts
       : allCrmAppts.filter((a) => a.advisorId === advisorId);
     const crmEvents: CalendarEvent[] = crmAppts

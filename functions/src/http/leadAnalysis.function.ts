@@ -24,7 +24,7 @@ export const analyzeLead = onCall(
     const lead = await leadsRepository.findById(companyId, leadId);
     if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
 
-    if (!ADMIN_ROLES.includes(ctx.role) && lead.assignedTo !== ctx.uid) {
+    if (!(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role)) && lead.assignedTo !== ctx.uid) {
       throw new HttpsError('permission-denied', 'Solo puedes analizar leads asignados a ti.');
     }
 

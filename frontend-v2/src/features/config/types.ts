@@ -1,5 +1,8 @@
 export type AiTone = 'professional' | 'friendly' | 'formal' | 'casual';
 
+/** Cómo maneja la IA los precios/cotizaciones en el chat. */
+export type QuoteMode = 'off' | 'on_request' | 'proactive';
+
 export interface FollowUpStep {
   delayMinutes: number;
   enabled:      boolean;
@@ -17,6 +20,7 @@ export interface AiConfig {
   transferKeywords:   string[];
   blockedTopics:      string[];
   followUpSequence:   FollowUpStep[];
+  quoteMode:          QuoteMode;
   updatedAt:          number | null; // millis
 }
 

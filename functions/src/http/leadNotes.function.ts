@@ -11,15 +11,41 @@ const notesCol = (companyId: string, leadId: string) =>
     .collection('leads').doc(leadId)
     .collection('notes');
 
+const AddLeadNoteSchema = z.object({
+  companyId: z.string().min(1),
+  leadId:    z.string().min(1),
+  kind:      z.enum(['note', 'reminder']).default('note'),
+  text:      z.string().trim().min(1).max(2000),
+  dueAt:     z.number().int().positive().nullish(), // millis (solo recordatorios)
+});
+
+const DeleteLeadNoteSchema = z.object({
+  companyId: z.string().min(1),
+  leadId:    z.string().min(1),
+  noteId:    z.string().min(1),
+});
+
+const SetReminderDoneSchema = DeleteLeadNoteSchema.extend({
+  done: z.boolean(),
+});
+
+function parseInput<T>(schema: z.ZodType<T>, input: unknown): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) {
+    throw new HttpsError('invalid-argument', 'Datos invalidos para guardar la nota.');
+  }
+  return parsed.data;
+}
+
 /** Verifica que el usuario puede operar sobre el lead (admin, o asesor asignado). */
 async function assertCanEditLead(
-  ctx: { uid: string; role: string; companyId: string },
+  ctx: { uid: string; role: string; companyId: string; platformAdmin?: boolean },
   companyId: string,
   leadId: string
 ): Promise<void> {
   const lead = await leadsRepository.findById(companyId, leadId);
   if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
-  if (!ADMIN_ROLES.includes(ctx.role as never) && lead.assignedTo !== ctx.uid) {
+  if (!ctx.platformAdmin && !ADMIN_ROLES.includes(ctx.role as never) && lead.assignedTo !== ctx.uid) {
     throw new HttpsError('permission-denied', 'Solo puedes gestionar notas de tus leads asignados.');
   }
 }
@@ -35,13 +61,7 @@ export const addLeadNote = onCall(
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, WRITE_ROLES);
-    const data = z.object({
-      companyId: z.string().min(1),
-      leadId:    z.string().min(1),
-      kind:      z.enum(['note', 'reminder']).default('note'),
-      text:      z.string().trim().min(1).max(2000),
-      dueAt:     z.number().int().positive().optional(), // millis (solo recordatorios)
-    }).parse(request.data);
+    const data = parseInput(AddLeadNoteSchema, request.data);
     assertCompany(ctx, data.companyId);
     await assertCanEditLead(ctx, data.companyId, data.leadId);
 
@@ -58,8 +78,8 @@ export const addLeadNote = onCall(
       authorId:   ctx.uid,
       authorName: await authorName(data.companyId, ctx.uid),
       createdAt:  now,
-      ...(data.kind === 'reminder'
-        ? { dueAt: Timestamp.fromMillis(data.dueAt!), done: false, notified: false }
+      ...(data.kind === 'reminder' && data.dueAt
+        ? { dueAt: Timestamp.fromMillis(data.dueAt), done: false, notified: false }
         : {}),
     });
 
@@ -73,11 +93,7 @@ export const deleteLeadNote = onCall(
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, WRITE_ROLES);
-    const data = z.object({
-      companyId: z.string().min(1),
-      leadId:    z.string().min(1),
-      noteId:    z.string().min(1),
-    }).parse(request.data);
+    const data = parseInput(DeleteLeadNoteSchema, request.data);
     assertCompany(ctx, data.companyId);
     await assertCanEditLead(ctx, data.companyId, data.leadId);
 
@@ -91,12 +107,7 @@ export const setReminderDone = onCall(
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, WRITE_ROLES);
-    const data = z.object({
-      companyId: z.string().min(1),
-      leadId:    z.string().min(1),
-      noteId:    z.string().min(1),
-      done:      z.boolean(),
-    }).parse(request.data);
+    const data = parseInput(SetReminderDoneSchema, request.data);
     assertCompany(ctx, data.companyId);
     await assertCanEditLead(ctx, data.companyId, data.leadId);
 

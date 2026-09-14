@@ -84,6 +84,7 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
         displayName: user.displayName,
         role: user.role,
         active: user.active,
+        phone: user.phone ?? '',
       });
       await load();
     } catch (err) {
@@ -167,6 +168,13 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
               <div className="min-w-0">
                 <input className={`${inputClass} w-full`} value={user.displayName} onChange={(event) => patchUser(user.id, { displayName: event.target.value })} />
                 <p className="mt-1 truncate text-[11px] text-zinc-500">{user.email || user.id}{user.googleConnected ? ' - Calendar conectado' : ''}</p>
+                <input
+                  className={`${inputClass} mt-1.5 w-full`}
+                  value={user.phone ?? ''}
+                  onChange={(event) => patchUser(user.id, { phone: event.target.value })}
+                  placeholder="WhatsApp para avisos (ej. +57 3001234567)"
+                />
+                <p className="mt-1 text-[10px] text-zinc-600">Recibe avisos de citas por WhatsApp. Si lo dejas vacío, se usa el WhatsApp que el asesor conectó en Conexiones.</p>
               </div>
               <select className={inputClass} value={user.role} onChange={(event) => patchUser(user.id, { role: event.target.value })}>
                 {ROLES.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}

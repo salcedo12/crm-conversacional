@@ -11,6 +11,7 @@ import { auth } from '@/config/firebase';
 import {
   signIn as authSignIn,
   signOut as authSignOut,
+  resetPassword as authResetPassword,
   loadOrCreateUserProfile,
 } from '@/features/auth/services/auth.service';
 import type { UserProfile, UserRole } from '@/features/auth/types';
@@ -24,11 +25,21 @@ interface AuthContextValue {
   error:     string | null;
   companyId: string | null;
   role:      UserRole | null;
+  platformAdmin: boolean;
+  setActiveCompanyId: (companyId: string) => void;
   signIn:    (email: string, password: string) => Promise<void>;
   signOut:   () => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const ACTIVE_COMPANY_KEY = 'meraki:active-company-id';
+
+function isPlatformAdmin(profile: UserProfile | null): boolean {
+  return profile?.platformAdmin === true
+    || profile?.platformAdmin === 'true'
+    || profile?.role === 'platformAdmin';
+}
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
@@ -37,14 +48,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
+  const [activeCompanyId, setActiveCompanyIdState] = useState<string | null>(() =>
+    localStorage.getItem(ACTIVE_COMPANY_KEY)
+  );
+
+  const setActiveCompanyId = useCallback((companyId: string) => {
+    setActiveCompanyIdState(companyId);
+    localStorage.setItem(ACTIVE_COMPANY_KEY, companyId);
+    window.location.assign('/dashboard/inbox');
+  }, []);
 
   // Escuchar cambios de estado de auth de Firebase
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setError(null);
 
-      if (firebaseUser) {
-        try {
+      try {
+        if (firebaseUser) {
           const prof = await loadOrCreateUserProfile(firebaseUser);
 
           if (!prof.active) {
@@ -57,18 +77,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(firebaseUser);
             setProfile(prof);
           }
-        } catch (err) {
-          console.error('[Auth] Error cargando perfil:', err);
-          setError('No se pudo cargar el perfil de usuario.');
+        } else {
           setUser(null);
           setProfile(null);
+          setActiveCompanyIdState(null);
+          localStorage.removeItem(ACTIVE_COMPANY_KEY);
         }
-      } else {
+      } catch (err) {
+        console.error('[Auth] Error cargando perfil:', err);
+        setError(err instanceof Error ? err.message : 'No se pudo cargar el perfil de usuario.');
         setUser(null);
         setProfile(null);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     return unsubscribe;
@@ -78,8 +100,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setLoading(true);
     try {
-      await authSignIn(email, password);
-      // El onAuthStateChanged de arriba carga el perfil automáticamente
+      const firebaseUser = await authSignIn(email, password);
+      const prof = await loadOrCreateUserProfile(firebaseUser);
+
+      if (!prof.active) {
+        await authSignOut();
+        setError('Tu cuenta está desactivada. Contacta al administrador.');
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+
+      setUser(firebaseUser);
+      setProfile(prof);
+      setLoading(false);
     } catch (err: unknown) {
       const msg = getAuthErrorMessage(err);
       setError(msg);
@@ -89,18 +124,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    setActiveCompanyIdState(null);
+    localStorage.removeItem(ACTIVE_COMPANY_KEY);
     await authSignOut();
   }, []);
+
+  const resetPassword = useCallback(async (email: string) => {
+    try {
+      await authResetPassword(email);
+    } catch (err) {
+      throw new Error(getAuthErrorMessage(err));
+    }
+  }, []);
+
+  const platformAdmin = isPlatformAdmin(profile);
+  const effectiveCompanyId = platformAdmin
+    ? (activeCompanyId || profile?.companyId || null)
+    : (profile?.companyId ?? null);
 
   const value: AuthContextValue = {
     user,
     profile,
     loading,
     error,
-    companyId: profile?.companyId ?? null,
+    companyId: effectiveCompanyId,
     role:      profile?.role      ?? null,
+    platformAdmin,
+    setActiveCompanyId,
     signIn,
     signOut,
+    resetPassword,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -7,8 +7,14 @@
 .env.local
 .env.*.local
 
+# Credenciales locales
+service-account.json
+*service-account*.json
+
 # Node
 node_modules/
+advisor-whatsapp-bridge/data/
+advisor-whatsapp-bridge/.env
 
 # Build
 functions/lib/

@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Megaphone, Flame, TrendingUp, CalendarCheck, Trophy, DollarSign, Info, Radio } from 'lucide-react';
+import { Megaphone, Flame, TrendingUp, CalendarCheck, Trophy, DollarSign, Info, Radio, ArrowUpCircle, PauseCircle, AlertTriangle, Lightbulb } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { Spinner } from '@/shared/components/Spinner';
-import { getMarketingMetrics, type MarketingMetrics, type AdRow, type AdStatus } from '../services/marketing.service';
+import { getMarketingMetrics, type MarketingMetrics, type AdRow, type AdStatus, type Insight, type InsightKind, type MarketingRange } from '../services/marketing.service';
+
+const RANGE_LABEL: Record<MarketingRange, string> = {
+  all: 'Todo', '7d': '7 días', '30d': '30 días', '90d': '90 días',
+};
+
+const INSIGHT_META: Record<InsightKind, { icon: typeof Info; cls: string; ring: string }> = {
+  scale:  { icon: ArrowUpCircle, cls: 'text-emerald-300', ring: 'border-emerald-500/25 bg-emerald-500/[0.07]' },
+  pause:  { icon: PauseCircle,   cls: 'text-red-300',     ring: 'border-red-500/25 bg-red-500/[0.07]' },
+  review: { icon: AlertTriangle, cls: 'text-amber-300',   ring: 'border-amber-500/25 bg-amber-500/[0.07]' },
+  info:   { icon: Lightbulb,     cls: 'text-sky-300',     ring: 'border-sky-500/25 bg-sky-500/[0.07]' },
+};
 
 const SOURCE_LABEL: Record<string, string> = {
-  whatsapp: 'WhatsApp', manual: 'Carga manual', web: 'Sitio web',
+  whatsapp: 'WhatsApp', manual: 'Carga manual', web: 'Página web',
   facebook: 'Facebook', instagram: 'Instagram', meta_ads: 'Anuncio de Meta',
 };
 
@@ -41,13 +52,14 @@ export function MarketingPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [campaignFilter, setCampaignFilter] = useState<string>('all');
   const [ticket, setTicket] = useState<string>('');   // ticket promedio para ROAS (opcional)
+  const [range, setRange] = useState<MarketingRange>('all');
 
   const load = async () => {
     if (!companyId) return;
     setLoading(true);
     setError(null);
     try {
-      setData(await getMarketingMetrics(companyId));
+      setData(await getMarketingMetrics(companyId, range));
     } catch (err) {
       console.error('[Marketing] error:', err);
       setError('No se pudieron cargar las métricas de marketing.');
@@ -56,7 +68,7 @@ export function MarketingPage() {
     }
   };
 
-  useEffect(() => { load(); }, [companyId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [companyId, range]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const showCosts = !!data?.spendAvailable;
 
@@ -102,12 +114,25 @@ export function MarketingPage() {
           </h1>
           <p className="mt-0.5 text-xs text-zinc-500">Qué anuncios y fuentes traen los mejores leads</p>
         </div>
-        <button
-          onClick={load}
-          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-700"
-        >
-          ↻ Actualizar
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex gap-0.5 rounded-lg border border-zinc-800 p-0.5">
+            {(['all', '7d', '30d', '90d'] as MarketingRange[]).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${range === r ? 'bg-violet-600/25 text-violet-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+              >
+                {RANGE_LABEL[r]}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={load}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-700"
+          >
+            ↻ Actualizar
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -126,6 +151,18 @@ export function MarketingPage() {
                   : 'Conecta tu cuenta de anuncios de Meta para ver costos reales (CPL, costo por lead calificado, costo por cierre y ROAS). Requiere las variables META_ADS_ACCESS_TOKEN y META_AD_ACCOUNT_ID.'}
                 {' '}Mientras tanto, el ranking por calidad y conversión ya funciona.
               </p>
+            </div>
+          )}
+
+          {/* Motor de recomendaciones */}
+          {(data.insights?.length ?? 0) > 0 && (
+            <div>
+              <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-zinc-200">
+                <Lightbulb size={15} className="text-violet-400" /> Recomendaciones
+              </h2>
+              <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                {data.insights.map((ins, i) => <InsightCard key={i} ins={ins} />)}
+              </div>
             </div>
           )}
 
@@ -222,7 +259,7 @@ export function MarketingPage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[780px] border-collapse text-sm">
+                <table className="w-full min-w-[860px] border-collapse text-sm">
                   <thead>
                     <tr className="border-b border-zinc-800 text-left text-[10px] uppercase text-zinc-500">
                       <th className="px-3 py-2 font-semibold">#</th>
@@ -233,6 +270,7 @@ export function MarketingPage() {
                       <th className="px-3 py-2 text-right font-semibold">Agendan</th>
                       <th className="px-3 py-2 text-right font-semibold">Cierran</th>
                       {showCosts && <th className="px-3 py-2 text-right font-semibold">Gasto</th>}
+                      {showCosts && <th className="px-3 py-2 text-right font-semibold" title="Clics ÷ impresiones">CTR</th>}
                       {showCosts && <th className="px-3 py-2 text-right font-semibold">CPL</th>}
                       {showCosts && <th className="px-3 py-2 text-right font-semibold">C/Calif.</th>}
                       {showCosts && <th className="px-3 py-2 text-right font-semibold">C/Cierre</th>}
@@ -273,7 +311,38 @@ export function MarketingPage() {
             </div>
           </div>
 
+          {/* Por formulario (Lead Ads) */}
+          {data.byForm && data.byForm.length > 0 && (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+              <h2 className="mb-4 text-sm font-semibold text-zinc-200">Leads por formulario (pautas de Meta)</h2>
+              <div className="flex flex-col gap-3">
+                {data.byForm.map((f) => {
+                  const max = Math.max(...data.byForm.map((x) => x.leads), 1);
+                  return (
+                    <div key={f.form} className="flex items-center gap-3">
+                      <span className="w-40 shrink-0 truncate text-xs text-zinc-400" title={f.form}>{f.form}</span>
+                      <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-zinc-800">
+                        <div className="h-full rounded-full bg-sky-500" style={{ width: `${(f.leads / max) * 100}%` }} />
+                      </div>
+                      <span className="w-10 text-right text-xs tabular-nums text-zinc-300">{f.leads}</span>
+                      <span className={`w-16 text-right text-xs tabular-nums ${scoreColor(f.avgScore)}`}>
+                        {f.avgScore > 0 ? `${f.avgScore} pts` : '—'}
+                      </span>
+                      <span className="w-16 text-right text-xs tabular-nums text-emerald-400">{f.convRate}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex justify-end gap-4 text-[10px] text-zinc-600">
+                <span>leads</span><span>· score IA</span><span>· % cierre</span>
+              </div>
+            </div>
+          )}
+
           <p className="text-center text-[10px] text-zinc-600">
+            {data.totalMetaLeads > 0 && (data.attributionCoverage ?? 100) < 100 && (
+              <>Atribución: {data.attributionCoverage}% de los leads de anuncios traen el ID del anuncio ({data.metaLeadsWithAdId}/{data.totalMetaLeads}). · </>
+            )}
             Actualizado {new Date(data.generatedAt).toLocaleString('es-CO')}
           </p>
         </div>
@@ -310,6 +379,7 @@ function AdRowView({ ad, rank, showCosts, showStatus }: { ad: AdRow; rank: numbe
       <td className="px-3 py-2.5 text-right text-xs tabular-nums text-amber-300">{ad.scheduleRate}%</td>
       <td className="px-3 py-2.5 text-right text-xs tabular-nums text-emerald-300">{ad.convRate}%</td>
       {showCosts && <td className="px-3 py-2.5 text-right text-xs tabular-nums text-zinc-300">{fmtMoney(ad.spend)}</td>}
+      {showCosts && <td className="px-3 py-2.5 text-right text-xs tabular-nums text-zinc-400" title={ad.impressions != null ? `${ad.impressions.toLocaleString('es-CO')} impresiones · ${(ad.clicks ?? 0).toLocaleString('es-CO')} clics` : ''}>{ad.ctr != null ? `${ad.ctr}%` : '—'}</td>}
       {showCosts && <td className="px-3 py-2.5 text-right text-xs tabular-nums text-zinc-400">{fmtMoney(ad.cpl)}</td>}
       {showCosts && <td className="px-3 py-2.5 text-right text-xs tabular-nums text-sky-300">{fmtMoney(ad.cpql)}</td>}
       {showCosts && <td className="px-3 py-2.5 text-right text-xs tabular-nums text-emerald-300">{fmtMoney(ad.cpc)}</td>}
@@ -321,6 +391,20 @@ function AdRowView({ ad, rank, showCosts, showStatus }: { ad: AdRow; rank: numbe
         ) : <span className="text-[10px] text-zinc-600">—</span>}
       </td>
     </tr>
+  );
+}
+
+function InsightCard({ ins }: { ins: Insight }) {
+  const m = INSIGHT_META[ins.kind];
+  const Icon = m.icon;
+  return (
+    <div className={`flex items-start gap-2.5 rounded-lg border px-3.5 py-3 ${m.ring}`}>
+      <Icon size={16} className={`mt-0.5 shrink-0 ${m.cls}`} />
+      <div className="min-w-0">
+        <p className={`text-xs font-semibold ${m.cls}`}>{ins.title}</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-zinc-300">{ins.detail}</p>
+      </div>
+    </div>
   );
 }
 

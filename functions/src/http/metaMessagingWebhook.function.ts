@@ -9,7 +9,10 @@ import { logger }      from '../utils/logger';
 import { leadsRepository }    from '../modules/leads/leads.repository';
 import { assignLead }         from '../modules/leads/leadAssignment.service';
 import { messagesRepository } from '../modules/messages/messages.repository';
+import { resolveCompanyIdForChannel } from '../modules/companies/companyRouting';
+import { processLeadgenEvent, type LeadgenValue } from '../modules/metaLeads/metaLeads.service';
 import { uploadMediaBuffer, mimeToExt } from '../utils/storageUpload';
+import { webhookEventExpireAt } from '../utils/webhookTtl';
 import type { LeadChannel, LeadSourceMeta } from '../modules/leads/leads.types';
 import type { MessageMediaKind } from '../modules/messages/messages.types';
 
@@ -47,10 +50,17 @@ interface MetaMessagingEvent {
   referral?:  MetaReferral; // evento de referral (m.me/ad) sin mensaje asociado
 }
 
+// Cambio en la Página (p. ej. envío de un formulario de Lead Ads → field 'leadgen')
+interface MetaWebhookChange {
+  field: string;                       // 'leadgen' | ...
+  value: Record<string, unknown>;
+}
+
 interface MetaWebhookEntry {
   id:         string;
   time?:      number;
   messaging?: MetaMessagingEvent[];
+  changes?:   MetaWebhookChange[];
 }
 
 interface MetaWebhookBody {
@@ -64,7 +74,7 @@ export const metaMessagingWebhook = onRequest(
   {
     region:         'us-central1',
     cors:           false,
-    timeoutSeconds: 30,
+    timeoutSeconds: 60,
     memory:         '512MiB',
     invoker:        'public',
   },
@@ -99,15 +109,23 @@ export const metaMessagingWebhook = onRequest(
       return;
     }
 
-    // Meta espera 200 rápido
-    res.sendStatus(200);
-
     const body = req.body as MetaWebhookBody;
     if (body.object !== 'page' && body.object !== 'instagram') {
       logger.info('[Meta Webhook] Objeto no procesable', { object: body.object });
+      res.sendStatus(200);
       return;
     }
     const channel: LeadChannel = body.object === 'page' ? 'messenger' : 'instagram';
+
+    // IMPORTANTE: procesamos ANTES de responder. En Cloud Functions v2 (Cloud Run)
+    // la CPU se estrangula casi a cero en cuanto se envía la respuesta, así que el
+    // trabajo en segundo plano se arrastra (jobs de ~3s tardaban minutos) y la
+    // instancia puede reciclarse antes de terminar → leads de pauta perdidos sin
+    // dejar ni un log. Al responder al final, el procesamiento corre con CPU plena.
+    // Si algún evento falla devolvemos != 200 para que Meta reintente la entrega:
+    // los ya procesados se saltan por idempotencia y el que falló se recupera
+    // (su marca anti-duplicado se libera en el fallo).
+    let hadError = false;
 
     for (const entry of body.entry ?? []) {
       for (const event of entry.messaging ?? []) {
@@ -115,6 +133,7 @@ export const metaMessagingWebhook = onRequest(
         try {
           await processInboundMessage(channel, event);
         } catch (err) {
+          hadError = true;
           logger.error('[Meta Webhook] Error procesando mensaje', {
             channel,
             msgId: event.message?.mid,
@@ -122,7 +141,23 @@ export const metaMessagingWebhook = onRequest(
           });
         }
       }
+
+      // Pautas de FORMULARIO (Lead Ads): llegan como changes[].field == 'leadgen'.
+      for (const change of entry.changes ?? []) {
+        if (change.field !== 'leadgen') continue;
+        try {
+          await processLeadgenEvent(change.value as unknown as LeadgenValue);
+        } catch (err) {
+          hadError = true;
+          logger.error('[Meta Webhook] Error procesando formulario (leadgen)', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     }
+
+    // 200 = recibido y procesado; 500 = hubo un fallo → Meta reintenta la entrega.
+    res.sendStatus(hadError ? 500 : 200);
   }
 );
 
@@ -153,7 +188,7 @@ function verifySignature(req: Request): boolean {
 // ─── Procesamiento ────────────────────────────────────────────────────────────
 
 async function processInboundMessage(channel: LeadChannel, event: MetaMessagingEvent): Promise<void> {
-  const companyId = env.defaultCompanyId();
+  const companyId = await resolveCompanyIdForChannel(channel === 'messenger' ? 'messenger' : 'instagram', event.recipient.id);
   const senderId   = event.sender.id;
   const msg        = event.message as MetaMessage;
   const msgId      = msg.mid;
@@ -167,6 +202,7 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
       messageId:   msgId,
       from:        senderId,
       processedAt: Timestamp.now(),
+      expireAt:    webhookEventExpireAt(),
       channel,
     });
   } catch {
@@ -174,6 +210,9 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
     return;
   }
 
+  // Evento ya "reclamado". Si algo falla más abajo, liberamos la marca (catch al
+  // final) para que el reintento de Meta pueda reprocesar este mensaje.
+  try {
   let content = msg.text ?? '';
   let mediaUrl:         string | undefined;
   let mediaType:        string | undefined;
@@ -270,6 +309,11 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
   });
 
   logger.info(`[Meta Webhook] Mensaje procesado (${channel})`, { leadId: lead.id, msgId });
+  } catch (err) {
+    // Liberamos la marca anti-duplicado para que el reintento de Meta recupere el mensaje.
+    await idempotencyRef.delete().catch(() => { /* best-effort */ });
+    throw err;
+  }
 }
 
 // ─── Enriquecimiento de perfil (best-effort) ───────────────────────────────────

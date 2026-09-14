@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'icon.svg'],
+      injectRegister: false,
+      includeAssets: ['favicon.svg', 'icon.svg', 'meraki-logo.png'],
       manifest: {
         name:             'Meraki CRM',
         short_name:       'Meraki CRM',
@@ -19,8 +19,11 @@ export default defineConfig({
         orientation:      'portrait',
         start_url:        '/dashboard/inbox',
         icons: [
+          // PNG real (mejor compatibilidad en Android/iOS que un SVG suelto).
+          { src: '/meraki-logo.png', sizes: '320x320', type: 'image/png', purpose: 'any' },
+          { src: '/meraki-logo.png', sizes: '320x320', type: 'image/png', purpose: 'maskable' },
+          // SVG escalable como complemento (Chrome lo usa a cualquier resolución).
           { src: '/icon.svg', sizes: '512x512', type: 'image/svg+xml', purpose: 'any' },
-          { src: '/icon.svg', sizes: '512x512', type: 'image/svg+xml', purpose: 'maskable' },
         ],
       },
       workbox: {

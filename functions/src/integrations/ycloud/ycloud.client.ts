@@ -1,6 +1,9 @@
 import * as https from 'https';
 import { env }    from '../../config/env';
 import { logger } from '../../utils/logger';
+import { getYcloudConfigForCompany } from '../../modules/companies/channelCredentials.repository';
+import { getChannelRoute } from '../../modules/companies/companyRouting';
+import { normalizeBusinessNumber } from '../../modules/whatsapp/inbox';
 
 const YCLOUD_API = 'api.ycloud.com';
 
@@ -63,14 +66,22 @@ export interface YcloudCallResult {
  * Cliente HTTP para la API de ycloud WhatsApp.
  * Docs: https://docs.ycloud.com/reference/whatsapp-messages
  */
+export interface YcloudClientConfig {
+  apiKey: string;
+  from:   string;
+}
+
 export class YcloudClient {
   private readonly apiKey:  string;
   private readonly from:    string;
 
-  constructor() {
-    this.apiKey = env.ycloudApiKey();
-    this.from   = env.ycloudFromNumber();
+  constructor(config?: Partial<YcloudClientConfig>) {
+    this.apiKey = config?.apiKey ?? env.ycloudApiKey();
+    this.from   = config?.from   ?? env.ycloudFromNumber();
   }
+
+  /** Número (+E.164) desde el que envía este cliente. Para etiquetar el mensaje con la línea real usada. */
+  get fromNumber(): string { return this.from; }
 
   private request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const bodyStr = body ? JSON.stringify(body) : undefined;
@@ -108,20 +119,38 @@ export class YcloudClient {
     });
   }
 
+  /**
+   * Construye el destinatario del envío. El destino puede ser un número (E.164) o
+   * un BSUID de WhatsApp (cliente que oculta su número por privacidad de nombre de
+   * usuario). El BSUID tiene forma "CC.alfa" (código de país en letras + punto +
+   * alfanumérico, ej. "CO.2370523146805161") y NUNCA colisiona con un teléfono
+   * (que es solo dígitos). YCloud usa el campo `recipient` para BSUID y `to` para
+   * número. Ver https://docs.ycloud.com/reference/whatsapp_message-send-directly
+   */
+  private destinationField(dest: string): { to: string } | { recipient: string } {
+    const d = dest.trim();
+    if (/^[A-Za-z]{2}\.[A-Za-z0-9]+$/.test(d)) return { recipient: d };
+    return { to: `+${normalizePhone(d)}` };
+  }
+
+  private destinationLabel(dest: { to: string } | { recipient: string }): string {
+    return 'recipient' in dest ? dest.recipient : dest.to;
+  }
+
   // ─── Enviar texto ──────────────────────────────────────────────────────────
 
   async sendText(to: string, body: string): Promise<YcloudSendResult> {
-    const phone = normalizePhone(to);
+    const dest = this.destinationField(to);
     const res = await this.request<{ id: string; status: string }>(
       'POST', '/v2/whatsapp/messages',
       {
         from: this.from,
-        to:   `+${phone}`,
+        ...dest,
         type: 'text',
         text: { body },
       }
     );
-    logger.info('[ycloud] Texto enviado', { to: phone, id: res.id });
+    logger.info('[ycloud] Texto enviado', { to: this.destinationLabel(dest), id: res.id });
     return { id: res.id, status: res.status };
   }
 
@@ -131,20 +160,44 @@ export class YcloudClient {
     to:        string,
     mediaUrl:  string,
     mimeType:  string,
-    caption?:  string
+    caption?:  string,
+    fileName?: string
   ): Promise<YcloudSendResult> {
-    const phone = normalizePhone(to);
+    const dest = this.destinationField(to);
     const type  = mimeToYcloudType(mimeType);
     const res = await this.request<{ id: string; status: string }>(
       'POST', '/v2/whatsapp/messages',
       {
         from: this.from,
-        to:   `+${phone}`,
+        ...dest,
         type,
-        [type]: { link: mediaUrl, ...(caption ? { caption } : {}) },
+        [type]: {
+          link: mediaUrl,
+          ...(caption ? { caption } : {}),
+          // WhatsApp muestra este nombre en el documento; sin él pone uno genérico.
+          ...(type === 'document' && fileName ? { filename: fileName } : {}),
+        },
       }
     );
-    logger.info('[ycloud] Media enviada', { to: phone, type, id: res.id });
+    logger.info('[ycloud] Media enviada', { to: this.destinationLabel(dest), type, id: res.id });
+    return { id: res.id, status: res.status };
+  }
+
+  // ─── Enviar reacción (emoji) a un mensaje del cliente ───────────────────────
+  // `messageId` es el wamid del mensaje al que se reacciona. emoji vacío = quitar.
+
+  async sendReaction(to: string, messageId: string, emoji: string): Promise<YcloudSendResult> {
+    const dest = this.destinationField(to);
+    const res = await this.request<{ id: string; status: string }>(
+      'POST', '/v2/whatsapp/messages',
+      {
+        from: this.from,
+        ...dest,
+        type: 'reaction',
+        reaction: { message_id: messageId, emoji },
+      }
+    );
+    logger.info('[ycloud] Reacción enviada', { to: this.destinationLabel(dest), emoji: emoji || '(quitada)', id: res.id });
     return { id: res.id, status: res.status };
   }
 
@@ -156,12 +209,12 @@ export class YcloudClient {
     languageCode: string,
     components:   unknown[]
   ): Promise<YcloudSendResult> {
-    const phone = normalizePhone(to);
+    const dest = this.destinationField(to);
     const res = await this.request<{ id: string; status: string }>(
       'POST', '/v2/whatsapp/messages',
       {
         from: this.from,
-        to:   `+${phone}`,
+        ...dest,
         type: 'template',
         template: {
           name:       templateName,
@@ -170,7 +223,7 @@ export class YcloudClient {
         },
       }
     );
-    logger.info('[ycloud] Plantilla enviada', { to: phone, templateName, id: res.id });
+    logger.info('[ycloud] Plantilla enviada', { to: this.destinationLabel(dest), templateName, id: res.id });
     return { id: res.id, status: res.status };
   }
 
@@ -279,9 +332,70 @@ function mimeToYcloudType(mime: string): string {
   return 'document';
 }
 
-// Singleton
+// Singleton con la cuenta GLOBAL (variables de entorno). Se usa para envíos que
+// no dependen de una empresa concreta (p. ej. alertas internas de error).
 let _client: YcloudClient | null = null;
 export const getYcloudClient = (): YcloudClient => {
   if (!_client) _client = new YcloudClient();
   return _client;
+};
+
+/**
+ * Cliente YCloud para una EMPRESA concreta: usa su API key + número propios si
+ * los tiene en `channelCredentials/{companyId}`, o cae a la cuenta global.
+ * Es el que deben usar todos los envíos ligados a un lead/empresa para soportar
+ * múltiples cuentas de YCloud (real, demo, etc.) a la vez.
+ */
+export const getYcloudClientForCompany = async (companyId: string): Promise<YcloudClient> => {
+  const cfg = await getYcloudConfigForCompany(companyId);
+  return new YcloudClient({ apiKey: cfg.apiKey, from: cfg.fromNumber });
+};
+
+/**
+ * Cliente YCloud que envía desde el NÚMERO correcto según el inbox del lead.
+ *
+ * Un lead de la línea 317 tiene `inboxId` = número por defecto → sale por el 317
+ * (sin lecturas extra). Un lead de una LÍNEA DE ASESOR en coexistencia tiene
+ * `inboxId` = número personal del asesor → sale por ESE número (misma API key /
+ * mismo WABA, solo cambia el `from`). Esto evita que las plantillas/videos/masivos
+ * de la asesora salgan por el 317 y se crucen las conversaciones.
+ *
+ * Solo se sobre-escribe el `from` si el inbox está registrado como ruta activa de
+ * ESTA empresa; un `inboxId` desconocido cae al número por defecto (nunca se
+ * intenta enviar desde un número no registrado, que YCloud rechazaría).
+ *
+ * PROPIEDAD DE LÍNEA: una línea de COEXISTENCIA es PERSONAL de un asesor. Solo su
+ * dueño puede enviar desde ella. Si `senderAdvisorId` no es el dueño (otro asesor,
+ * admin, o un envío automático sin asesor), se envía por el 317 — así nadie manda
+ * mensajes "desde el WhatsApp de otro".
+ */
+export const getYcloudClientForInbox = async (
+  companyId: string,
+  inboxId?: string | null,
+  senderAdvisorId?: string,
+): Promise<YcloudClient> => {
+  const cfg = await getYcloudConfigForCompany(companyId);
+  let from = cfg.fromNumber;
+
+  const norm        = normalizeBusinessNumber(inboxId);
+  const defaultNorm = normalizeBusinessNumber(cfg.fromNumber);
+  if (norm && norm !== defaultNorm) {
+    const route = await getChannelRoute('ycloud', norm);
+    if (route && route.active !== false && route.companyId === companyId) {
+      if (route.kind === 'advisor_coexistence' && route.advisorId && route.advisorId !== senderAdvisorId) {
+        // Línea personal de OTRO asesor → NO enviar desde su número; usar el 317.
+        logger.warn('[ycloud] inbox es línea personal de otro asesor; se envía por el 317', {
+          companyId, inboxId: norm, owner: route.advisorId, sender: senderAdvisorId ?? '(automático)',
+        });
+      } else {
+        from = norm;
+      }
+    } else {
+      logger.warn('[ycloud] inboxId no registrado para la empresa; se envía por el número por defecto', {
+        companyId, inboxId: norm,
+      });
+    }
+  }
+
+  return new YcloudClient({ apiKey: cfg.apiKey, from });
 };

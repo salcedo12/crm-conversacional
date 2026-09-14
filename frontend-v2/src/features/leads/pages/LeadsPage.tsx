@@ -3,6 +3,7 @@ import { useAuth }         from '@/features/auth/hooks/useAuth';
 import { Spinner }         from '@/shared/components/Spinner';
 import { LeadFilters }     from '../components/LeadFilters';
 import { LeadTable }       from '../components/LeadTable';
+import { LeadCardList }    from '../components/LeadCardList';
 import { LeadDrawer }      from '../components/LeadDrawer';
 import { useLeadsPage, type LeadsFilters } from '../hooks/useLeadsPage';
 import { listAdvisors, type Advisor } from '../services/advisors.service';
@@ -37,7 +38,7 @@ function matchesSmartList(lead: Lead, filters: LeadListFilters): boolean {
 }
 
 export function LeadsPage() {
-  const { companyId, role }  = useAuth();
+  const { companyId, role, user, platformAdmin }  = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,13 +46,18 @@ export function LeadsPage() {
   const [cursorStack, setCursorStack] = useState<(LeadsPageCursor | null)[]>([]);
   const [currentCursor, setCurrentCursor] = useState<LeadsPageCursor | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const isAdmin = platformAdmin || isAdminRole(role);
+  const visibleLeads = useMemo(
+    () => isAdmin ? leads : leads.filter((lead) => lead.assignedTo === user?.uid),
+    [isAdmin, leads, user?.uid]
+  );
 
   const {
     filters,    setFilters,
     sortField,  sortDir,    toggleSort,
     filtered,
     selected,   selectedId, setSelectedId,
-  } = useLeadsPage(leads);
+  } = useLeadsPage(visibleLeads);
 
   const loadLeadsPage = useCallback(async (cursor: LeadsPageCursor | null, reset = false) => {
     if (!companyId) return;
@@ -129,19 +135,19 @@ export function LeadsPage() {
   // Etiquetas únicas presentes en los leads (para el filtro por etiqueta)
   const allTags = useMemo(() => {
     const set = new Set<string>();
-    for (const l of leads) for (const t of l.tags ?? []) if (t.trim()) set.add(t.trim());
+    for (const l of visibleLeads) for (const t of l.tags ?? []) if (t.trim()) set.add(t.trim());
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [leads]);
+  }, [visibleLeads]);
 
   // Números (inboxes) presentes en los leads (para el filtro por número)
-  const inboxes = useMemo(() => collectInboxes(leads), [leads]);
+  const inboxes = useMemo(() => collectInboxes(visibleLeads), [visibleLeads]);
 
   const metrics = useMemo(() => [
-    { label: 'Total', value: leads.length, icon: UsersRound, tone: 'text-zinc-300' },
-    { label: 'Nuevos', value: leads.filter((lead) => lead.status === 'new').length, icon: UserRoundCheck, tone: 'text-sky-400' },
-    { label: 'Agendados', value: leads.filter((lead) => lead.status === 'scheduled').length, icon: CalendarCheck, tone: 'text-amber-400' },
-    { label: 'Con IA activa', value: leads.filter((lead) => lead.aiEnabled).length, icon: Bot, tone: 'text-violet-400' },
-  ], [leads]);
+    { label: 'Total', value: visibleLeads.length, icon: UsersRound, tone: 'text-zinc-300' },
+    { label: 'Nuevos', value: visibleLeads.filter((lead) => lead.status === 'new').length, icon: UserRoundCheck, tone: 'text-sky-400' },
+    { label: 'Agendados', value: visibleLeads.filter((lead) => lead.status === 'scheduled').length, icon: CalendarCheck, tone: 'text-amber-400' },
+    { label: 'Con IA activa', value: visibleLeads.filter((lead) => lead.aiEnabled).length, icon: Bot, tone: 'text-violet-400' },
+  ], [visibleLeads]);
 
   const currentListFilters: LeadListFilters = {
     status: filters.status,
@@ -221,27 +227,28 @@ export function LeadsPage() {
         <LeadListsBar
           lists={lists}
           selectedId={selectedListId}
-          total={leads.length}
+          total={visibleLeads.length}
           countForList={(list) => list.kind === 'import'
-            ? leads.filter((lead) => lead.listIds?.includes(list.id)).length
-            : leads.filter((lead) => list.filters ? matchesSmartList(lead, list.filters) : true).length}
+            ? visibleLeads.filter((lead) => lead.listIds?.includes(list.id)).length
+            : visibleLeads.filter((lead) => list.filters ? matchesSmartList(lead, list.filters) : true).length}
           onSelect={selectList}
           onImport={() => setShowImport(true)}
           onHistory={() => setShowImportHistory(true)}
           onCreate={() => setShowSmartList(true)}
           onDelete={removeList}
-          canImport={isAdminRole(role)}
+          canImport={isAdmin}
         />
       )}
 
       {/* Filters */}
       <LeadFilters
         filters={filters}
-        total={leads.length}
+        total={visibleLeads.length}
         filtered={filtered.length}
         advisors={advisors}
         allTags={allTags}
         inboxes={inboxes}
+        canFilterByAdvisor={isAdmin}
         onChange={(f) => setFilters((prev) => ({ ...prev, ...f }))}
       />
 
@@ -256,15 +263,26 @@ export function LeadsPage() {
         </div>
       ) : (
         <>
-          <LeadTable
-            leads={filtered}
-            selectedId={selectedId}
-            sortField={sortField}
-            sortDir={sortDir}
-            onSort={toggleSort}
-            onSelect={setSelectedId}
-            advisors={advisors}
-          />
+          {/* Escritorio: tabla completa. Móvil: tarjetas apiladas (sin scroll horizontal). */}
+          <div className="hidden flex-1 overflow-hidden md:flex">
+            <LeadTable
+              leads={filtered}
+              selectedId={selectedId}
+              sortField={sortField}
+              sortDir={sortDir}
+              onSort={toggleSort}
+              onSelect={setSelectedId}
+              advisors={advisors}
+            />
+          </div>
+          <div className="flex flex-1 overflow-hidden md:hidden">
+            <LeadCardList
+              leads={filtered}
+              selectedId={selectedId}
+              advisors={advisors}
+              onSelect={setSelectedId}
+            />
+          </div>
           <div className="flex items-center justify-between border-t border-zinc-800 px-5 py-3 text-xs text-zinc-500">
             <span>Mostrando {filtered.length} leads de esta pagina</span>
             <div className="flex gap-2">

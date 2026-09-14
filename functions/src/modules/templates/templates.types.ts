@@ -38,6 +38,17 @@ export interface WhatsAppTemplate {
   variables:   TemplateVariable[];
   /** SID del Content API de Twilio (si fue sincronizado desde Meta/Twilio) */
   twilioContentSid?: string;
+  /**
+   * WABA al que pertenece la plantilla. Las plantillas son POR WABA: la línea del
+   * 317 y la línea de coexistencia de un asesor están en WABAs distintos, y cada
+   * una solo puede enviar SUS plantillas. Ver [[companyRouting]].
+   */
+  wabaId?:     string;
+  /**
+   * Número (inbox, +E.164) dueño de ese WABA. Coincide con `lead.inboxId`, así el
+   * selector de plantillas muestra a cada línea las suyas.
+   */
+  lineNumber?: string;
   status:      TemplateStatus;
   createdAt:   Timestamp;
   updatedAt?:  Timestamp;

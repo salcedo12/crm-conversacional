@@ -1,4 +1,5 @@
 import { reportError } from '../lib/sentry';
+import { enqueueErrorAlert } from '../modules/monitoring/errorAlertQueue';
 
 /** Campos que nunca deben aparecer en logs */
 const SENSITIVE_KEYS = ['authToken', 'apiKey', 'token', 'password', 'secret', 'authorization'];
@@ -29,7 +30,8 @@ function emit(
 
   if (level === 'error') {
     console.error(entry);
-    reportError(message, safeContext); // → Sentry si está configurado
+    reportError(message, safeContext);       // → Sentry si está configurado
+    enqueueErrorAlert(message, safeContext);  // → WhatsApp con IA (dedup + tope)
   } else if (level === 'warn') console.warn(entry);
   else console.log(entry);
 }

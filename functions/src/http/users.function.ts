@@ -3,14 +3,14 @@ import { z }                  from 'zod';
 import { getAuth }            from 'firebase-admin/auth';
 import { Timestamp }          from 'firebase-admin/firestore';
 import { logger }             from '../utils/logger';
+import { env }                from '../config/env';
 import { db }                 from '../lib/admin';
 import { leadsRepository }     from '../modules/leads/leads.repository';
 import { googleConnectionRepository } from '../modules/calendar/googleConnection.repository';
 import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/authContext';
+import { normalizePhone } from '../utils/phone';
 import { sendUserInviteEmail } from '../utils/inviteEmail';
-
-/** Roles que pueden recibir leads asignados (todos menos viewer). */
-const ASSIGNABLE_ROLES = ['admin', 'manager', 'advisor'];
+import { sendLeadReassignedPush } from '../modules/messages/pushNotifications.service';
 
 const usersCol = (companyId: string) =>
   db.collection('companies').doc(companyId).collection('users');
@@ -23,6 +23,8 @@ export interface AdvisorDTO {
   role:            string;
   active:          boolean;
   googleConnected: boolean;
+  /** WhatsApp E.164 para avisos automáticos (ej. aviso de cita). '' si no se definió. */
+  phone?:          string;
 }
 
 export interface CompanyUserDTO extends AdvisorDTO {
@@ -38,6 +40,7 @@ function serializeUser(id: string, data: FirebaseFirestore.DocumentData, googleC
     role: data.role ?? 'advisor',
     active: data.active !== false,
     googleConnected,
+    phone: data.phone ?? '',
     invitedAt: data.invitedAt?.toMillis?.() ?? null,
     updatedAt: data.updatedAt?.toMillis?.() ?? null,
   };
@@ -106,7 +109,10 @@ export const createCompanyUser = onCall(
     }
 
     try {
-      inviteLink = await auth.generatePasswordResetLink(data.email);
+      inviteLink = await auth.generatePasswordResetLink(data.email, {
+        url: `${env.appBaseUrl()}/login`,
+        handleCodeInApp: false,
+      });
     } catch (err) {
       logger.warn('[Users] No se pudo generar link de invitacion', {
         email: data.email,
@@ -165,6 +171,8 @@ export const updateCompanyUser = onCall(
       displayName: z.string().trim().min(1).max(120),
       role: RoleSchema,
       active: z.boolean(),
+      // WhatsApp para avisos (ej. aviso de cita). Opcional; vacío = limpiar.
+      phone: z.string().trim().max(25).optional(),
     }).parse(request.data);
     assertCompany(ctx, data.companyId);
 
@@ -176,6 +184,8 @@ export const updateCompanyUser = onCall(
       displayName: data.displayName,
       role: data.role,
       active: data.active,
+      // Solo si viene el campo: número normalizado a E.164, o '' para limpiarlo.
+      ...(data.phone !== undefined ? { phone: data.phone ? normalizePhone(data.phone) : '' } : {}),
       updatedAt: Timestamp.now(),
     }, { merge: true });
 
@@ -197,7 +207,10 @@ export const updateCompanyUser = onCall(
 );
 
 // ─── listAdvisors ──────────────────────────────────────────────────────────────
-// Lista los asesores asignables de la empresa (para el selector de reasignación).
+// Lista los usuarios activos de la empresa para el selector de reasignación manual.
+// Devuelve TODOS los roles activos (admin, manager, advisor, viewer): un admin puede
+// reasignar un lead a quien quiera. La asignación AUTOMÁTICA de leads nuevos es aparte
+// (pickAdvisorForLead) y sigue restringida a asesores.
 
 export const listAdvisors = onCall(
   { region: 'us-central1', timeoutSeconds: 30 },
@@ -210,7 +223,7 @@ export const listAdvisors = onCall(
     const snap = await usersCol(companyId).get();
     const rows = snap.docs
       .map((d) => ({ id: d.id, data: d.data() as UserDoc }))
-      .filter((u) => ASSIGNABLE_ROLES.includes(u.data.role ?? '') && u.data.active !== false);
+      .filter((u) => u.data.active !== false);
 
     const advisors: AdvisorDTO[] = await Promise.all(
       rows.map(async ({ id, data }) => ({
@@ -247,19 +260,74 @@ export const reassignLead = onCall(
     const lead = await leadsRepository.findById(companyId, leadId);
     if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
 
-    // Validar que el asesor destino exista y sea asignable
+    // Validar que el usuario destino exista y esté activo. Se permite CUALQUIER rol
+    // (admin/manager/advisor/viewer): la reasignación manual la hace un admin y puede
+    // dirigirse a quien quiera. (La asignación automática de leads nuevos es aparte y
+    // sigue restringida a asesores.)
     if (advisorId) {
       const userSnap = await usersCol(companyId).doc(advisorId).get();
       const data = userSnap.data();
-      if (!userSnap.exists || !data || !ASSIGNABLE_ROLES.includes(data.role) || data.active === false) {
-        throw new HttpsError('failed-precondition', 'El asesor seleccionado no es válido.');
+      if (!userSnap.exists || !data || data.active === false) {
+        throw new HttpsError('failed-precondition', 'El usuario seleccionado no es válido.');
       }
     }
 
     const update: Record<string, unknown> = { assignedTo: advisorId ?? null };
     await leadsRepository.update(companyId, leadId, update);
-    logger.info('[ReassignLead] Lead reasignado', { companyId, leadId, advisorId, by: ctx.uid });
+
+    if (advisorId && advisorId !== lead.assignedTo && advisorId !== ctx.uid) {
+      await sendLeadReassignedPush(companyId, lead, advisorId, ctx.uid).catch((err) => {
+        logger.error('[ReassignLead] Error al enviar notificacion de reasignacion', { err });
+      });
+    }
+
+    logger.info('[ReassignLead] Lead reasignado', {
+      companyId,
+      leadId,
+      advisorId,
+      by: ctx.uid,
+    });
 
     return { leadId, advisorId };
+  }
+);
+
+// ─── setLeadAssignmentLock ───────────────────────────────────────────────────
+// Fija (o libera) el asesor de un lead. Con locked:true, el cron de reasignacion
+// automatica por falta de primer contacto NUNCA lo tocará (queda "clavado" al
+// asesor actual). Es lo que usa el candado del drawer del lead.
+
+export const setLeadAssignmentLock = onCall(
+  { region: 'us-central1', timeoutSeconds: 30 },
+  async (request) => {
+    const ctx = requireAuth(request);
+    requireRole(ctx, ADMIN_ROLES);
+
+    const { companyId, leadId, locked } = z.object({
+      companyId: z.string().min(1),
+      leadId:    z.string().min(1),
+      locked:    z.boolean(),
+    }).parse(request.data);
+    assertCompany(ctx, companyId);
+
+    const lead = await leadsRepository.findById(companyId, leadId);
+    if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
+
+    const update: Record<string, unknown> = { assignmentLocked: locked };
+    // Al fijar, además apagamos pendingFirstContact para que el lead salga de la
+    // query del cron de inmediato (defensa + eficiencia). Al liberar solo quitamos
+    // el candado; no re-armamos la reasignacion.
+    if (locked) update.pendingFirstContact = false;
+
+    await leadsRepository.update(companyId, leadId, update);
+
+    logger.info('[SetLeadAssignmentLock] Candado de asignacion actualizado', {
+      companyId,
+      leadId,
+      locked,
+      by: ctx.uid,
+    });
+
+    return { leadId, locked };
   }
 );

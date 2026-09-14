@@ -8,6 +8,20 @@ export type LeadTemperature = 'hot' | 'warm' | 'cold';
  * el dashboard (torta "por qué se pierden"). Para leads perdidos es el motivo
  * de pérdida; para leads abiertos, el principal riesgo actual.
  */
+/**
+ * Estado comercial que la IA puede **sugerir** para el lead a partir de la
+ * conversación. Nunca sugiere `closed` (Vendido) — eso requiere confirmación
+ * humana (contrato/pago). `ninguno` = el estado actual ya es correcto o no hay
+ * evidencia suficiente para moverlo. La sugerencia NO se aplica sola: el asesor
+ * la confirma con un clic en la ficha del lead.
+ */
+export type LeadSuggestedStatus =
+  | 'active'      // Activo: conversación en curso, el cliente interactúa
+  | 'qualified'   // Calificado: interés real + encaja (presupuesto/perfil)
+  | 'scheduled'   // Agendado: hay una cita/visita concretada con fecha
+  | 'lost'        // Perdido: rechazó, no califica o dejó de responder
+  | 'ninguno';    // Sin cambio sugerido
+
 export type LeadLossCategory =
   | 'precio'         // Precio / presupuesto fuera de alcance
   | 'ubicacion'      // Ubicación / zona no encaja
@@ -51,6 +65,13 @@ export interface LeadAnalysis {
   lossCategory:     LeadLossCategory;
   /** Factores que sustentan el puntaje. */
   scoreReasons:     string[];
+  /**
+   * Estado comercial que la IA sugiere según la conversación (`ninguno` si no
+   * propone cambio). Opcional: análisis previos a esta función no lo traen.
+   */
+  suggestedStatus?:       LeadSuggestedStatus;
+  /** Por qué la IA sugiere ese estado (vacío si `suggestedStatus` es `ninguno`). */
+  suggestedStatusReason?: string;
 
   // ── Metadatos (los añade el callable, no la IA) ────────────────────────────
   /** Cuántos mensajes se analizaron. */

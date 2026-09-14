@@ -1,4 +1,4 @@
-import { Globe, Megaphone, MessageCircle, UserRound } from 'lucide-react';
+import { Globe, Megaphone, MessageCircle, UserRound, UserCog } from 'lucide-react';
 import type { LeadSource } from '@/features/inbox/types';
 
 interface LeadSourceBadgeProps {
@@ -9,10 +9,11 @@ interface LeadSourceBadgeProps {
 const config: Record<LeadSource, { label: string; classes: string; icon: typeof Megaphone }> = {
   whatsapp:  { label: 'WhatsApp',  classes: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/20', icon: MessageCircle },
   meta_ads:  { label: 'Meta Ads',  classes: 'bg-blue-500/20    text-blue-300    border-blue-500/20',    icon: Megaphone     },
-  web:       { label: 'Web',       classes: 'bg-sky-500/20     text-sky-300     border-sky-500/20',     icon: Globe         },
+  web:       { label: 'Página web', classes: 'bg-sky-500/20     text-sky-300     border-sky-500/20',     icon: Globe         },
   manual:    { label: 'Manual',    classes: 'bg-zinc-500/20    text-zinc-400    border-zinc-600/20',    icon: UserRound     },
   facebook:  { label: 'Facebook',  classes: 'bg-blue-500/20    text-blue-300    border-blue-500/20',    icon: Megaphone     },
   instagram: { label: 'Instagram', classes: 'bg-pink-500/20    text-pink-300    border-pink-500/20',    icon: Megaphone     },
+  advisor_whatsapp: { label: 'WhatsApp asesor', classes: 'bg-amber-500/20 text-amber-300 border-amber-500/20', icon: UserCog },
 };
 
 export function LeadSourceBadge({ source, size = 'sm' }: LeadSourceBadgeProps) {

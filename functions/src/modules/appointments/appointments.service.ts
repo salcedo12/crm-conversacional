@@ -10,6 +10,7 @@ import { assertAppointmentAvailability } from './availability.service';
 import { buildEventTitle, buildEventDescription } from './appointmentMessages';
 import { getAiConfig } from '../ai/aiConfig.repository';
 import { postLeadSmartHomeBitacora } from '../smarthome/smarthomeEvents.service';
+import { notifyAdvisorAppointmentBooked } from './advisorNotifier.service';
 import type { Appointment } from './appointments.types';
 
 export interface BookInput {
@@ -124,10 +125,94 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
     });
   }
 
+  // Avisar al asesor asignado por WhatsApp (best-effort, no bloquea la cita).
+  await notifyAdvisorAppointmentBooked({
+    companyId, advisorId, leadName: lead.name, leadPhone: lead.phone, startTime,
+  });
+
   logger.info('[Appointments] Cita agendada', {
     companyId, leadId, appointmentId: appointment.id, meet: googleMeetLink, tz: env.calendarTimeZone(),
   });
   return appointment;
+}
+
+/**
+ * Mueve las citas futuras activas del lead al calendario del nuevo asesor.
+ * Primero crea el evento nuevo y solo despues elimina el anterior.
+ */
+export async function transferFutureAppointmentsToAdvisor(
+  companyId: string,
+  leadId: string,
+  newAdvisorId: string
+): Promise<{ transferred: number; failed: number }> {
+  const appointments = (await appointmentsRepository.findByLead(companyId, leadId))
+    .filter((appointment) =>
+      appointment.status === 'scheduled'
+      && appointment.endTime.toMillis() > Date.now()
+      && appointment.advisorId !== newAdvisorId
+    );
+
+  if (appointments.length === 0) return { transferred: 0, failed: 0 };
+
+  const newConnection = await googleConnectionRepository.getActive(companyId, newAdvisorId);
+  if (!newConnection) {
+    logger.warn('[Appointments] Nuevo asesor sin Google; citas no trasladadas', {
+      companyId,
+      leadId,
+      newAdvisorId,
+      appointments: appointments.length,
+    });
+    return { transferred: 0, failed: appointments.length };
+  }
+
+  let transferred = 0;
+  let failed = 0;
+
+  for (const appointment of appointments) {
+    try {
+      const newEvent = await createMeetEvent(newConnection.refreshToken, {
+        title: appointment.title,
+        description: appointment.description ?? '',
+        attendees: [newConnection.email],
+        start: appointment.startTime.toDate(),
+        end: appointment.endTime.toDate(),
+      });
+
+      if (!newEvent.eventId) throw new Error('Google no devolvio el ID del evento nuevo.');
+
+      await appointmentsRepository.reassignCalendarOwner(companyId, appointment.id, {
+        advisorId: newAdvisorId,
+        googleEventId: newEvent.eventId,
+        googleMeetLink: newEvent.meetLink ?? undefined,
+      });
+
+      if (appointment.googleEventId && appointment.advisorId) {
+        const oldConnection = await googleConnectionRepository.getActive(companyId, appointment.advisorId);
+        if (oldConnection) {
+          await deleteEvent(oldConnection.refreshToken, appointment.googleEventId).catch((err) => {
+            logger.warn('[Appointments] Evento anterior no eliminado despues del traslado', {
+              companyId,
+              appointmentId: appointment.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+      }
+
+      transferred++;
+    } catch (err) {
+      failed++;
+      logger.error('[Appointments] Error trasladando cita al nuevo asesor', {
+        companyId,
+        leadId,
+        appointmentId: appointment.id,
+        newAdvisorId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { transferred, failed };
 }
 
 // ─── Cancelar / reagendar ───────────────────────────────────────────────────

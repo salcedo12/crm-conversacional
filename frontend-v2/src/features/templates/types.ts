@@ -31,6 +31,10 @@ export interface WhatsAppTemplate {
   buttons?:        TemplateButton[];
   variables:       TemplateVariable[];
   twilioContentSid?: string;
+  /** WABA dueño de la plantilla (las plantillas son por WABA). */
+  wabaId?:         string;
+  /** Número/inbox dueño de ese WABA; coincide con lead.inboxId para filtrar. */
+  lineNumber?:     string;
   status:          TemplateStatus;
   createdAt:       { toMillis(): number } | null;
   updatedAt?:      { toMillis(): number } | null;

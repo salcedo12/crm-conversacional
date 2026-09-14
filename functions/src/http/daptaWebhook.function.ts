@@ -6,8 +6,10 @@ import { db }         from '../lib/admin';
 import { toNormalizedPhone } from '../utils/phone';
 import { leadsRepository }   from '../modules/leads/leads.repository';
 import { callsRepository }   from '../modules/calls/calls.repository';
+import { resolveCompanyIdForChannel } from '../modules/companies/companyRouting';
 import { postLeadSmartHomeBitacora } from '../modules/smarthome/smarthomeEvents.service';
-import type { CallStatus }   from '../modules/calls/calls.types';
+import { handleAutoCallResult } from '../modules/autocall/autoCall.service';
+import type { Call, CallStatus }   from '../modules/calls/calls.types';
 
 /**
  * IPs públicas desde las que Dapta envía webhooks (docs.dapta.ai).
@@ -154,12 +156,26 @@ export const daptaWebhook = onRequest(
 );
 
 async function processDaptaCall(body: Json): Promise<void> {
-  const companyId = env.defaultCompanyId();
-
   // Algunos webhooks envuelven el contenido en data/payload/call/event.
   const root: Json = (
     (body.data ?? body.payload ?? body.call ?? body.event ?? body) as Json
   );
+
+  const companyIdHint = asString(pick(root, [
+    'companyId', 'company_id', 'metadata.companyId', 'variables.companyId',
+    'dynamic_variables.companyId', 'call.dynamic_variables.companyId',
+    'dynamic_variables.company_id', 'variables.company_id',
+  ])) ?? asString(pick(body, [
+    'companyId', 'company_id', 'data.companyId', 'payload.companyId',
+    'call.dynamic_variables.companyId', 'data.call.dynamic_variables.companyId',
+  ]));
+
+  const daptaRouteIdentifier = asString(pick(root, [
+    'agentId', 'agent_id', 'flowId', 'flow_id', 'workspaceId', 'workspace_id',
+    'agent.id', 'flow.id',
+  ]));
+
+  const companyId = companyIdHint || await resolveCompanyIdForChannel('dapta', daptaRouteIdentifier);
 
   // ── Teléfono del contacto ────────────────────────────────────────────────
   const rawPhone = asString(pick(root, [
@@ -291,5 +307,16 @@ async function processDaptaCall(body: Json): Promise<void> {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // Si la llamada la disparó el modo automático, decidir el siguiente paso
+  // (reintento si no contestó, seguimiento si quedó interesado sin cita).
+  if (existing?.auto) {
+    const finishedCall = { ...existing, ...callData, id: existing.id } as Call;
+    await handleAutoCallResult(companyId, finishedCall).catch((err) => {
+      logger.warn('[Dapta Webhook] handleAutoCallResult falló', {
+        leadId: lead.id, error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 }

@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, CalendarDays, CalendarPlus, Clock3, MessageCircle, Pause, Phone, PhoneCall, PhoneOutgoing, Play, Save, Sparkles, StickyNote, Tags, UserRound, X } from 'lucide-react';
+import { Bot, CalendarCheck, CalendarDays, CalendarPlus, Check, Clock3, FileSearch, Loader2, Lock, LockOpen, MessageCircle, Pause, Phone, PhoneCall, PhoneOutgoing, Play, Save, Sparkles, StickyNote, Tags, UserRound, X } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { LeadStatusBadge } from './LeadStatusBadge';
 import { LeadSourceBadge } from './LeadSourceBadge';
 import { AiStatusBadge } from '@/features/inbox/components/AiStatusBadge';
 import { CallHistory } from './CallHistory';
 import { LeadAnalysisCard } from './LeadAnalysisCard';
+import { LeadDossierCard } from './LeadDossierCard';
 import { LeadNotesPanel } from './LeadNotesPanel';
+import { LeadAppointmentsPanel } from './LeadAppointmentsPanel';
+import { SmartHomeActionsPanel } from './SmartHomeActionsPanel';
 import { BookAppointmentModal } from './BookAppointmentModal';
 import { formatMessageTime } from '@/shared/utils/date';
 import { formatPhone } from '@/shared/utils/formatPhone';
 import { updateLead } from '../services/leads.service';
-import { reassignLead, type Advisor } from '../services/advisors.service';
+import { reassignLead, setLeadAssignmentLock, type Advisor } from '../services/advisors.service';
 import { startAiCall, requestCallPermission } from '../services/calls.service';
 import { useCallSession } from '@/features/calls/providers/CallSessionProvider';
 import { listContactFields, type ContactField } from '../services/contactFields.service';
@@ -36,24 +39,30 @@ const STATUS_OPTIONS: { value: LeadStatus; label: string }[] = [
   { value: 'qualified', label: 'Calificado' },
   { value: 'scheduled', label: 'Agendado' },
   { value: 'lost', label: 'Perdido' },
-  { value: 'closed', label: 'Cerrado' },
+  { value: 'closed', label: 'Vendido' },
 ];
 
 const fieldClass = 'h-10 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-violet-500/60';
 
 export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }: LeadDrawerProps) {
   const navigate = useNavigate();
-  const { role } = useAuth();
-  const canReassign = isAdminRole(role);
+  const { role, platformAdmin } = useAuth();
+  const canReassign = platformAdmin || isAdminRole(role);
 
   const [name, setName] = useState(lead.name ?? '');
+  const [phone, setPhone] = useState(lead.phone ?? '');
   const [status, setStatus] = useState<LeadStatus>(lead.status);
   const [tagInput, setTagInput] = useState(lead.tags?.join(', ') ?? '');
   const [metadata, setMetadata] = useState<Record<string, string>>(lead.metadata ?? {});
   const [assignedTo, setAssignedTo] = useState(lead.assignedTo ?? '');
+  const [locked, setLocked] = useState(!!lead.assignmentLocked);
+  const [lockBusy, setLockBusy] = useState(false);
   const [customFields, setCustomFields] = useState<ContactField[]>([]);
   const [showAppointment, setShowAppointment] = useState(false);
+  const [apptRefresh, setApptRefresh] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [applyingSuggestion, setApplyingSuggestion] = useState(false);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const [reassigning, setReassigning] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [calling, setCalling] = useState(false);
@@ -71,10 +80,13 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
 
   useEffect(() => {
     setName(lead.name ?? '');
+    setPhone(lead.phone ?? '');
     setStatus(lead.status);
     setTagInput(lead.tags?.join(', ') ?? '');
     setMetadata(lead.metadata ?? {});
     setAssignedTo(lead.assignedTo ?? '');
+    setLocked(!!lead.assignmentLocked);
+    setSuggestionDismissed(false);
     setError(null);
     setSaved(false);
   }, [lead.id]);
@@ -98,7 +110,11 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
   const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const assignedAdvisor = advisors.find((advisor) => advisor.id === (assignedTo || lead.assignedTo));
   const takeoverAdvisor = advisors.find((advisor) => advisor.id === lead.takeoverBy);
+  const smartHomeCreated = !!lead.smartHomeCustomerId;
+  const smartHomeDuplicate = lead.smartHomeSyncError === 'smarthome-duplicado-requiere-revision';
+  const smartHomeOwner = lead.smartHomeDuplicateMatches?.[0]?.ownerName ?? lead.smartHomeDuplicateMatches?.[0]?.ownerId;
   const isDirty = name.trim() !== (lead.name ?? '')
+    || (canReassign && phone.trim() !== (lead.phone ?? ''))
     || status !== lead.status
     || tagInput.trim() !== (lead.tags?.join(', ') ?? '')
     || JSON.stringify(metadata) !== JSON.stringify(lead.metadata ?? {});
@@ -118,14 +134,49 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
     setSaving(true);
     setError(null);
     try {
-      await updateLead({ companyId, leadId: lead.id, name: name.trim() || undefined, status, tags: currentTags, metadata });
+      await updateLead({
+        companyId,
+        leadId: lead.id,
+        name: name.trim() || undefined,
+        ...(canReassign ? { phone: phone.trim() } : {}),
+        status,
+        tags: currentTags,
+        metadata,
+      });
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (saveError) {
       console.error('[LeadDrawer] save error:', saveError);
-      setError('No se pudieron guardar los cambios.');
+      const message = saveError instanceof Error ? saveError.message : '';
+      setError(message || 'No se pudieron guardar los cambios.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Estado sugerido por la IA (radiografía nocturna). Se muestra solo si es un
+  // cambio real respecto al estado actualmente seleccionado y el asesor no lo descartó.
+  const suggested = lead.aiAnalysis?.suggestedStatus;
+  const suggestion =
+    suggested && suggested !== 'ninguno' && suggested !== status && !suggestionDismissed
+      ? { value: suggested as LeadStatus, label: STATUS_OPTIONS.find((o) => o.value === suggested)?.label ?? suggested }
+      : null;
+
+  const handleApplySuggestion = async () => {
+    if (!suggestion || applyingSuggestion) return;
+    const previous = status;
+    setStatus(suggestion.value);
+    setApplyingSuggestion(true);
+    setError(null);
+    try {
+      await updateLead({ companyId, leadId: lead.id, status: suggestion.value });
+      setSuggestionDismissed(true);
+    } catch (applyError) {
+      console.error('[LeadDrawer] apply suggestion error:', applyError);
+      setStatus(previous);
+      setError('No se pudo aplicar el estado sugerido.');
+    } finally {
+      setApplyingSuggestion(false);
     }
   };
 
@@ -142,6 +193,23 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
       setError('No se pudo cambiar el asesor.');
     } finally {
       setReassigning(false);
+    }
+  };
+
+  const handleToggleLock = async () => {
+    if (lockBusy) return;
+    const next = !locked;
+    setLocked(next);
+    setLockBusy(true);
+    setError(null);
+    try {
+      await setLeadAssignmentLock(companyId, lead.id, next);
+    } catch (lockError) {
+      console.error('[LeadDrawer] lock error:', lockError);
+      setLocked(!next);
+      setError('No se pudo cambiar el candado del asesor.');
+    } finally {
+      setLockBusy(false);
     }
   };
 
@@ -203,14 +271,14 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end" onClick={onClose}>
+    <div className="fixed inset-0 z-[110] flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/55 backdrop-blur-[1px]" />
 
       <aside
-        className="relative z-50 flex h-full w-full max-w-[420px] flex-col border-l border-zinc-800 bg-zinc-900 shadow-2xl"
+        className="relative z-[111] flex h-dvh w-full max-w-[420px] flex-col border-l border-zinc-800 bg-zinc-900 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="border-b border-zinc-800 px-5 py-4">
+        <header className="border-b border-zinc-800 px-4 py-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-5 sm:py-4">
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-violet-500/25 bg-violet-500/10 text-sm font-semibold text-violet-200">
               {initials || <UserRound size={18} />}
@@ -297,9 +365,59 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
             {lead.takeoverBy && (
               <p className="mt-3 text-[11px] text-zinc-500">Control manual: <span className="text-zinc-300">{takeoverAdvisor?.displayName ?? lead.takeoverBy}</span></p>
             )}
-            {lead.sourceMeta?.headline && (
-              <p className="mt-3 text-[11px] text-zinc-500">Anuncio: <span className="text-zinc-300">{lead.sourceMeta.headline}</span></p>
+            {canReassign && (smartHomeCreated || smartHomeDuplicate) && (
+              <div className={`mt-3 rounded-md border px-3 py-2 text-[11px] ${smartHomeCreated ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'}`}>
+                {smartHomeCreated ? (
+                  <p>SmartHome: creado{lead.smartHomeCustomerId && lead.smartHomeCustomerId !== 'ok' ? ` (${lead.smartHomeCustomerId})` : ''}.</p>
+                ) : (
+                  <p>SmartHome: ya existe{smartHomeOwner ? ` con ${smartHomeOwner}` : ''}. No se puede crear de nuevo.</p>
+                )}
+              </div>
             )}
+            {(() => {
+              const m = lead.metadata ?? {};
+              const rows: { label: string; value?: string }[] = [
+                { label: 'Campaña',   value: m.metaCampaignName },
+                { label: 'Conjunto',  value: m.metaAdsetName },
+                { label: 'Anuncio',   value: m.metaAdName || lead.sourceMeta?.headline },
+                { label: 'Formulario', value: m.metaFormName },
+              ].filter((r) => r.value);
+              if (rows.length === 0) return null;
+              return (
+                <div className="mt-3 rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2">
+                  <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-blue-300/80">Origen de la pauta</p>
+                  <div className="space-y-0.5">
+                    {rows.map((r) => (
+                      <p key={r.label} className="text-[11px] text-zinc-500">
+                        {r.label}: <span className="text-zinc-300">{r.value}</span>
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+            {(() => {
+              const m = lead.metadata ?? {};
+              if (!m.webCameFrom && !m.webUtmCampaign && !m.webFbclid) return null;
+              const rows: { label: string; value?: string }[] = [
+                { label: 'Vino de',  value: m.webCameFrom || (m.webFbclid ? 'Meta (Facebook/Instagram)' : m.webUtmSource) },
+                { label: 'Campaña',  value: m.webUtmCampaign },
+                { label: 'Anuncio',  value: m.webUtmContent },
+              ].filter((r) => r.value);
+              if (rows.length === 0) return null;
+              return (
+                <div className="mt-3 rounded-md border border-sky-500/20 bg-sky-500/5 px-3 py-2">
+                  <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-sky-300/80">Origen del tráfico</p>
+                  <div className="space-y-0.5">
+                    {rows.map((r) => (
+                      <p key={r.label} className="text-[11px] text-zinc-500">
+                        {r.label}: <span className="text-zinc-300">{r.value}</span>
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </section>
 
           <section className="space-y-4 px-5 py-4">
@@ -309,11 +427,54 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
               <input value={name} onChange={(event) => setName(event.target.value)} placeholder={formatPhone(lead.phone)} className={fieldClass} />
             </div>
 
+            {canReassign && (
+              <div>
+                <label className="mb-1.5 block text-xs text-zinc-400">Teléfono</label>
+                <input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="+573001234567"
+                  inputMode="tel"
+                  className={fieldClass}
+                />
+              </div>
+            )}
+
             <div>
               <label className="mb-1.5 block text-xs text-zinc-400">Estado comercial</label>
               <select value={status} onChange={(event) => setStatus(event.target.value as LeadStatus)} className={fieldClass}>
                 {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
+              {suggestion && (
+                <div className="mt-2 rounded-md border border-violet-500/30 bg-violet-500/[0.07] px-3 py-2.5">
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-violet-200">
+                    <Sparkles size={12} className="shrink-0" />
+                    La IA sugiere: <span className="font-semibold">{suggestion.label}</span>
+                  </p>
+                  {lead.aiAnalysis?.suggestedStatusReason && (
+                    <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">{lead.aiAnalysis.suggestedStatusReason}</p>
+                  )}
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleApplySuggestion}
+                      disabled={applyingSuggestion}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/15 px-2.5 py-1 text-[11px] font-medium text-violet-200 transition-colors hover:bg-violet-500/25 disabled:opacity-50"
+                    >
+                      {applyingSuggestion ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                      Aplicar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSuggestionDismissed(true)}
+                      disabled={applyingSuggestion}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-50"
+                    >
+                      Ignorar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {canReassign && (
@@ -324,6 +485,27 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
                   {advisors.map((advisor) => <option key={advisor.id} value={advisor.id}>{advisor.displayName}{advisor.googleConnected ? ' - Calendar' : ''}</option>)}
                 </select>
                 {reassigning && <p className="mt-1 text-[10px] text-zinc-500">Actualizando asignación...</p>}
+
+                <button
+                  type="button"
+                  onClick={handleToggleLock}
+                  disabled={lockBusy}
+                  className={`mt-2 flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-xs transition-colors disabled:opacity-50 ${
+                    locked
+                      ? 'border-amber-500/50 bg-amber-500/10 text-amber-300 hover:border-amber-500/70'
+                      : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
+                  }`}
+                >
+                  {locked ? <Lock size={14} className="shrink-0" /> : <LockOpen size={14} className="shrink-0" />}
+                  <span className="leading-tight">
+                    {locked ? 'Asesor fijado — no se reasignará' : 'Fijar asesor (bloquear reasignación)'}
+                    <span className="mt-0.5 block text-[10px] font-normal text-zinc-500">
+                      {locked
+                        ? 'Toca para permitir la reasignación automática de nuevo.'
+                        : 'Evita que la reasignación automática por falta de contacto lo mueva.'}
+                    </span>
+                  </span>
+                </button>
               </div>
             )}
 
@@ -382,10 +564,32 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
           </section>
 
           <section className="border-t border-zinc-800 px-5 py-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
+                <CalendarCheck size={12} /> Citas
+              </p>
+              <button
+                onClick={() => setShowAppointment(true)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-300 hover:text-sky-200"
+              >
+                <CalendarPlus size={12} /> Agendar
+              </button>
+            </div>
+            <LeadAppointmentsPanel companyId={companyId} leadId={lead.id} refreshKey={apptRefresh} />
+          </section>
+
+          <section className="border-t border-zinc-800 px-5 py-4">
             <p className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
               <StickyNote size={12} /> Notas y recordatorios
             </p>
             <LeadNotesPanel companyId={companyId} leadId={lead.id} />
+          </section>
+
+          <section className="border-t border-zinc-800 px-5 py-4">
+            <p className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
+              <FileSearch size={12} /> SmartHome
+            </p>
+            <SmartHomeActionsPanel companyId={companyId} lead={lead} canAdmin={canReassign} />
           </section>
 
           <section className="border-t border-zinc-800 px-5 py-4">
@@ -397,13 +601,20 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
 
           <section className="border-t border-zinc-800 px-5 py-4">
             <p className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
+              <FileSearch size={12} /> Radiografía CRM + SmartHome
+            </p>
+            <LeadDossierCard lead={lead} companyId={companyId} />
+          </section>
+
+          <section className="border-t border-zinc-800 px-5 py-4">
+            <p className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
               <PhoneCall size={12} /> Llamadas con IA
             </p>
             <CallHistory calls={calls} loading={callsLoading} />
           </section>
         </div>
 
-        <footer className="border-t border-zinc-800 bg-zinc-900 px-5 py-4">
+        <footer className="border-t border-zinc-800 bg-zinc-900 px-5 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
           <Button onClick={handleSave} disabled={!isDirty || saving} loading={saving} className="w-full">
             <Save size={15} /> {saved ? 'Cambios guardados' : 'Guardar cambios'}
           </Button>
@@ -415,6 +626,7 @@ export function LeadDrawer({ lead, companyId, allTags = [], advisors, onClose }:
           companyId={companyId}
           lead={lead}
           onClose={() => setShowAppointment(false)}
+          onBooked={() => setApptRefresh((n) => n + 1)}
         />
       )}
     </div>

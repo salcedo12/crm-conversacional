@@ -4,7 +4,29 @@ import { orchestrateAiResponse } from '../modules/ai/aiOrchestrator.service';
 import { followUpsRepository } from '../modules/followups/followups.repository';
 import { leadsRepository } from '../modules/leads/leads.repository';
 import { sendInboundLeadPush } from '../modules/messages/pushNotifications.service';
+import { recordMessageInLeadStats } from '../modules/leads/leadStats.service';
+import { getYcloudConfigForCompany } from '../modules/companies/channelCredentials.repository';
+import { normalizeBusinessNumber } from '../modules/whatsapp/inbox';
 import type { Message } from '../modules/messages/messages.types';
+
+const SALES_INBOX_PHONE = '+573176820728';
+
+function metaString(message: Message, key: string): string | undefined {
+  const value = message.metadata?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function shouldNotifyInbound(leadInboxId: string | undefined, message: Message): boolean {
+  const deliveryChannel = metaString(message, 'deliveryChannel');
+  const origin = metaString(message, 'origin');
+  const businessPhone = metaString(message, 'businessPhone') ?? leadInboxId;
+
+  if (deliveryChannel === 'advisor_whatsapp' || origin?.startsWith('advisor_whatsapp')) {
+    return false;
+  }
+
+  return businessPhone === SALES_INBOX_PHONE;
+}
 
 /**
  * Trigger de Firestore: se activa cuando se crea un nuevo mensaje.
@@ -38,6 +60,39 @@ export const onMessageCreated = onDocumentCreated(
       return;
     }
 
+    // Mantener los contadores denormalizados del lead (lead.stats) con CADA
+    // mensaje, sin importar su tipo. Alimenta getAdvisorReports sin que este
+    // tenga que releer los mensajes. No bloquea ni afecta el flujo de IA.
+    await recordMessageInLeadStats(companyId, leadId, data);
+
+    // Asociar la LÍNEA de la empresa a leads "salientes primero" (formulario web,
+    // lead ads, contacto manual) que nunca recibieron un entrante y por eso no
+    // tienen inboxId. Sin esto la burbuja del chat muestra "Sin número" en vez de
+    // la línea real desde la que se envió (p. ej. "Ventas 317"). Usamos el mismo
+    // fromNumber que YCloud usa para enviar, así que la etiqueta es exacta. No
+    // aplica a la línea personal del asesor (esa se rotula "Mi WhatsApp").
+    if (data.direction === 'outbound') {
+      const deliveryChannel = metaString(data, 'deliveryChannel');
+      const origin = metaString(data, 'origin');
+      const isAdvisorPersonal =
+        deliveryChannel === 'advisor_whatsapp' || origin?.startsWith('advisor_whatsapp');
+      if (!isAdvisorPersonal) {
+        const outboundLead = await leadsRepository.findById(companyId, leadId);
+        if (outboundLead && !outboundLead.inboxId) {
+          const line =
+            normalizeBusinessNumber(metaString(data, 'businessPhone')) ??
+            normalizeBusinessNumber((await getYcloudConfigForCompany(companyId)).fromNumber);
+          if (line) {
+            await leadsRepository.update(companyId, leadId, { inboxId: line }).catch((err) => {
+              logger.warn('[Trigger] No se pudo fijar inboxId del lead saliente', {
+                companyId, leadId, err: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
+        }
+      }
+    }
+
     // Solo procesar mensajes inbound del lead
     if (data.direction !== 'inbound' || data.senderType !== 'lead') {
       return;
@@ -49,7 +104,7 @@ export const onMessageCreated = onDocumentCreated(
     });
 
     const lead = await leadsRepository.findById(companyId, leadId);
-    if (lead) {
+    if (lead && shouldNotifyInbound(lead.inboxId, data)) {
       await sendInboundLeadPush(companyId, lead, data).catch((err) => {
         logger.warn('[Trigger] No se pudo enviar push inbound', {
           companyId,
@@ -57,6 +112,16 @@ export const onMessageCreated = onDocumentCreated(
           messageId,
           err: err instanceof Error ? err.message : String(err),
         });
+      });
+    } else if (lead) {
+      logger.info('[Trigger] Push inbound silenciado por canal', {
+        companyId,
+        leadId,
+        messageId,
+        inboxId: lead.inboxId,
+        deliveryChannel: metaString(data, 'deliveryChannel'),
+        origin: metaString(data, 'origin'),
+        businessPhone: metaString(data, 'businessPhone'),
       });
     }
 

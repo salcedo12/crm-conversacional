@@ -9,6 +9,19 @@ export interface AdSpend {
   clicks:      number;
 }
 
+/** Ventana temporal para el gasto. 'all' = histórico (lifetime). */
+export type AdSpendRange = 'all' | '7d' | '30d' | '90d';
+
+/** Traduce el rango de la UI al date_preset de la Meta Marketing API. */
+function datePresetFor(range: AdSpendRange): string {
+  switch (range) {
+    case '7d':  return 'last_7d';
+    case '30d': return 'last_30d';
+    case '90d': return 'last_90d';
+    default:    return 'maximum';
+  }
+}
+
 /** Estado normalizado del anuncio para la UI. */
 export type AdStatus = 'active' | 'paused' | 'other';
 
@@ -47,7 +60,7 @@ interface InsightsResponse {
  * de permisos, loguea y devuelve null (el ranking de calidad sigue funcionando
  * sin costos). Requiere `metaAdsConfigured()`.
  */
-export async function getLifetimeAdSpend(): Promise<Map<string, AdSpend> | null> {
+export async function getLifetimeAdSpend(range: AdSpendRange = 'all'): Promise<Map<string, AdSpend> | null> {
   if (!env.metaAdsConfigured()) return null;
 
   const version = env.metaGraphVersion();
@@ -57,7 +70,7 @@ export async function getLifetimeAdSpend(): Promise<Map<string, AdSpend> | null>
   const params = new URLSearchParams({
     level:       'ad',
     fields:      'ad_id,ad_name,spend,impressions,clicks',
-    date_preset: 'maximum',
+    date_preset: datePresetFor(range),
     limit:       '500',
     access_token: token,
   });

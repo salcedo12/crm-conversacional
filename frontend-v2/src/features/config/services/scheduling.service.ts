@@ -8,6 +8,10 @@ export interface SchedulingConfig {
   slotMinutes:   number;
   lookaheadDays: number;
   minAdvanceMinutes: number;
+  autoReassignFirstContactEnabled: boolean;
+  firstContactTimeoutMinutes: number;
+  reassignStartHour: number;                                  // hora desde la que se permite reasignar (0–23)
+  reassignEndHour:   number;                                  // hora hasta la que se permite reasignar (1–24, exclusiva)
   lunch:         { startHour: number; endHour: number } | null;
   colombianHolidays: boolean;                                 // festivos de Colombia automáticos
   workedHolidays: string[];                                   // claves de festivos que SÍ se trabajan

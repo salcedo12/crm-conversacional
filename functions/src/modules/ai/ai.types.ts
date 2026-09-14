@@ -19,5 +19,12 @@ export interface AiConfig {
   transferKeywords:    string[];        // Palabras que activan transferencia a humano
   blockedTopics:       string[];        // Temas que la IA debe rechazar
   followUpSequence:    FollowUpStep[];  // Secuencia de seguimientos automáticos (máx 5)
+  /**
+   * Cotización de precios en el chat:
+   *  - 'off'        → no da precios exactos (solo rangos, empuja a la llamada).
+   *  - 'on_request' → cotiza solo cuando el cliente pregunta por el precio.
+   *  - 'proactive'  → ofrece la cotización apenas el cliente elige un terreno.
+   */
+  quoteMode:           'off' | 'on_request' | 'proactive';
   updatedAt:           Timestamp;
 }

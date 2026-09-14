@@ -21,6 +21,20 @@ export function formatMessageTime(ts: Timestamp | undefined): string {
   return date.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
 }
 
+/** Fecha exacta para cada mensaje del chat: dia/mes/año hora:minuto:segundo. */
+export function formatChatMessageDateTime(ts: Timestamp | undefined): string {
+  if (!ts) return '';
+  return ts.toDate().toLocaleString('es-CO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
 /** Agrupa mensajes por fecha para mostrar separadores */
 export function getDateLabel(ts: Timestamp | undefined): string {
   if (!ts) return '';

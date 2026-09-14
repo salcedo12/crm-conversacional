@@ -47,6 +47,11 @@ function smartHomeOwnerId(record: SmartHomeSaleRecord): string | undefined {
   return firstText(record, ['ownerId', 'userId', 'sellerId', 'advisorId']);
 }
 
+export async function smartHomeEnabledForCompany(companyId: string): Promise<boolean> {
+  const snap = await db.collection('companies').doc(companyId).get();
+  return snap.data()?.smartHomeEnabled === true;
+}
+
 function summarizeDuplicate(record: SmartHomeSaleRecord): SmartHomeDuplicateMatch {
   return {
     prospectId:    firstText(record, ['prospectId', 'ProspectId']),
@@ -98,6 +103,10 @@ export async function resolveOwnerId(companyId: string, advisorUid: string): Pro
  * no lo repite. Persiste el resultado en el propio lead.
  */
 export async function syncLeadToSmartHome(lead: Lead): Promise<SyncResult> {
+  if (!(await smartHomeEnabledForCompany(lead.companyId))) {
+    return { ok: false, reason: 'smarthome-no-habilitado-para-empresa' };
+  }
+
   if (lead.smartHomeCustomerId) {
     return { ok: true, reason: 'already-synced', customerId: lead.smartHomeCustomerId };
   }
@@ -174,7 +183,10 @@ export async function syncLeadToSmartHome(lead: Lead): Promise<SyncResult> {
   }
 
   await leadsRepository.update(lead.companyId, lead.id, {
-    smartHomeCustomerId: result.customerId ?? 'ok',
+    smartHomeCustomerId: result.customerId ?? result.prospectId ?? 'ok',
+    ...(result.prospectId ? { smartHomeProspectId: result.prospectId } : {}),
+    smartHomeProjectCode: env.smartHomeProject(),
+    smartHomeAdvisorId: ownerId,
     smartHomeSyncedAt:   Timestamp.now(),
     smartHomeSyncError:  '',
     smartHomeDuplicateMatches: [],

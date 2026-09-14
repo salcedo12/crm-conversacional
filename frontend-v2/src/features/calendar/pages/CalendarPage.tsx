@@ -32,6 +32,17 @@ export function CalendarPage() {
   const [createFor, setCreateFor] = useState<Date | null>(null);
   const [selected, setSelected] = useState<CalendarEvent | null>(null);
   const [dayDetail, setDayDetail] = useState<{ date: Date; events: CalendarEvent[] } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const copyMeet = async (link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard no disponible */
+    }
+  };
 
   // 42 días (6 semanas) desde el lunes de la primera semana
   const gridDays = useMemo(() => {
@@ -231,7 +242,33 @@ export function CalendarPage() {
             </p>
             {selected.leadName && <p className="text-xs text-zinc-400">👤 {selected.leadName}</p>}
             {selected.meetLink && (
-              <a href={selected.meetLink} target="_blank" rel="noreferrer" className="text-xs text-violet-400 hover:text-violet-300">🎥 Unirse a Google Meet</a>
+              <div className="flex flex-col gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 text-emerald-400">🎥</span>
+                  <input
+                    readOnly
+                    value={selected.meetLink}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="min-w-0 flex-1 rounded border border-emerald-500/25 bg-emerald-950/30 px-2 py-1 font-mono text-[11px] text-emerald-200 outline-none"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <a
+                    href={selected.meetLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200 hover:bg-emerald-500/25"
+                  >
+                    Unirse a Meet
+                  </a>
+                  <button
+                    onClick={() => copyMeet(selected.meetLink!)}
+                    className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200 hover:bg-emerald-500/20"
+                  >
+                    {copied ? 'Copiado' : 'Copiar enlace'}
+                  </button>
+                </div>
+              </div>
             )}
             <div className="flex gap-2 justify-end mt-1">
               <Button variant="ghost" size="sm" onClick={() => setSelected(null)}>Cerrar</Button>

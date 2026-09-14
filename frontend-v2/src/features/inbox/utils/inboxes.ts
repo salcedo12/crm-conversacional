@@ -1,5 +1,5 @@
 import { formatPhone } from '@/shared/utils/formatPhone';
-import type { Lead, LeadChannel } from '../types';
+import type { Lead, LeadChannel, LeadSource } from '../types';
 
 /**
  * Nombres amigables de cada número de negocio (inbox).
@@ -8,6 +8,8 @@ import type { Lead, LeadChannel } from '../types';
  */
 const INBOX_NAMES: Record<string, string> = {
   '+573148209662': 'sistemas meraki',
+  '+573176820728': 'Ventas 317',
+  '+573232094057': 'WhatsApp Angelica',
 };
 
 /** Etiqueta amigable para un inbox (número de negocio). */
@@ -35,4 +37,46 @@ export function channelBadge(channel?: LeadChannel): { icon: string; label: stri
   if (channel === 'messenger') return { icon: '💬', label: 'Messenger' };
   if (channel === 'instagram') return { icon: '📷', label: 'Instagram' };
   return null;
+}
+
+/** Ícono + etiqueta amigable de la fuente/origen de un lead. */
+const SOURCE_BADGES: Record<LeadSource, { icon: string; label: string }> = {
+  whatsapp:  { icon: '🟢', label: 'WhatsApp' },
+  manual:    { icon: '✍️', label: 'Manual'   },
+  web:       { icon: '🌐', label: 'Página web' },
+  facebook:  { icon: '📘', label: 'Facebook'  },
+  instagram: { icon: '📷', label: 'Instagram' },
+  meta_ads:  { icon: '📣', label: 'Anuncio'   },
+  advisor_whatsapp: { icon: '👤', label: 'WhatsApp asesor' },
+};
+
+/** Etiqueta corta de una fuente para los filtros (sin depender de un lead). */
+export function sourceLabel(source: string): string {
+  return SOURCE_BADGES[source as LeadSource]?.label ?? source;
+}
+
+/**
+ * Ícono + etiqueta del origen de un lead (de dónde viene). `null` para leads
+ * antiguos sin `source`. Para anuncios de Meta, `detail` trae el titular del
+ * anuncio si está disponible (se muestra en el tooltip).
+ */
+export function sourceBadge(
+  lead: Pick<Lead, 'source' | 'sourceMeta' | 'metadata'>,
+): { icon: string; label: string; detail?: string } | null {
+  if (!lead.source) return null;
+  // Lead Ads (formulario) y click-to-WhatsApp son ambos 'meta_ads'; el lead de
+  // FORMULARIO trae metaFormId → se muestra como "Formulario", no "Anuncio".
+  if (lead.source === 'meta_ads' && lead.metadata?.metaFormId) {
+    return {
+      icon:   '📋',
+      label:  'Formulario',
+      detail: lead.metadata.metaFormName || lead.metadata.metaAdName || lead.sourceMeta?.headline,
+    };
+  }
+  const badge = SOURCE_BADGES[lead.source];
+  if (!badge) return null;
+  const detail = lead.source === 'meta_ads'
+    ? (lead.metadata?.metaAdName || lead.sourceMeta?.headline)
+    : undefined;
+  return { ...badge, detail };
 }

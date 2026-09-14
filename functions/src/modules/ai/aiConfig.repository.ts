@@ -18,6 +18,7 @@ const DEFAULT_AI_CONFIG: Omit<AiConfig, 'updatedAt' | 'companyId'> = {
     { delayMinutes: 20,   enabled: true },
     { delayMinutes: 240,  enabled: true },
   ],
+  quoteMode:          'off',
 };
 
 /**

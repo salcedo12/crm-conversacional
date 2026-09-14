@@ -30,7 +30,7 @@ export const startAiCall = onCall(
     if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
     if (!lead.phone) throw new HttpsError('failed-precondition', 'El lead no tiene telefono.');
 
-    if (!ADMIN_ROLES.includes(ctx.role) && lead.assignedTo !== ctx.uid) {
+    if (!(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role)) && lead.assignedTo !== ctx.uid) {
       throw new HttpsError('permission-denied', 'Solo puedes llamar leads asignados a ti.');
     }
 
@@ -139,7 +139,7 @@ export const listRecentCalls = onCall(
     let calls: Call[] = [];
     let leadMap = new Map<string, { name: string; phone: string }>();
 
-    if (ADMIN_ROLES.includes(ctx.role)) {
+    if ((ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))) {
       const snap = await db
         .collectionGroup('calls')
         .where('companyId', '==', companyId)

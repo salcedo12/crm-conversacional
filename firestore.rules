@@ -32,14 +32,19 @@ service cloud.firestore {
     }
 
     // El usuario pertenece a la empresa (según su claim companyId)
+    function isPlatformAdmin() {
+      return signedIn() && request.auth.token.platformAdmin == true;
+    }
+
     function inCompany(companyId) {
-      return signedIn() && request.auth.token.companyId == companyId;
+      return signedIn() && (request.auth.token.companyId == companyId || isPlatformAdmin());
     }
 
     // Rol administrativo dentro de la empresa
     function isAdmin(companyId) {
-      return inCompany(companyId)
-             && request.auth.token.role in ['admin', 'manager'];
+      return isPlatformAdmin()
+             || (inCompany(companyId)
+                 && request.auth.token.role in ['admin', 'manager']);
     }
 
     function isAssignedAdvisor(companyId) {
@@ -102,6 +107,27 @@ service cloud.firestore {
           allow read:  if canReadLead(companyId, leadId);
           allow write: if false;
         }
+
+        // Evidencia fotográfica del lead.
+        match /photo_evidence/{evidenceId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+      }
+
+      // ── Evidencia fotográfica a nivel de empresa ───────────────────────────
+      match /photo_evidence/{evidenceId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Biblioteca de portafolios ──────────────────────────────────────────
+      // Archivos reutilizables de la empresa (PDFs, etc.). Cualquier miembro de
+      // la empresa puede LEER la lista (para elegir qué enviar desde la Bandeja).
+      // Las escrituras van por callables (saveLibraryItem/…) con Admin SDK.
+      match /library/{itemId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
       }
 
       // ── Resto de subcolecciones de la empresa ──────────────────────────────
@@ -121,9 +147,11 @@ service cloud.firestore {
     // al lead padre.
     match /{path=**}/calls/{callId} {
       allow read: if signedIn()
-                  && request.auth.token.companyId == resource.data.companyId
+                  && (request.auth.token.companyId == resource.data.companyId
+                      || isPlatformAdmin())
                   && (
                     request.auth.token.role in ['admin', 'manager']
+                    || isPlatformAdmin()
                     || !('assignedTo' in resource.data)
                     || resource.data.assignedTo == request.auth.uid
                   );

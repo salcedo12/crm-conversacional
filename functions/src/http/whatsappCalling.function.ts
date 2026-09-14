@@ -2,11 +2,11 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { Timestamp } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { db } from '../lib/admin';
-import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { leadsRepository } from '../modules/leads/leads.repository';
 import { callsRepository } from '../modules/calls/calls.repository';
-import { getYcloudClient } from '../integrations/ycloud/ycloud.client';
+import { getYcloudClientForCompany } from '../integrations/ycloud/ycloud.client';
+import { getYcloudConfigForCompany } from '../modules/companies/channelCredentials.repository';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import type { AuthContext } from '../lib/authContext';
 import type { Call } from '../modules/calls/calls.types';
@@ -24,7 +24,7 @@ const CallRefSchema = z.object({
  * muestran a todos los asesores en el banner de llamada entrante).
  */
 function canOperateOnLead(ctx: AuthContext, lead: Lead): boolean {
-  return ADMIN_ROLES.includes(ctx.role) || !lead.assignedTo || lead.assignedTo === ctx.uid;
+  return (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role)) || !lead.assignedTo || lead.assignedTo === ctx.uid;
 }
 
 async function loadAuthorizedLead(ctx: AuthContext, companyId: string, leadId: string): Promise<Lead> {
@@ -70,7 +70,9 @@ export const requestCallPermission = onCall(
     const lead = await loadAuthorizedLead(ctx, companyId, leadId);
 
     try {
-      await getYcloudClient().requestCallPermission(env.ycloudCallingFromNumber(), lead.phone, DEFAULT_PERMISSION_TEXT);
+      const cfg    = await getYcloudConfigForCompany(companyId);
+      const client = await getYcloudClientForCompany(companyId);
+      await client.requestCallPermission(cfg.callingFromNumber, lead.phone, DEFAULT_PERMISSION_TEXT);
     } catch (err) {
       logger.error('[requestCallPermission] Error enviando solicitud', {
         leadId, error: err instanceof Error ? err.message : String(err),
@@ -107,7 +109,8 @@ export const startWhatsappCall = onCall(
     }).parse(request.data);
     assertCompany(ctx, companyId);
 
-    if (!env.ycloudCallingEnabled()) {
+    const cfg = await getYcloudConfigForCompany(companyId);
+    if (!cfg.callingFromNumber) {
       throw new HttpsError('failed-precondition', 'Las llamadas de voz por WhatsApp no están configuradas todavía.');
     }
 
@@ -118,8 +121,9 @@ export const startWhatsappCall = onCall(
 
     let result;
     try {
-      result = await getYcloudClient().connectCall({
-        from: env.ycloudCallingFromNumber(),
+      const client = await getYcloudClientForCompany(companyId);
+      result = await client.connectCall({
+        from: cfg.callingFromNumber,
         to:   lead.phone,
         sdp:  sdpOffer,
       });
@@ -138,7 +142,7 @@ export const startWhatsappCall = onCall(
       provider:   'ycloud_whatsapp',
       status:     'connecting',
       externalId: result.wacid ?? result.id,
-      phoneId:    result.phoneId ?? env.ycloudCallingPhoneId(),
+      phoneId:    result.phoneId ?? cfg.callingPhoneId,
       sdpOffer,
       triggeredBy: ctx.uid,
       ...(lead.assignedTo ? { assignedTo: lead.assignedTo } : {}),
@@ -180,7 +184,7 @@ export const preAcceptWhatsappCall = onCall(
     });
 
     try {
-      await getYcloudClient().preAcceptCall({ phoneId: call.phoneId!, sdp: sdpAnswer });
+      await (await getYcloudClientForCompany(companyId)).preAcceptCall({ phoneId: call.phoneId!, sdp: sdpAnswer });
     } catch (err) {
       logger.error('[preAcceptWhatsappCall] Error en ycloud preAccept', {
         leadId, callId, error: err instanceof Error ? err.message : String(err),
@@ -208,7 +212,7 @@ export const acceptWhatsappCall = onCall(
     if (!call.externalId) throw new HttpsError('failed-precondition', 'La llamada no tiene wacid.');
 
     try {
-      await getYcloudClient().acceptCall({ phoneId: call.phoneId!, wacid: call.externalId });
+      await (await getYcloudClientForCompany(companyId)).acceptCall({ phoneId: call.phoneId!, wacid: call.externalId });
     } catch (err) {
       logger.error('[acceptWhatsappCall] Error en ycloud accept', {
         leadId, callId, error: err instanceof Error ? err.message : String(err),
@@ -236,7 +240,7 @@ export const rejectWhatsappCall = onCall(
     if (!call.externalId) throw new HttpsError('failed-precondition', 'La llamada no tiene wacid.');
 
     try {
-      await getYcloudClient().rejectCall({ phoneId: call.phoneId!, wacid: call.externalId });
+      await (await getYcloudClientForCompany(companyId)).rejectCall({ phoneId: call.phoneId!, wacid: call.externalId });
     } catch (err) {
       logger.error('[rejectWhatsappCall] Error en ycloud reject', {
         leadId, callId, error: err instanceof Error ? err.message : String(err),
@@ -264,7 +268,7 @@ export const terminateWhatsappCall = onCall(
     if (!call.externalId) throw new HttpsError('failed-precondition', 'La llamada no tiene wacid.');
 
     try {
-      await getYcloudClient().terminateCall({ phoneId: call.phoneId!, wacid: call.externalId });
+      await (await getYcloudClientForCompany(companyId)).terminateCall({ phoneId: call.phoneId!, wacid: call.externalId });
     } catch (err) {
       logger.error('[terminateWhatsappCall] Error en ycloud terminate', {
         leadId, callId, error: err instanceof Error ? err.message : String(err),

@@ -32,7 +32,7 @@ function invitationHtml(input: InviteEmailInput): string {
   const email = escapeHtml(input.to);
   const role = escapeHtml(roleLabel(input.role));
   const inviteLink = escapeHtml(input.inviteLink);
-  const loginLink = escapeHtml(env.appBaseUrl() || 'https://crm-conversacional.firebaseapp.com');
+  const loginLink = escapeHtml(env.appBaseUrl());
 
   return `<!doctype html>
 <html lang="es">
@@ -134,7 +134,7 @@ export async function sendUserInviteEmail(input: InviteEmailInput): Promise<void
       input.inviteLink,
       '',
       'Despues ingresa al CRM desde:',
-      env.appBaseUrl() || 'https://crm-conversacional.firebaseapp.com',
+      env.appBaseUrl(),
     ].join('\n'),
   });
 }

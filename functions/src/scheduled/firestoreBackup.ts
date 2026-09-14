@@ -3,8 +3,6 @@ import { v1 } from '@google-cloud/firestore';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
 
-const adminClient = new v1.FirestoreAdminClient();
-
 /**
  * Backup diario de Firestore: exporta TODA la base a Cloud Storage.
  * Corre cada día a las 03:00 (America/Bogota) y guarda en
@@ -29,6 +27,7 @@ export const scheduledFirestoreBackup = onSchedule(
     memory:         '256MiB',
   },
   async () => {
+    const adminClient = new v1.FirestoreAdminClient();
     const projectId    = process.env.GCLOUD_PROJECT ?? 'crm-conversacional';
     const databaseName = adminClient.databasePath(projectId, '(default)');
     const stamp        = new Date().toISOString().slice(0, 10); // YYYY-MM-DD

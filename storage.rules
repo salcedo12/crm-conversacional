@@ -1,22 +1,61 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-
-    // Media de conversaciones: solo usuarios autenticados pueden leer/escribir
-    // dentro de su propia empresa
-    match /companies/{companyId}/media/{leadId}/{allPaths=**} {
-      allow read:  if request.auth != null;
-      allow write: if request.auth != null
-                   && request.resource.size < 50 * 1024 * 1024  // máx 50MB
-                   && (
-                        request.resource.contentType.matches('image/.*')  ||
-                        request.resource.contentType.matches('video/.*')  ||
-                        request.resource.contentType.matches('audio/.*')  ||
-                        request.resource.contentType == 'application/pdf'
-                      );
+    function isPlatformAdmin() {
+      return request.auth != null && request.auth.token.platformAdmin == true;
     }
 
-    // Todo lo demás: denegado
+    function inCompany(companyId) {
+      return request.auth != null
+             && (request.auth.token.companyId == companyId || isPlatformAdmin());
+    }
+
+    function validMediaSize() {
+      return (request.resource.contentType.matches('image/.*') && request.resource.size < 5 * 1024 * 1024)
+             || (request.resource.contentType.matches('video/.*') && request.resource.size < 16 * 1024 * 1024)
+             || (request.resource.contentType.matches('audio/.*') && request.resource.size < 16 * 1024 * 1024)
+             || (request.resource.contentType == 'application/pdf' && request.resource.size < 100 * 1024 * 1024);
+    }
+
+    function validConversationMediaSize(leadId) {
+      return (request.resource.contentType.matches('image/.*') && request.resource.size < 5 * 1024 * 1024)
+             || (request.resource.contentType.matches('audio/.*') && request.resource.size < 16 * 1024 * 1024)
+             || (request.resource.contentType == 'application/pdf' && request.resource.size < 100 * 1024 * 1024)
+             || (leadId == 'templates'
+                 && request.resource.contentType.matches('video/.*')
+                 && request.resource.size < 16 * 1024 * 1024);
+    }
+
+    // Media de conversaciones: solo usuarios de LA MISMA empresa pueden leer/escribir.
+    // El check de companyId (claim del token) evita fuga de media entre empresas
+    // (multi-tenant): sin él, cualquier usuario autenticado podía leer/escribir la
+    // media de conversaciones de OTRA empresa conociendo la ruta.
+    match /companies/{companyId}/media/{leadId}/{allPaths=**} {
+      allow read: if inCompany(companyId);
+      allow write: if inCompany(companyId)
+                   && validConversationMediaSize(leadId);
+    }
+
+    // Biblioteca de portafolios: archivos reutilizables de la empresa (PDF, etc.).
+    // Toda la empresa puede LEER (para enviarlos); solo admin/manager pueden SUBIR
+    // o borrar. Tope 100 MB (documentos de WhatsApp llegan hasta 100 MB).
+    match /companies/{companyId}/library/{allPaths=**} {
+      allow read: if inCompany(companyId);
+      allow write: if inCompany(companyId)
+                   && (request.auth.token.role in ['admin', 'manager'] || isPlatformAdmin())
+                   && validMediaSize();
+    }
+
+    // Logos y recursos de marca de la empresa.
+    match /companies/{companyId}/branding/{allPaths=**} {
+      allow read: if inCompany(companyId);
+      allow write: if inCompany(companyId)
+                   && (request.auth.token.role in ['admin', 'manager'] || isPlatformAdmin())
+                   && request.resource.size < 2 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
+    // Todo lo demas: denegado.
     match /{allPaths=**} {
       allow read, write: if false;
     }

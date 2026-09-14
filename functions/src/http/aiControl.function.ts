@@ -5,7 +5,7 @@ import { db }                    from '../lib/admin';
 import { logger }                from '../utils/logger';
 import { leadsRepository }       from '../modules/leads/leads.repository';
 import { messagesRepository }    from '../modules/messages/messages.repository';
-import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/authContext';
+import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 
 const LeadActionSchema = z.object({
   companyId: z.string().min(1),
@@ -39,6 +39,9 @@ export const pauseLeadAi = onCall(
 
     const lead = await leadsRepository.findById(companyId, leadId);
     if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
+    if (!(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role)) && lead.assignedTo !== ctx.uid) {
+      throw new HttpsError('permission-denied', 'Solo puedes operar leads asignados a ti.');
+    }
     if (!lead.aiEnabled) return { aiEnabled: false }; // ya estaba pausada
 
     await leadDocRef(companyId, leadId).update({
@@ -86,6 +89,9 @@ export const resumeLeadAi = onCall(
 
     const lead = await leadsRepository.findById(companyId, leadId);
     if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
+    if (!(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role)) && lead.assignedTo !== ctx.uid) {
+      throw new HttpsError('permission-denied', 'Solo puedes operar leads asignados a ti.');
+    }
     if (lead.aiEnabled) return { aiEnabled: true }; // ya estaba activa
 
     await leadDocRef(companyId, leadId).update({

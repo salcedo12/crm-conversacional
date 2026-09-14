@@ -23,7 +23,13 @@ const _done = httpsCallable<{ companyId: string; leadId: string; noteId: string;
 export async function addLeadNote(
   companyId: string, leadId: string, kind: LeadNoteKind, text: string, dueAtMillis?: number
 ): Promise<void> {
-  await _add({ companyId, leadId, kind, text, dueAt: dueAtMillis });
+  await _add({
+    companyId,
+    leadId,
+    kind,
+    text,
+    ...(dueAtMillis ? { dueAt: dueAtMillis } : {}),
+  });
 }
 
 export async function deleteLeadNote(companyId: string, leadId: string, noteId: string): Promise<void> {

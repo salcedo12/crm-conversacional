@@ -1,12 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Spinner }   from '@/shared/components/Spinner';
 import { Button }    from '@/shared/components/Button';
-import { listTemplates, sendTemplateMessage } from '@/features/templates/services/templates.service';
+import { useAuth }   from '@/features/auth/hooks/useAuth';
+import { formatPhone } from '@/shared/utils/formatPhone';
+import { inboxLabel }  from '@/features/inbox/utils/inboxes';
+import { listTemplates, sendTemplateMessage, listMessagingLines, type MessagingLine } from '@/features/templates/services/templates.service';
 import type { WhatsAppTemplate } from '@/features/templates/types';
 
 interface TemplatePickerModalProps {
   companyId:  string;
   leadId:     string;
+  /** Inbox del lead: línea por defecto y filtro inicial de plantillas. */
+  inboxId?:   string | null;
   onClose:    () => void;
   onSent:     () => void;
 }
@@ -24,28 +29,75 @@ const STATUS_COLOR: Record<string, string> = {
   rejected: 'text-red-400   bg-red-500/10   border-red-500/20',
 };
 
+/** Solo dígitos, para comparar números +E.164 sin depender del formato. */
+const digits = (value?: string | null) => (value ?? '').replace(/\D/g, '');
+
 /** Reemplaza {{variable}} por el valor del draft */
 function fillTemplate(body: string, vars: Record<string, string>): string {
   return body.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`);
 }
 
-export function TemplatePickerModal({ companyId, leadId, onClose, onSent }: TemplatePickerModalProps) {
-  const [templates, setTemplates]   = useState<WhatsAppTemplate[]>([]);
+export function TemplatePickerModal({ companyId, leadId, inboxId, onClose, onSent }: TemplatePickerModalProps) {
+  const { user } = useAuth();
+  const uid = user?.uid;
+
+  const [allTemplates, setAllTemplates] = useState<WhatsAppTemplate[]>([]);
+  const [lines,        setLines]        = useState<MessagingLine[]>([]);
+  /** Línea (+E.164) elegida para enviar. Solo aplica cuando el asesor tiene línea propia. */
+  const [selectedLine, setSelectedLine] = useState<string | null>(null);
   const [loading,   setLoading]     = useState(true);
   const [selected,  setSelected]    = useState<WhatsAppTemplate | null>(null);
   const [variables, setVariables]   = useState<Record<string, string>>({});
   const [sending,   setSending]     = useState(false);
   const [error,     setError]       = useState<string | null>(null);
 
+  // Línea por defecto (317) y línea de coexistencia del asesor logueado (si tiene).
+  const defaultLine = useMemo(() => lines.find((l) => l.isDefault) ?? null, [lines]);
+  const myLine      = useMemo(() => (uid ? lines.find((l) => l.advisorId === uid) : null) ?? null, [lines, uid]);
+  // Solo un asesor con línea propia PUEDE elegir entre el 317 y la suya.
+  const canChoose   = !!myLine && !!defaultLine;
+
   useEffect(() => {
-    listTemplates(companyId)
-      .then((list) => { setTemplates(list); setLoading(false); })
+    Promise.all([
+      listTemplates(companyId).catch(() => [] as WhatsAppTemplate[]),
+      listMessagingLines(companyId).catch(() => [] as MessagingLine[]),
+    ])
+      .then(([tpls, lns]) => {
+        setAllTemplates(tpls);
+        setLines(lns);
+        // Línea inicial: si el lead vive en MI línea, arranca en la mía; si no, en el 317.
+        const mine = uid ? lns.find((l) => l.advisorId === uid) : undefined;
+        const def  = lns.find((l) => l.isDefault);
+        const initial = mine && digits(inboxId) === digits(mine.number)
+          ? mine.number
+          : (def?.number ?? mine?.number ?? null);
+        setSelectedLine(initial);
+        setLoading(false);
+      })
       .catch(() => { setError('No se pudieron cargar las plantillas.'); setLoading(false); });
-  }, [companyId]);
+  }, [companyId, uid, inboxId]);
+
+  // Número de la línea activa: la elegida (si hay elección) o el inbox del lead.
+  const activeLineNumber = canChoose ? selectedLine : (inboxId ?? null);
+
+  // Plantillas de la línea activa: las etiquetadas para ese WABA + las sin línea
+  // (legado). Si no hay línea definida, se muestran todas para no dejar vacío.
+  const templates = useMemo(
+    () => allTemplates.filter((t) => !activeLineNumber || !t.lineNumber || digits(t.lineNumber) === digits(activeLineNumber)),
+    [allTemplates, activeLineNumber],
+  );
+
+  const changeLine = (num: string) => {
+    if (num === selectedLine) return;
+    setSelectedLine(num);
+    // Los sets de plantillas difieren entre líneas → limpiar la selección.
+    setSelected(null);
+    setVariables({});
+    setError(null);
+  };
 
   const handleSelect = (t: WhatsAppTemplate) => {
     setSelected(t);
-    // Pre-rellenar con los ejemplos
     const init: Record<string, string> = {};
     t.variables.forEach((v) => { init[v.key] = ''; });
     setVariables(init);
@@ -57,7 +109,9 @@ export function TemplatePickerModal({ companyId, leadId, onClose, onSent }: Temp
     setSending(true);
     setError(null);
     try {
-      await sendTemplateMessage(companyId, leadId, selected.id, variables);
+      // Solo mandamos la línea elegida cuando el asesor realmente pudo elegir; si no,
+      // el backend usa la línea del lead (comportamiento de siempre).
+      await sendTemplateMessage(companyId, leadId, selected.id, variables, canChoose ? selectedLine ?? undefined : undefined);
       onSent();
       onClose();
     } catch (err) {
@@ -92,6 +146,40 @@ export function TemplatePickerModal({ companyId, leadId, onClose, onSent }: Temp
           <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300 transition-colors">✕</button>
         </div>
 
+        {/* Selector de línea (asesor con línea propia) o indicador de solo lectura */}
+        {canChoose ? (
+          <div className="flex items-center gap-2 px-5 py-2.5 border-b border-zinc-800 shrink-0">
+            <span className="text-[11px] text-zinc-500 shrink-0">Enviar desde</span>
+            <div className="flex rounded-lg border border-zinc-700 bg-zinc-800 p-0.5">
+              {[defaultLine, myLine].map((line) => {
+                if (!line) return null;
+                const active = digits(selectedLine) === digits(line.number);
+                return (
+                  <button
+                    key={line.number}
+                    onClick={() => changeLine(line.number)}
+                    className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      active
+                        ? (line.isDefault ? 'bg-violet-600/25 text-violet-200' : 'bg-emerald-500/20 text-emerald-200')
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    <span>{line.isDefault ? '🏢' : '📱'}</span>
+                    <span>{line.isDefault ? 'Ventas 317' : 'Mi WhatsApp'}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span className="ml-auto text-[10px] text-zinc-500 truncate">{formatPhone(selectedLine ?? '')}</span>
+          </div>
+        ) : activeLineNumber ? (
+          <div className="px-5 py-2 border-b border-zinc-800 shrink-0">
+            <span className="text-[11px] text-zinc-500">
+              Se enviará desde <strong className="text-zinc-300">{inboxLabel(activeLineNumber)}</strong>
+            </span>
+          </div>
+        ) : null}
+
         <div className="flex flex-1 min-h-0">
           {/* Lista de plantillas */}
           <div className="w-52 shrink-0 border-r border-zinc-800 overflow-y-auto">
@@ -100,7 +188,7 @@ export function TemplatePickerModal({ companyId, leadId, onClose, onSent }: Temp
             )}
             {!loading && templates.length === 0 && (
               <div className="p-4 text-center">
-                <p className="text-xs text-zinc-500">Sin plantillas.</p>
+                <p className="text-xs text-zinc-500">Sin plantillas para esta línea.</p>
                 <p className="text-xs text-zinc-600 mt-1">Crea una en Config → Plantillas</p>
               </div>
             )}
