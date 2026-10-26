@@ -349,6 +349,26 @@ export async function getAllSmartHomeSales(force = false): Promise<SmartHomeSale
   return dedupeSales(batches.flatMap((batch) => batch ?? []));
 }
 
+/**
+ * Venta de un prospecto (valor neto + fecha de cierre). Busca primero en el
+ * proyecto indicado y luego en todos. null si no está o no tiene valor.
+ */
+export async function getSmartHomeSaleForProspect(
+  prospectId: string,
+  projectCodeHint?: string,
+): Promise<{ value: number; closeDate: string | null } | null> {
+  const pick = (records: SmartHomeSaleRecord[] | null) =>
+    records?.find((r) => r.prospectId === prospectId || r.customerId === prospectId);
+
+  let sale = projectCodeHint ? pick(await getSmartHomeSales(projectCodeHint, true)) : undefined;
+  if (!sale) sale = pick(await getAllSmartHomeSales(true));
+  if (!sale) return null;
+
+  const value = Number(sale.totalValue ?? sale.offerPrice ?? 0);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return { value, closeDate: typeof sale.closeDate === 'string' ? sale.closeDate : null };
+}
+
 /** Busca prospectos existentes por celular antes de crear, para respetar el bloqueo anti-duplicado de SmartHome UI. */
 export async function findSmartHomeProspectsByPhone(phone: string): Promise<SmartHomeSaleRecord[] | null> {
   const target = phoneKey(phone);

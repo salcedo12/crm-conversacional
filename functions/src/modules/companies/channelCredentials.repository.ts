@@ -72,3 +72,96 @@ export async function saveYcloudConfigForCompany(
   );
   clearYcloudConfigCache(companyId);
 }
+
+export interface MetaAdsCompanyConfig {
+  accessToken: string;
+  adAccountId: string;
+}
+
+const metaAdsCache = new Map<string, MetaAdsCompanyConfig>();
+
+export async function getMetaAdsConfigForCompany(companyId: string): Promise<MetaAdsCompanyConfig> {
+  const cached = metaAdsCache.get(companyId);
+  if (cached) return cached;
+
+  let stored: Partial<MetaAdsCompanyConfig> = {};
+  try {
+    const snap = await db.collection('channelCredentials').doc(companyId).get();
+    const metaAds = snap.data()?.metaAds;
+    if (metaAds && typeof metaAds === 'object') stored = metaAds as Partial<MetaAdsCompanyConfig>;
+  } catch {
+    /* si falla la lectura, se usan las globales */
+  }
+
+  const config: MetaAdsCompanyConfig = {
+    accessToken: stored.accessToken || env.metaAdsAccessToken(),
+    adAccountId: (stored.adAccountId || env.metaAdAccountId()).replace(/^act_/, ''),
+  };
+  metaAdsCache.set(companyId, config);
+  return config;
+}
+
+export async function saveMetaAdsConfigForCompany(
+  companyId: string,
+  config: Partial<MetaAdsCompanyConfig>
+): Promise<void> {
+  const clean: Record<string, string> = {};
+  if (typeof config.accessToken === 'string' && config.accessToken.trim()) {
+    clean.accessToken = config.accessToken.trim();
+  }
+  if (typeof config.adAccountId === 'string' && config.adAccountId.trim()) {
+    clean.adAccountId = config.adAccountId.trim().replace(/^act_/, '');
+  }
+
+  await db.collection('channelCredentials').doc(companyId).set(
+    { metaAds: clean, updatedAt: Timestamp.now() },
+    { merge: true }
+  );
+  metaAdsCache.delete(companyId);
+  metaCapiCache.delete(companyId);
+}
+
+/**
+ * Conversions API (CAPI) por empresa — `channelCredentials/{companyId}.metaCapi`.
+ * El token cae al de Meta Ads de la empresa si no se guarda uno propio.
+ */
+export interface MetaCapiCompanyConfig {
+  datasetId:     string;
+  /** Página que publica los anuncios CTWA — Meta exige page_id junto al ctwa_clid. */
+  pageId:        string;
+  accessToken:   string;
+  testEventCode: string;
+  currency:      string;
+}
+
+const metaCapiCache = new Map<string, MetaCapiCompanyConfig>();
+
+export async function getMetaCapiConfigForCompany(companyId: string): Promise<MetaCapiCompanyConfig> {
+  const cached = metaCapiCache.get(companyId);
+  if (cached) return cached;
+
+  let stored: Partial<MetaCapiCompanyConfig> = {};
+  try {
+    const snap = await db.collection('channelCredentials').doc(companyId).get();
+    const metaCapi = snap.data()?.metaCapi;
+    if (metaCapi && typeof metaCapi === 'object') stored = metaCapi as Partial<MetaCapiCompanyConfig>;
+  } catch {
+    /* si falla la lectura, se usan las globales */
+  }
+
+  const ads = await getMetaAdsConfigForCompany(companyId);
+  const config: MetaCapiCompanyConfig = {
+    datasetId:     stored.datasetId     || env.metaCapiDatasetId(),
+    pageId:        stored.pageId        || env.metaPageId(),
+    accessToken:   stored.accessToken   || env.metaCapiAccessToken() || ads.accessToken,
+    testEventCode: stored.testEventCode || env.metaCapiTestCode(),
+    currency:      stored.currency      || env.metaCapiCurrency(),
+  };
+  metaCapiCache.set(companyId, config);
+  return config;
+}
+
+export function isMetaCapiConfigured(config: MetaCapiCompanyConfig): boolean {
+  return !!config.datasetId && !!config.accessToken && !!config.pageId;
+}
+
