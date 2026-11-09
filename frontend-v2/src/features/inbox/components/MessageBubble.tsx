@@ -109,6 +109,18 @@ function friendlyFailureReason(code?: string, rawReason?: string): string | unde
     case '470':
     case '131050':
       return 'El contacto no permite recibir mensajes de marketing de esta empresa.';
+    case '131000':
+      return 'Error temporal de WhatsApp (Meta) al entregar a este contacto. Reintenta en unos minutos; si sigue fallando, el teléfono del cliente puede estar sin conexión o haber bloqueado el número.';
+    case '131016':
+      return 'El servicio de WhatsApp (Meta) no está disponible en este momento. Reintenta en unos minutos.';
+    case '131056':
+      return 'Se enviaron demasiados mensajes seguidos a este contacto. Espera un momento antes de reintentar.';
+    case '131051':
+      return 'Tipo de mensaje o archivo multimedia no compatible con el canal del destinatario.';
+    case '131031':
+      return 'La cuenta comercial de WhatsApp tiene una restricción temporal en Meta.';
+    case '130472':
+      return 'El número del usuario forma parte de un experimento de Meta y no recibió el mensaje.';
     default:
       return rawReason || undefined;
   }
