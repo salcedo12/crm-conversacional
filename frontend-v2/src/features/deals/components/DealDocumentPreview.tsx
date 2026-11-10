@@ -70,7 +70,7 @@ export function DealDocumentPreview({ title, pdf, onDownloadWord, onClose }: {
   return createPortal(
     // Por encima del panel del lead (LeadDrawer z-[110]) y de las fichas (z-[150]).
     <div className="fixed inset-0 z-[200] flex flex-col bg-zinc-950/95" onClick={onClose}>
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 bg-zinc-950 px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 bg-zinc-950 px-4 pb-2.5 pt-[max(0.625rem,var(--safe-top))]" onClick={(e) => e.stopPropagation()}>
         <p className="truncate text-sm font-semibold text-zinc-100">{title}</p>
         <div className="flex shrink-0 items-center gap-2">
           {onDownloadWord && <>
@@ -90,12 +90,12 @@ export function DealDocumentPreview({ title, pdf, onDownloadWord, onClose }: {
             {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Word
           </button>
           </>}
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-2 flex h-11 w-11 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 sm:mr-0 sm:h-8 sm:w-8">
             <X size={18} />
           </button>
         </div>
       </div>
-      <div className="relative flex-1 overflow-auto px-2 py-4" onClick={(e) => e.stopPropagation()}>
+      <div className="relative flex-1 overflow-auto overscroll-contain px-2 pb-[max(1rem,var(--safe-bottom))] pt-4" onClick={(e) => e.stopPropagation()}>
         {rendering && (
           <div className="absolute inset-0 flex items-center justify-center text-zinc-300">
             <Loader2 size={22} className="animate-spin" />

@@ -9,6 +9,7 @@ import {
 } from '../services/deals.service';
 import { DealDocumentPreview } from './DealDocumentPreview';
 import { DealSignatureStatus } from './DealSignatureStatus';
+import { dealActionCls } from './DealSheet';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole } from '@/features/auth/types';
 
@@ -63,24 +64,24 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
   });
 
   return (
-    <div className="mt-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
+    <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 sm:rounded-md sm:px-2.5 sm:py-2">
       <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
         <FileText size={11} /> Documentos
       </p>
       {documents.length > 0 && (
         <ul className="mb-2 space-y-1">
           {[...documents].reverse().map((d) => (
-            <li key={`${d.kind}-${d.version}`} className="flex items-center justify-between gap-2 text-[11px] text-zinc-300">
-              <span className="truncate">
+            <li key={`${d.kind}-${d.version}`} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-zinc-300 sm:flex-nowrap sm:text-[11px]">
+              <span className="min-w-0 truncate">
                 {LABELS[d.kind]} · v{d.version}
                 {d.generatedAt && <span className="text-zinc-600"> · {new Date(d.generatedAt).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>}
               </span>
-              <span className="flex shrink-0 items-center gap-3">
+              <span className="flex shrink-0 items-center gap-2 sm:gap-3">
                 <button
                   type="button"
                   disabled={!!busy}
                   onClick={() => run(`view-${d.kind}-${d.version}`, () => view(d.kind, d.version))}
-                  className="inline-flex items-center gap-1 text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                  className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
                 >
                   {busy === `view-${d.kind}-${d.version}` ? <Loader2 size={11} className="animate-spin" /> : <Eye size={11} />} Ver
                 </button>
@@ -88,7 +89,7 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
                   type="button"
                   disabled={!!busy}
                   onClick={() => run(`dl-${d.kind}-${d.version}`, () => downloadDealDocument(companyId, deal.id, d.kind, d.version))}
-                  className="inline-flex items-center gap-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+                  className={`${dealActionCls} font-normal text-zinc-400 hover:text-zinc-200`}
                 >
                   {busy === `dl-${d.kind}-${d.version}` ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />} Word
                 </button>}
@@ -97,13 +98,13 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-2 sm:gap-3">
         {canGeneratePreventa && (
           <button
             type="button"
             disabled={!!busy}
             onClick={() => generate('preventa')}
-            className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+            className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
           >
             {busy === 'gen-preventa' ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
             {hasPreventa ? 'Generar preventa de nuevo' : 'Generar preventa'}
@@ -114,7 +115,7 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
             type="button"
             disabled={!!busy}
             onClick={() => generate('promesa')}
-            className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+            className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
           >
             {busy === 'gen-promesa' ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />} Generar promesa
           </button>

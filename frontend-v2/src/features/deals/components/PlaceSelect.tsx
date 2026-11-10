@@ -101,8 +101,8 @@ function CityCombo({ cities, value, invalid, onChange, className }: {
         <ChevronDown size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500" />
       </div>
       {open && (
-        <ul role="listbox" className="absolute z-[70] mt-1 max-h-56 w-full min-w-[12rem] overflow-auto rounded-md border border-zinc-700 bg-zinc-950 py-1 text-xs shadow-xl">
-          {matches.length === 0 && <li className="px-2.5 py-1.5 text-zinc-500">No está en DocuBlock</li>}
+        <ul role="listbox" className="absolute z-[70] mt-1 max-h-64 w-full min-w-[12rem] overflow-auto overscroll-contain rounded-lg border border-zinc-700 bg-zinc-950 py-1 text-sm shadow-xl sm:max-h-56 sm:rounded-md sm:text-xs">
+          {matches.length === 0 && <li className="px-3 py-2.5 text-zinc-500 sm:px-2.5 sm:py-1.5">No está en DocuBlock</li>}
           {matches.map((c, i) => (
             <li
               key={c}
@@ -110,7 +110,7 @@ function CityCombo({ cities, value, invalid, onChange, className }: {
               aria-selected={c === value}
               onMouseDown={(e) => { e.preventDefault(); pick(c); }}
               onMouseEnter={() => setActive(i)}
-              className={`cursor-pointer px-2.5 py-1.5 ${i === active ? 'bg-violet-600/30 text-zinc-100' : 'text-zinc-300'} ${c === value ? 'font-semibold' : ''}`}
+              className={`cursor-pointer px-3 py-2.5 sm:px-2.5 sm:py-1.5 ${i === active ? 'bg-violet-600/30 text-zinc-100' : 'text-zinc-300'} ${c === value ? 'font-semibold' : ''}`}
             >
               {c}
             </li>

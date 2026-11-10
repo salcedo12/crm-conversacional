@@ -202,3 +202,19 @@ export function parsePesos(value: string): number {
   const digits = value.replace(/[^\d]/g, '');
   return digits ? Number(digits) : 0;
 }
+
+/** Lo que escriben los asesores cuando NO hay referido ("N/a", "no aplica", "ninguno", "-"…). */
+const NO_REFERRAL = new Set([
+  '', 'na', 'noaplica', 'naplica', 'no', 'ninguno', 'ninguna', 'nadie', 'nada', 'sinreferido', 'sinreferida',
+  'noreferido', 'notiene', 'noha', 'nohay', 'x', '0', 'none', 'null',
+]);
+
+/**
+ * Nombre del referido, o '' si no hay. Así "N/A" no pide "Evidencia del referido".
+ * (Regla pura, sin React: se puede usar igual en la app móvil.)
+ */
+export function referralName(referredBy: string | null | undefined): string {
+  const text = (referredBy ?? '').trim();
+  const key = text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  return NO_REFERRAL.has(key) ? '' : text;
+}

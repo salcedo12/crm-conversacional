@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Loader2, PenLine, X } from 'lucide-react';
+import { Loader2, PenLine } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import {
   getSignatureOptions,
@@ -9,6 +8,7 @@ import {
   type DealSummary,
   type SignatureOptions,
 } from '../services/deals.service';
+import { DealField, DealSheet, dealInputCls } from './DealSheet';
 import { AVALADOR, defaultDirectory, defaultTemplate, defaultTypeSigns } from './signatureDefaults';
 
 const KINDS: DealDocumentKind[] = ['preventa', 'promesa'];
@@ -149,38 +149,56 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
     }
   };
 
-  const select = 'w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-violet-500 focus:outline-none';
-  const title = `Firma digital - ${deal.lot ? `${deal.lot.sector} ${deal.lot.lotNumber}` : 'Negocio'}`;
+  const select = `${dealInputCls} sm:bg-zinc-950 sm:focus:border-violet-500`;
+  const sendLabel = `Enviar ${kindsToSend.length === 2 ? 'preventa y promesa' : kindsToSend[0] ?? ''} a firma`;
 
-  return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-3" onClick={onClose}>
-      <div className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-          <p className="flex items-center gap-2 text-sm font-semibold text-zinc-100"><PenLine size={15} /> {title}</p>
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><X size={18} /></button>
+  return (
+    <DealSheet
+      title="Firma digital"
+      subtitle={deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Negocio'}
+      icon={<PenLine size={18} />}
+      onClose={onClose}
+      width="2xl"
+      layer="top"
+      footer={
+        <div className="space-y-2">
+          {error && <p className="rounded-md bg-red-950/60 px-3 py-2 text-xs text-red-200">{error}</p>}
+          {options && problems.length > 0 && <p className="text-xs text-amber-300 sm:text-[11px]">{problems.join(' · ')}</p>}
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-zinc-500 sm:text-[11px]">Al enviar, el lote pasa a TRÁMITE mientras se firma.</p>
+            <div className="grid grid-cols-[auto_1fr] gap-2 sm:flex">
+              <Button variant="ghost" onClick={onClose} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">Cancelar</Button>
+              <Button loading={sending} disabled={!options || problems.length > 0 || !kindsToSend.length} onClick={() => void send()} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
+                <span className="sm:hidden">Enviar a firma</span>
+                <span className="hidden sm:inline">{sendLabel}</span>
+              </Button>
+            </div>
+          </div>
         </div>
+      }
+    >
+      {!options && !error && <div className="flex items-center justify-center gap-2 p-10 text-sm text-zinc-400"><Loader2 size={16} className="animate-spin" /> Cargando plantillas y firmantes de DocuBlock…</div>}
 
-        {!options && !error && <div className="flex items-center justify-center gap-2 p-10 text-sm text-zinc-400"><Loader2 size={16} className="animate-spin" /> Cargando plantillas y firmantes de DocuBlock…</div>}
-
-        {options && (
-          <div className="grid flex-1 gap-4 overflow-auto p-4 md:grid-cols-[260px_1fr]">
-            <div className="space-y-4">
-              {KINDS.map((kind) => (
-                <div key={kind} className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-                  <label className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
-                    <input type="checkbox" checked={include[kind] && !locked[kind]} disabled={!!locked[kind]} onChange={(e) => setInclude((c) => ({ ...c, [kind]: e.target.checked }))} />
-                    {LABELS[kind]}
-                  </label>
-                  {locked[kind] ? <p className="mt-1 text-[11px] text-zinc-500">{locked[kind]}</p> : include[kind] && (
-                    <div className="mt-2 space-y-2">
-                      <p className="text-[10px] uppercase tracking-wider text-zinc-500">Documento</p>
+      {options && (
+        <div className="grid gap-4 md:grid-cols-[260px_1fr]">
+          <div className="space-y-4">
+            {KINDS.map((kind) => (
+              <div key={kind} className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
+                <label className="flex min-h-[32px] items-center gap-2.5 text-sm font-semibold text-zinc-200 sm:min-h-0 sm:text-xs">
+                  <input type="checkbox" className="h-5 w-5 sm:h-3.5 sm:w-3.5" checked={include[kind] && !locked[kind]} disabled={!!locked[kind]} onChange={(e) => setInclude((c) => ({ ...c, [kind]: e.target.checked }))} />
+                  {LABELS[kind]}
+                </label>
+                {locked[kind] ? <p className="mt-1 text-xs text-zinc-500 sm:text-[11px]">{locked[kind]}</p> : include[kind] && (
+                  <div className="mt-2 space-y-2">
+                    <DealField label="Documento">
                       <select className={select} value={versions[kind] ?? ''} onChange={(e) => setVersions((c) => ({ ...c, [kind]: e.target.value ? Number(e.target.value) : null }))}>
                         {kind === 'promesa' && <option value="">Generar la promesa al enviar (con los datos de la preventa)</option>}
                         {[...(deal.documents ?? [])].filter((d) => d.kind === kind).reverse().map((d) => (
                           <option key={d.version} value={d.version}>{LABELS[kind]} · v{d.version}{d.generatedAt ? ` · ${dateText(d.generatedAt)}` : ''}</option>
                         ))}
                       </select>
-                      <p className="text-[10px] uppercase tracking-wider text-zinc-500">Plantilla</p>
+                    </DealField>
+                    <DealField label="Plantilla">
                       <select className={select} value={templateIds[kind]} onChange={(e) => {
                         const id = e.target.value;
                         setTemplateIds((c) => ({ ...c, [kind]: id }));
@@ -189,82 +207,113 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
                         <option value="">Seleccionar</option>
                         {options.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
-                      <p className="text-[10px] uppercase tracking-wider text-zinc-500">Tipo de directorio</p>
+                    </DealField>
+                    <DealField label="Tipo de directorio">
                       <select className={select} value={directoryIds[kind]} onChange={(e) => setDirectoryIds((c) => ({ ...c, [kind]: e.target.value }))}>
                         <option value="">Seleccionar</option>
                         {options.directories.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
+                    </DealField>
+                  </div>
+                )}
+              </div>
+            ))}
+            <DealField label="Responsable">
+              <select className={select} value={responsibleId} onChange={(e) => setResponsibleId(e.target.value)}>
+                <option value="">Seleccionar</option>
+                {options.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </DealField>
+            <label className="flex items-start gap-2.5 rounded-xl border border-zinc-800 p-3 text-sm text-zinc-300 sm:border-0 sm:p-0 sm:text-xs">
+              <input type="checkbox" className="mt-0.5 h-5 w-5 sm:h-3.5 sm:w-3.5" checked={requirePhoto} onChange={(e) => setRequirePhoto(e.target.checked)} />
+              <span><span className="font-semibold">Requerir documento</span><br />Validación fotográfica de clientes</span>
+            </label>
+          </div>
+
+          <div className="min-w-0">
+            <p className="mb-2 text-sm font-semibold text-zinc-100">Firmantes</p>
+
+            {/* Celular: una tarjeta por firmante (la tabla no cabe a lo ancho). */}
+            <div className="space-y-2 sm:hidden">
+              {rows.map((r, i) => (
+                <div key={`${r.source}-${r.refId}`} className={`rounded-xl border p-3 ${r.checked ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-950/40'}`}>
+                  <label className="flex items-start gap-3">
+                    <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0" checked={r.checked} disabled={!!r.disabledReason} onChange={() => toggle(i)} />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-sm font-semibold ${r.checked ? 'text-zinc-100' : 'text-zinc-400'}`}>{r.name}</span>
+                      <span className="block text-xs text-zinc-500">{r.role}</span>
+                      {r.disabledReason && <span className="mt-0.5 block text-xs text-amber-400">{r.disabledReason}</span>}
+                    </span>
+                  </label>
+                  {r.checked && (
+                    <div className="mt-3 space-y-2 border-t border-zinc-800 pt-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs text-zinc-400">Secuencia</span>
+                        <Stepper value={r.iteration} onChange={(v) => patch(i, { iteration: v })} />
+                      </div>
+                      {kindsToSend.map((k) => (
+                        <DealField key={k} label={`Tipo de firmante · ${k}`}>
+                          <select className={select} value={r.typeSigns[k] ?? ''} onChange={(e) => patch(i, { typeSigns: { ...r.typeSigns, [k]: e.target.value } })}>
+                            <option value="">—</option>
+                            {signerTypesOf(k).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                          </select>
+                        </DealField>
+                      ))}
                     </div>
                   )}
                 </div>
               ))}
-              <div>
-                <p className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">Responsable</p>
-                <select className={select} value={responsibleId} onChange={(e) => setResponsibleId(e.target.value)}>
-                  <option value="">Seleccionar</option>
-                  {options.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
-              </div>
-              <label className="flex items-start gap-2 text-xs text-zinc-300">
-                <input type="checkbox" className="mt-0.5" checked={requirePhoto} onChange={(e) => setRequirePhoto(e.target.checked)} />
-                <span><span className="font-semibold">Requerir documento</span><br />Validación fotográfica de clientes</span>
-              </label>
             </div>
 
-            <div className="min-w-0">
-              <p className="mb-2 text-sm font-semibold text-zinc-100">Firmantes</p>
-              <div className="overflow-x-auto rounded-lg border border-zinc-800">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-zinc-950/60 text-[10px] uppercase tracking-wider text-zinc-500">
-                    <tr>
-                      <th className="px-2 py-2">#</th>
-                      <th className="px-2 py-2">Rol</th>
-                      <th className="px-2 py-2">Nombre</th>
-                      <th className="px-2 py-2">Secuencia</th>
-                      {kindsToSend.map((k) => <th key={k} className="px-2 py-2">Tipo · {k}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, i) => (
-                      <tr key={`${r.source}-${r.refId}`} className={`border-t border-zinc-800 ${r.checked ? 'text-zinc-100' : 'text-zinc-400'}`}>
-                        <td className="px-2 py-1.5"><input type="checkbox" checked={r.checked} disabled={!!r.disabledReason} title={r.disabledReason} onChange={() => toggle(i)} /></td>
-                        <td className="px-2 py-1.5">{r.role}</td>
-                        <td className="px-2 py-1.5">{r.name}{r.disabledReason && <span className="block text-[10px] text-amber-400">{r.disabledReason}</span>}</td>
-                        <td className="px-2 py-1.5">
-                          <input type="number" min={1} max={10} value={r.iteration} onChange={(e) => patch(i, { iteration: Math.max(1, Number(e.target.value) || 1) })} className="w-12 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-xs" />
+            {/* Computador: tabla como en SmartHome. */}
+            <div className="hidden overflow-x-auto rounded-lg border border-zinc-800 sm:block">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-zinc-950/60 text-[10px] uppercase tracking-wider text-zinc-500">
+                  <tr>
+                    <th className="px-2 py-2">#</th>
+                    <th className="px-2 py-2">Rol</th>
+                    <th className="px-2 py-2">Nombre</th>
+                    <th className="px-2 py-2">Secuencia</th>
+                    {kindsToSend.map((k) => <th key={k} className="px-2 py-2">Tipo · {k}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={`${r.source}-${r.refId}`} className={`border-t border-zinc-800 ${r.checked ? 'text-zinc-100' : 'text-zinc-400'}`}>
+                      <td className="px-2 py-1.5"><input type="checkbox" checked={r.checked} disabled={!!r.disabledReason} title={r.disabledReason} onChange={() => toggle(i)} /></td>
+                      <td className="px-2 py-1.5">{r.role}</td>
+                      <td className="px-2 py-1.5">{r.name}{r.disabledReason && <span className="block text-[10px] text-amber-400">{r.disabledReason}</span>}</td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" min={1} max={10} value={r.iteration} onChange={(e) => patch(i, { iteration: Math.max(1, Number(e.target.value) || 1) })} className="w-12 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-xs" />
+                      </td>
+                      {kindsToSend.map((k) => (
+                        <td key={k} className="px-2 py-1.5">
+                          <select className={`${select} min-w-[9rem]`} value={r.typeSigns[k] ?? ''} disabled={!r.checked} onChange={(e) => patch(i, { typeSigns: { ...r.typeSigns, [k]: e.target.value } })}>
+                            <option value="">—</option>
+                            {signerTypesOf(k).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                          </select>
                         </td>
-                        {kindsToSend.map((k) => (
-                          <td key={k} className="px-2 py-1.5">
-                            <select className={`${select} min-w-[9rem]`} value={r.typeSigns[k] ?? ''} disabled={!r.checked} onChange={(e) => patch(i, { typeSigns: { ...r.typeSigns, [k]: e.target.value } })}>
-                              <option value="">—</option>
-                              {signerTypesOf(k).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-                            </select>
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="border-t border-zinc-800 px-4 py-3">
-          {error && <p className="mb-2 rounded-md bg-red-950/60 px-3 py-2 text-xs text-red-200">{error}</p>}
-          {options && problems.length > 0 && <p className="mb-2 text-[11px] text-amber-300">{problems.join(' · ')}</p>}
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] text-zinc-500">Al enviar, el lote pasa a TRÁMITE mientras se firma.</p>
-            <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={onClose}>Cancelar</Button>
-              <Button size="sm" loading={sending} disabled={!options || problems.length > 0 || !kindsToSend.length} onClick={() => void send()}>
-                Enviar {kindsToSend.length === 2 ? 'preventa y promesa' : kindsToSend[0] ?? ''} a firma
-              </Button>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+      )}
+    </DealSheet>
+  );
+}
+
+/** − 1 + para la secuencia de firma (más fácil que un campo numérico en el celular). */
+function Stepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const btn = 'flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-700 text-lg text-zinc-200 disabled:opacity-40';
+  return (
+    <div className="flex items-center gap-2">
+      <button type="button" className={btn} disabled={value <= 1} onClick={() => onChange(Math.max(1, value - 1))} aria-label="Bajar secuencia">−</button>
+      <span className="w-6 text-center text-base font-semibold text-zinc-100">{value}</span>
+      <button type="button" className={btn} disabled={value >= 10} onClick={() => onChange(Math.min(10, value + 1))} aria-label="Subir secuencia">+</button>
+    </div>
   );
 }

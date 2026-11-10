@@ -33,6 +33,24 @@
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
   }
+
+  /* Negocios en celular: iOS hace zoom al tocar campos con letra menor a 16px. */
+  @media (max-width: 639px) {
+    .deal-touch input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+    .deal-touch select,
+    .deal-touch textarea {
+      font-size: 16px;
+    }
+    /* Fechas en iOS: sin el estilo nativo centrado que se sale del ancho del campo. */
+    .deal-touch input[type="date"] {
+      -webkit-appearance: none;
+      appearance: none;
+      min-height: 2.75rem;
+    }
+  }
+  .deal-touch input[type="date"]::-webkit-date-and-time-value {
+    text-align: left;
+  }
 }
 
 @layer utilities {

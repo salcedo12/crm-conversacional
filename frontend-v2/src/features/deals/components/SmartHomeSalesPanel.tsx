@@ -273,8 +273,8 @@ function SmartHomeSaleModal({ sale, companyId, isAdmin, onClose, onChanged }: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-950 shadow-2xl">
+    <div className="deal-touch fixed inset-0 z-50 flex items-stretch justify-center bg-black/75 sm:items-center sm:p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="h-[100dvh] w-full max-w-3xl overflow-y-auto overscroll-contain bg-zinc-950 pb-[var(--safe-bottom)] pt-[var(--safe-top)] shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-2xl sm:border sm:border-zinc-700 sm:pt-0">
         <header className="sticky top-0 z-10 flex items-start justify-between border-b border-zinc-800 bg-zinc-950/95 p-4 backdrop-blur">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-sky-400">Vendido en SmartHome</p>

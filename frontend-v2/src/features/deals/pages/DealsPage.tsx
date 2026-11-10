@@ -21,6 +21,7 @@ import {
   type DealStatus,
   type DealSummary,
 } from '../services/deals.service';
+import { referralName } from '../utils/paymentPlan';
 import { listSmartHomeSales, syncSmartHomeSalesNow, type InventoryOnlySale, type SmartHomeSale } from '../services/smarthomeSales.service';
 import { DealSignatureStatus } from '../components/DealSignatureStatus';
 import { DealDocumentPreview } from '../components/DealDocumentPreview';
@@ -231,7 +232,7 @@ export function DealsPage() {
   const realSales = scopedSales.filter((sale) => !sale.ignored).length;
 
   return (
-    <div className="h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
+    <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-5">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -249,20 +250,20 @@ export function DealsPage() {
             </p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => setCreatingDeal(true)} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>
-            <button onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+            <button onClick={() => setCreatingDeal(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>
+            <button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50">
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
             </button>
           </div>
         </header>
 
         {shEnabled && (
-          <nav className="inline-flex rounded-xl border border-zinc-800 bg-zinc-900/70 p-1 text-xs font-semibold">
-            <button onClick={() => setView('crm')} className={`rounded-lg px-4 py-2 transition ${view === 'crm' ? 'bg-emerald-500/15 text-emerald-300' : 'text-zinc-400 hover:text-zinc-200'}`}>
+          <nav className="flex w-full rounded-xl border border-zinc-800 bg-zinc-900/70 p-1 text-xs font-semibold sm:inline-flex sm:w-auto">
+            <button onClick={() => setView('crm')} className={`flex-1 rounded-lg px-3 py-2.5 transition sm:flex-none sm:px-4 sm:py-2 ${view === 'crm' ? 'bg-emerald-500/15 text-emerald-300' : 'text-zinc-400 hover:text-zinc-200'}`}>
               Negocios del CRM <span className="ml-1 text-zinc-500">{scopedDeals.length}</span>
             </button>
-            <button onClick={() => setView('smarthome')} className={`rounded-lg px-4 py-2 transition ${view === 'smarthome' ? 'bg-sky-500/15 text-sky-300' : 'text-zinc-400 hover:text-zinc-200'}`}>
+            <button onClick={() => setView('smarthome')} className={`flex-1 rounded-lg px-3 py-2.5 transition sm:flex-none sm:px-4 sm:py-2 ${view === 'smarthome' ? 'bg-sky-500/15 text-sky-300' : 'text-zinc-400 hover:text-zinc-200'}`}>
               Vendidos en SmartHome <span className="ml-1 text-zinc-500">{realSales}</span>
             </button>
           </nav>
@@ -293,20 +294,20 @@ export function DealsPage() {
           <Metric icon={BadgeDollarSign} label="Valor activo" value={money(totalValue)} />
         </section>
 
-        <section className="flex flex-wrap gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
-          <label className="relative min-w-[220px] flex-1">
+        <section className="grid grid-cols-1 gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:flex sm:flex-wrap">
+          <label className="relative sm:min-w-[220px] sm:flex-1">
             <Search size={15} className="absolute left-3 top-2.5 text-zinc-500" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar comprador, lote o asesor" className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-9 pr-3 text-xs text-zinc-100 outline-none focus:border-emerald-500/60" />
           </label>
           <label className="relative">
             <Filter size={14} className="absolute left-3 top-2.5 text-zinc-500" />
-            <select value={status} onChange={(e) => setStatus(e.target.value as 'all' | DealStatus)} className="h-9 rounded-lg border border-zinc-700 bg-zinc-950 pl-8 pr-8 text-xs text-zinc-300 outline-none">
+            <select value={status} onChange={(e) => setStatus(e.target.value as 'all' | DealStatus)} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-8 pr-8 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
               <option value="all">Todos los estados</option>
               {Object.entries(DEAL_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
           {isAdmin && (
-            <select value={advisor} onChange={(e) => setAdvisor(e.target.value)} className="h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none">
+            <select value={advisor} onChange={(e) => setAdvisor(e.target.value)} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
               <option value="all">Todos los asesores</option>
               {advisors.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
             </select>
@@ -342,7 +343,7 @@ export function DealsPage() {
                   <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
                     <SupportPill ok={stats.buyerDocs >= deal.buyers.length && deal.buyers.length > 0} label={`Cédulas ${stats.buyerDocs}/${deal.buyers.length}`} />
                     {Boolean(deal.plan?.benefit) && <SupportPill ok={stats.authorization} label="Autorización bono" />}
-                    {Boolean(deal.plan?.referredBy) && <SupportPill ok={stats.referral} label="Referido" />}
+                    {Boolean(referralName(deal.plan?.referredBy)) && <SupportPill ok={stats.referral} label="Referido" />}
                     {stats.separationPayments > 0 && <SupportPill ok={stats.paymentProofs >= stats.separationPayments} label={`Separaciones ${stats.paymentProofs}/${stats.separationPayments}`} />}
                     <span className="rounded-full border border-zinc-700 px-2 py-1 text-zinc-400"><Paperclip size={10} className="mr-1 inline" />{deal.attachments?.length ?? 0} soportes</span>
                   </div>
@@ -383,13 +384,13 @@ function ProjectSelection({ deals, sales, available, loading, error, onRefresh, 
   onSelect: (project: ProjectCatalogItem) => void;
 }) {
   return (
-    <div className="h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
+    <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div><div className="flex items-center gap-2"><Building2 className="text-emerald-400" size={25} /><h1 className="text-2xl font-extrabold text-zinc-100">Negocios por proyecto</h1></div><p className="mt-1 text-sm text-zinc-500">Selecciona un proyecto para consultar sus compradores, lotes, documentos y soportes.</p></div>
-          <div className="flex gap-2">
-            <button onClick={onNewDeal} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>
-            <button onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar</button>
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+            <button onClick={onNewDeal} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>
+            <button onClick={onRefresh} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar</button>
           </div>
         </header>
         {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
@@ -439,7 +440,7 @@ function LagunaSectorSelection({ deals, sales, onBack, onSelect }: { deals: Deal
     ...LAGUNA_SECTORS,
   ];
   return (
-    <div className="h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
+    <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <header className="flex items-start gap-3"><button onClick={onBack} className="mt-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button><div><p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Laguna Mar</p><h1 className="text-2xl font-extrabold text-zinc-100">Selecciona el sector</h1><p className="mt-1 text-sm text-zinc-500">Consulta todos los negocios o entra directamente a Mar Santorini o Mar Canarias.</p></div></header>
         <section className="grid gap-4 md:grid-cols-3">
@@ -457,9 +458,9 @@ function LagunaSectorSelection({ deals, sales, onBack, onSelect }: { deals: Deal
 
 function ProjectHero({ src, name, accent }: { src: string; name: string; accent: string }) {
   return (
-    <div className={`relative flex h-60 items-center justify-center overflow-hidden bg-gradient-to-br ${accent}`}>
+    <div className={`relative flex h-44 items-center sm:h-60 justify-center overflow-hidden bg-gradient-to-br ${accent}`}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.16),transparent_55%)]" />
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-52 w-52 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/10" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 sm:h-52 sm:w-52 -translate-y-1/2 rounded-full border border-white/10" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/80 to-transparent" />
       <div className="relative transition duration-500 group-hover:scale-105"><ProjectLogo src={src} name={name} /></div>
     </div>
@@ -470,7 +471,7 @@ function ProjectLogo({ src, name, compact = false }: { src: string; name: string
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
   if (!src || failed) return <div className={`${compact ? 'h-10 w-10 text-[8px]' : 'h-28 w-64 text-xl'} flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 text-center font-black uppercase tracking-wide text-white/80`}>{compact ? name.slice(0, 2) : name}</div>;
-  return <img src={src} alt={`Logo ${name}`} onError={() => setFailed(true)} className={compact ? 'h-11 w-11 object-contain drop-shadow-md' : 'h-44 w-44 object-contain drop-shadow-[0_12px_28px_rgba(0,0,0,0.55)]'} />;
+  return <img src={src} alt={`Logo ${name}`} onError={() => setFailed(true)} className={compact ? 'h-11 w-11 object-contain drop-shadow-md' : 'h-32 w-32 object-contain sm:h-44 sm:w-44 drop-shadow-[0_12px_28px_rgba(0,0,0,0.55)]'} />;
 }
 
 function ProjectStat({ label, value, small = false }: { label: string; value: string; small?: boolean }) {
@@ -554,16 +555,16 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="deal-touch fixed inset-0 z-50 flex items-stretch justify-center bg-black/75 sm:items-center sm:p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       {preview && <DealDocumentPreview title={preview.title} pdf={preview.pdf} onDownloadWord={isAdmin ? () => downloadDealDocument(companyId, deal.id, preview.kind, preview.version) : undefined} onClose={() => setPreview(null)} />}
-      <div className="max-h-[94vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-950 shadow-2xl">
-        <header className="sticky top-0 z-10 flex items-start justify-between border-b border-zinc-800 bg-zinc-950/95 p-4 backdrop-blur">
+      <div className="h-[100dvh] w-full max-w-5xl overflow-y-auto overscroll-contain bg-zinc-950 pb-[var(--safe-bottom)] shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-2xl sm:border sm:border-zinc-700">
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-zinc-800 bg-zinc-950/95 px-4 pb-3 pt-[max(0.75rem,var(--safe-top))] backdrop-blur sm:p-4">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">{projectName(deal.lot?.projectId)}</p>
-            <h2 className="mt-0.5 text-xl font-extrabold text-zinc-100">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Sin lote seleccionado'}</h2>
+            <h2 className="mt-0.5 text-lg font-extrabold text-zinc-100 sm:text-xl">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Sin lote seleccionado'}</h2>
             <p className="mt-1 truncate text-xs text-zinc-500">{deal.buyerNames?.join(', ') || deal.leadName} · {deal.advisorName}</p>
           </div>
-          <button onClick={onClose} className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><X size={18} /></button>
+          <button onClick={onClose} aria-label="Cerrar" className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 sm:mr-0 sm:h-9 sm:w-9"><X size={18} /></button>
         </header>
 
         <div className="grid gap-5 p-4 lg:grid-cols-[0.9fr_1.4fr]">
@@ -574,7 +575,7 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
                 <p><strong className="text-zinc-200">Estado:</strong> {DEAL_STATUS_LABELS[deal.status]}</p>
                 <p><strong className="text-zinc-200">Valor:</strong> {deal.plan ? money(deal.plan.landValue) : 'Sin plan'}</p>
                 <p><strong className="text-zinc-200">Bono/descuento:</strong> {deal.plan?.benefit ? money(deal.plan.benefit) : 'No aplica'}</p>
-                <p><strong className="text-zinc-200">Referido por:</strong> {deal.plan?.referredBy || 'No aplica'}</p>
+                <p><strong className="text-zinc-200">Referido por:</strong> {referralName(deal.plan?.referredBy) || 'No aplica'}</p>
                 <p><strong className="text-zinc-200">Documentos generados:</strong> {deal.documents?.length ?? 0}</p>
               </div>
             </section>
@@ -584,7 +585,7 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
               <div className="mt-3 space-y-2">
                 <Checklist ok={stats.buyerDocs >= deal.buyers.length && deal.buyers.length > 0} text={`Documentos compradores: ${stats.buyerDocs}/${deal.buyers.length}`} />
                 {Boolean(deal.plan?.benefit) && <Checklist ok={stats.authorization} text="Autorización de bono/descuento" />}
-                {Boolean(deal.plan?.referredBy) && <Checklist ok={stats.referral} text="Evidencia del referido" />}
+                {Boolean(referralName(deal.plan?.referredBy)) && <Checklist ok={stats.referral} text="Evidencia del referido" />}
                 {stats.separationPayments > 0 && <Checklist ok={stats.paymentProofs >= stats.separationPayments} text={`Soportes de separación: ${stats.paymentProofs}/${stats.separationPayments}`} />}
               </div>
             </section>
@@ -615,13 +616,13 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
               {!deal.documents?.length && <div className="mt-3 rounded-xl border border-dashed border-zinc-800 py-8 text-center text-xs text-zinc-500"><FileText size={22} className="mx-auto mb-2" />Aún no se han generado contratos ni promesas.</div>}
               <div className="mt-3 space-y-2">
                 {[...(deal.documents ?? [])].reverse().map((document) => (
-                  <div key={`${document.kind}-${document.version}`} className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                  <div key={`${document.kind}-${document.version}`} className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-zinc-100">{document.kind === 'preventa' ? 'Contrato de preventa' : 'Promesa de compraventa'} · v{document.version}</p>
                       <p className="mt-1 text-[10px] text-zinc-500">Generado: {dateTime(document.generatedAt)} · Estado: {document.signatureStatus || 'generado'}</p>
                       <p className="mt-1 truncate text-[10px] font-medium text-emerald-400">{projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}</p>
                     </div>
-                    <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                    <div className="flex shrink-0 flex-wrap gap-1.5 sm:justify-end">
                       {document.signatureStatus === 'firmado' && document.signedPdfStoragePath && (
                         <button onClick={() => void handleView(document.kind, document.version, true)} disabled={!!downloadingDocument}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/50 bg-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50">

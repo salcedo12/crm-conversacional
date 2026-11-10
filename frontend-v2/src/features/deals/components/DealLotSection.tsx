@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2, MapPin } from 'lucide-react';
 import { DealLotPickerModal } from './DealLotPickerModal';
+import { dealActionCls } from './DealSheet';
 import {
   formatArea,
   getDealLotStatus,
@@ -63,10 +64,10 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
   return (
     <div className="mt-2">
       {lot ? (
-        <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
-          <p className="flex items-center gap-1.5 text-xs text-zinc-200">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 sm:rounded-md sm:px-2.5 sm:py-2">
+          <p className="flex items-center gap-1.5 text-sm text-zinc-200 sm:text-xs">
             <MapPin size={12} className="shrink-0 text-emerald-400" />
-            <span className="truncate">
+            <span className="min-w-0 sm:truncate">
               {lot.sector} · Lote {lot.lotNumber} · {formatArea(lot.areaM2)}{lot.corner ? ' · Esquinero' : ''}
             </span>
           </p>
@@ -84,13 +85,13 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
             </p>
           )}
           {editable && (
-            <div className="mt-1.5 flex flex-wrap gap-3">
+            <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-1.5 sm:gap-3">
               {state?.state === 'vencido' && (
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() => run(() => reserveDealLot(companyId, deal.id, lot.inventoryLotId))}
-                  className="text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                  className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
                 >
                   Volver a apartar
                 </button>
@@ -99,7 +100,7 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
                 type="button"
                 disabled={busy}
                 onClick={() => setPicking(true)}
-                className="text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
               >
                 Cambiar lote
               </button>
@@ -107,7 +108,7 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
                 type="button"
                 disabled={busy}
                 onClick={() => run(() => releaseDealLot(companyId, deal.id))}
-                className="text-[11px] text-zinc-500 hover:text-zinc-300 disabled:opacity-50"
+                className={`${dealActionCls} font-normal text-zinc-500 hover:text-zinc-300`}
               >
                 Liberar
               </button>
@@ -119,7 +120,7 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
         <button
           type="button"
           onClick={() => setPicking(true)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 hover:text-emerald-200"
+          className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 sm:inline-flex sm:min-h-0 sm:w-auto sm:justify-start sm:border-0 sm:bg-transparent sm:px-0 sm:text-[11px] sm:font-medium sm:hover:bg-transparent sm:hover:text-emerald-200"
         >
           <MapPin size={12} /> Escoger lote
         </button>

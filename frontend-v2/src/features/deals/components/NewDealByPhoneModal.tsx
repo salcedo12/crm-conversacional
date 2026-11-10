@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Loader2, Phone, Search, X } from 'lucide-react';
+import { Loader2, Phone, Search } from 'lucide-react';
 import { checkPhoneAvailability, type PhoneAvailabilityResult } from '@/features/inbox/services/contacts.service';
 import { useLeadById } from '@/features/inbox/hooks/useLeadById';
 import { LeadDealsPanel } from './LeadDealsPanel';
+import { DealSheet, dealInputCls } from './DealSheet';
 
 /**
  * "Nuevo negocio" desde la pantalla de Negocios: se busca el lead por celular y ahí mismo
@@ -49,41 +49,34 @@ export function NewDealByPhoneModal({ companyId, onClose, onChanged }: {
     return null;
   })();
 
-  return createPortal(
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
-      <div className="flex max-h-[94vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-950 shadow-2xl">
-        <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-          <p className="flex items-center gap-2 text-sm font-bold text-zinc-100"><Phone size={15} className="text-emerald-400" /> Nuevo negocio</p>
-          <button type="button" onClick={close} aria-label="Cerrar" className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"><X size={18} /></button>
-        </header>
-        <div className="space-y-3 overflow-y-auto p-4">
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void search(); }}>
-            <input
-              autoFocus
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Celular del cliente (ej. 300 123 4567)"
-              inputMode="tel"
-              className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
-            />
-            <button type="submit" disabled={searching || phone.replace(/\D/g, '').length < 10}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50">
-              {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} Buscar
-            </button>
-          </form>
-          {error && <p className="rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-200">{error}</p>}
-          {notice && <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{notice}</p>}
-          {result?.leadId && loading && <p className="flex items-center gap-2 text-xs text-zinc-400"><Loader2 size={13} className="animate-spin" /> Cargando el lead…</p>}
-          {lead && (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
-              <p className="text-sm font-bold text-zinc-100">{lead.name || 'Sin nombre'}</p>
-              <p className="mb-3 text-[11px] text-zinc-500">{lead.phone}{result?.advisorName ? ` · Asesor: ${result.advisorName}` : ''}</p>
-              <LeadDealsPanel companyId={companyId} lead={lead} />
-            </div>
-          )}
+  return (
+    <DealSheet title="Nuevo negocio" subtitle="Busca al cliente por su celular para crear y armar su negocio." icon={<Phone size={18} />} onClose={close} width="md" layer="base" bodyClassName="space-y-3">
+      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void search(); }}>
+        <input
+          autoFocus
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="Celular (ej. 300 123 4567)"
+          inputMode="tel"
+          type="tel"
+          enterKeyHint="search"
+          className={`${dealInputCls} flex-1 sm:text-sm`}
+        />
+        <button type="submit" disabled={searching || phone.replace(/\D/g, '').length < 10}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50 sm:px-3 sm:text-xs">
+          {searching ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />} Buscar
+        </button>
+      </form>
+      {error && <p className="rounded-lg bg-red-950/60 px-3 py-2 text-sm text-red-200 sm:text-xs">{error}</p>}
+      {notice && <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 sm:text-xs">{notice}</p>}
+      {result?.leadId && loading && <p className="flex items-center gap-2 text-sm text-zinc-400 sm:text-xs"><Loader2 size={14} className="animate-spin" /> Cargando el lead…</p>}
+      {lead && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+          <p className="text-base font-bold text-zinc-100 sm:text-sm">{lead.name || 'Sin nombre'}</p>
+          <p className="mb-3 text-xs text-zinc-500 sm:text-[11px]">{lead.phone}{result?.advisorName ? ` · Asesor: ${result.advisorName}` : ''}</p>
+          <LeadDealsPanel companyId={companyId} lead={lead} />
         </div>
-      </div>
-    </div>,
-    document.body,
+      )}
+    </DealSheet>
   );
 }

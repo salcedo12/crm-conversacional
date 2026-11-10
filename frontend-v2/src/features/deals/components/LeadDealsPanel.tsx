@@ -7,6 +7,7 @@ import { DealBuyersModal } from './DealBuyersModal';
 import { DealLotSection } from './DealLotSection';
 import { DealPlanModal } from './DealPlanModal';
 import { DealDocumentsSection } from './DealDocumentsSection';
+import { dealActionCls } from './DealSheet';
 import { formatPesos, summarizePlan } from '../utils/paymentPlan';
 import {
   cancelDeal,
@@ -104,7 +105,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
             : deal.buyerProfiles.map((b) => `${b.firstNames} ${b.lastNames}`.trim());
           const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
           return (
-            <div key={deal.id} className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
+            <div key={deal.id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-3 sm:rounded-lg sm:py-2.5">
               <div className="flex items-center justify-between gap-2">
                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[deal.status]}`}>
                   {DEAL_STATUS_LABELS[deal.status]}
@@ -113,7 +114,8 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
                   <span className="text-[10px] text-zinc-600">{new Date(deal.createdAt).toLocaleDateString('es-CO')}</span>
                 )}
               </div>
-              <p className="mt-2 text-xs text-zinc-300">
+              {deal.status !== 'anulado' && <DealSteps deal={deal} />}
+              <p className="mt-2 text-sm text-zinc-200 sm:text-xs sm:text-zinc-300">
                 {names.length ? names.join(' · ') : <span className="text-amber-300/90">Faltan los compradores</span>}
               </p>
               {deal.status === 'anulado' && deal.cancelReason && (
@@ -143,21 +145,21 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
                     placeholder="Motivo para anular este negocio"
                     rows={2}
                     autoFocus
-                    className="w-full resize-none rounded-md border border-zinc-700 bg-zinc-800/90 px-2.5 py-1.5 text-xs text-zinc-100 outline-none focus:border-red-400"
+                    className="w-full resize-none rounded-lg border border-zinc-700 bg-zinc-800/90 px-3 py-2 text-base text-zinc-100 outline-none focus:border-red-400 sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-xs"
                   />
                   <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => handleCancel(deal)}
                       disabled={cancelBusy || cancelReason.trim().length < 3}
-                      className="inline-flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-[11px] font-semibold text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                      className="inline-flex min-h-[40px] items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-300 hover:bg-red-500/20 disabled:opacity-50 sm:min-h-0 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                     >
                       {cancelBusy && <Loader2 size={11} className="animate-spin" />} Confirmar anulación
                     </button>
                     <button
                       type="button"
                       onClick={() => { setCancelingId(null); setCancelReason(''); }}
-                      className="px-2 text-[11px] text-zinc-500 hover:text-zinc-300"
+                      className="min-h-[40px] px-3 text-xs text-zinc-500 hover:text-zinc-300 sm:min-h-0 sm:px-2 sm:text-[11px]"
                     >
                       Volver
                     </button>
@@ -165,22 +167,22 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
                 </div>
               )}
               {!readOnly && deal.status !== 'anulado' && cancelingId !== deal.id && (
-                <div className="mt-2 flex gap-3">
+                <div className="mt-3 flex flex-wrap gap-2 sm:mt-2 sm:gap-3">
                   {editable && (
                     <button
                       type="button"
                       onClick={() => setEditing(deal)}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 hover:text-emerald-200"
+                      className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
                     >
-                      <Users size={12} /> {deal.buyers.length ? 'Editar compradores' : 'Registrar compradores'}
+                      <Users size={13} /> {deal.buyers.length ? 'Editar compradores' : 'Registrar compradores'}
                     </button>
                   )}
                   <button
                     type="button"
                     onClick={() => { setCancelingId(deal.id); setCancelReason(''); }}
-                    className="inline-flex items-center gap-1 text-[11px] text-zinc-500 hover:text-red-300"
+                    className={`${dealActionCls} font-normal text-zinc-500 hover:text-red-300`}
                   >
-                    <Ban size={12} /> Anular
+                    <Ban size={13} /> Anular
                   </button>
                 </div>
               )}
@@ -194,7 +196,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
           type="button"
           onClick={handleCreate}
           disabled={creating}
-          className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+          className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 sm:inline-flex sm:min-h-0 sm:w-auto sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-[11px]"
         >
           {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Crear negocio
         </button>
@@ -242,10 +244,45 @@ function DealPlanLine({ deal, editable, onEdit }: { deal: DealSummary; editable:
         <span className="text-[11px] text-zinc-500">Falta el plan de negocio.</span>
       )}
       {editable && (
-        <button type="button" onClick={onEdit} className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 hover:text-emerald-200">
+        <button type="button" onClick={onEdit} className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}>
           <Calculator size={12} /> {plan ? 'Editar plan' : 'Armar plan'}
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Avance del negocio en 5 pasos, para que el asesor vea de un vistazo qué falta.
+ * (Misma idea que tendrá la app móvil.)
+ */
+function DealSteps({ deal }: { deal: DealSummary }) {
+  const plan = deal.plan;
+  const planOk = !!plan && plan.lotId === deal.lot?.inventoryLotId;
+  const docs = deal.documents ?? [];
+  const signed = deal.status === 'preventa_firmada' || deal.status === 'promesa_en_firma' || deal.status === 'promesa_firmada';
+  const signing = deal.status === 'preventa_en_firma';
+  const steps: Array<{ label: string; short?: string; done: boolean; current?: boolean }> = [
+    { label: 'Compradores', short: 'Clientes', done: deal.buyers.length > 0 },
+    { label: 'Lote', done: !!deal.lot },
+    { label: 'Plan', done: planOk },
+    { label: 'Preventa', done: docs.some((d) => d.kind === 'preventa') },
+    { label: 'Firma', done: signed, current: signing },
+  ];
+  const next = steps.findIndex((s) => !s.done);
+  return (
+    <ol className="mt-2.5 grid grid-cols-5 gap-1" aria-label="Avance del negocio">
+      {steps.map((s, i) => {
+        const active = i === next;
+        return (
+          <li key={s.label} className="min-w-0">
+            <div className={`h-1 rounded-full ${s.done ? 'bg-emerald-400' : active || s.current ? 'bg-amber-400/70' : 'bg-zinc-800'}`} />
+            <p className={`mt-1 truncate text-[10px] ${s.done ? 'text-emerald-300' : active ? 'font-semibold text-amber-300' : 'text-zinc-600'}`}>
+              {s.short ? <><span className="min-[400px]:hidden">{s.short}</span><span className="hidden min-[400px]:inline">{s.label}</span></> : s.label}
+            </p>
+          </li>
+        );
+      })}
+    </ol>
   );
 }

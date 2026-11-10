@@ -10,6 +10,7 @@ import {
   type SignatureStatus,
 } from '../services/deals.service';
 import { SendToSignatureModal } from './SendToSignatureModal';
+import { dealActionCls } from './DealSheet';
 
 const LABELS: Record<DealDocumentKind, string> = { preventa: 'Preventa', promesa: 'Promesa' };
 
@@ -64,7 +65,7 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
   };
 
   return (
-    <div className="mt-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
+    <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 sm:rounded-md sm:px-2.5 sm:py-2">
       <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
         <PenLine size={11} /> Firma digital
       </p>
@@ -81,7 +82,7 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
             {sig && (
               <ul className="mt-1 space-y-0.5">
                 {[...sig.signers].sort((a, b) => a.iteration - b.iteration).map((s) => (
-                  <li key={`${s.source}-${s.refId}`} className="flex items-center justify-between gap-2 text-[11px]">
+                  <li key={`${s.source}-${s.refId}`} className="flex min-h-[36px] items-center justify-between gap-2 text-xs sm:min-h-0 sm:text-[11px]">
                     <span className={`flex min-w-0 items-center gap-1 ${s.signed ? 'text-emerald-300' : 'text-zinc-400'}`}>
                       {s.signed ? <CheckCircle2 size={11} /> : <Clock size={11} />}
                       <span className="truncate">{s.name}</span>
@@ -89,7 +90,7 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
                     </span>
                     {canManage && !s.signed && pending(doc.signatureStatus) && s.docublockSignerId && (
                       <button type="button" disabled={!!busy} onClick={() => run(`re-${doc.kind}-${s.refId}`, () => resendDealSignature(companyId, deal.id, doc.kind, s.docublockSignerId!), `Invitación reenviada a ${s.name}`)}
-                        className="inline-flex shrink-0 items-center gap-1 text-emerald-300 hover:text-emerald-200 disabled:opacity-50">
+                        className={`${dealActionCls} shrink-0 text-emerald-300 hover:text-emerald-200`}>
                         {busy === `re-${doc.kind}-${s.refId}` ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />} Reenviar
                       </button>
                     )}
@@ -101,9 +102,9 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
               <p className="mt-1 text-[10px] text-zinc-500">Vence {new Date(sig.expiresAt).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' })}</p>
             )}
             {sig?.lastError && <p className="mt-1 text-[10px] text-amber-300">Última consulta: {sig.lastError}</p>}
-            <div className="mt-1 flex flex-wrap gap-3">
+            <div className="mt-1.5 flex flex-wrap gap-2 sm:mt-1 sm:gap-3">
               {doc.signatureStatus === 'firmado' && doc.signedPdfStoragePath && (
-                <button type="button" disabled={!!busy} onClick={() => run(`see-${doc.kind}`, () => onViewSigned(doc))} className="inline-flex items-center gap-1 text-[11px] text-emerald-300 hover:text-emerald-200 disabled:opacity-50">
+                <button type="button" disabled={!!busy} onClick={() => run(`see-${doc.kind}`, () => onViewSigned(doc))} className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}>
                   {busy === `see-${doc.kind}` ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Ver firmado
                 </button>
               )}
@@ -111,7 +112,7 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
                 <button type="button" disabled={!!busy} onClick={() => {
                   const reason = window.prompt(`¿Por qué se anuló la firma de la ${doc.kind}? (anúlala también en el panel de DocuBlock)`);
                   if (reason && reason.trim().length >= 3) void run(`cancel-${doc.kind}`, () => markDealSignatureCancelled(companyId, deal.id, doc.kind, reason.trim()));
-                }} className="inline-flex items-center gap-1 text-[11px] text-zinc-500 hover:text-red-300 disabled:opacity-50">
+                }} className={`${dealActionCls} font-normal text-zinc-500 hover:text-red-300`}>
                   <Ban size={11} /> Marcar anulada
                 </button>
               )}
@@ -120,14 +121,14 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
         );
       })}
 
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-2 sm:gap-3">
         {canSend && (
-          <button type="button" disabled={!!busy} onClick={() => setSending(true)} className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50">
+          <button type="button" disabled={!!busy} onClick={() => setSending(true)} className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}>
             <PenLine size={12} /> {sent.length ? 'Enviar a firma de nuevo' : 'Enviar a firma'}
           </button>
         )}
         {sent.some((d) => pending(d.signatureStatus)) && (
-          <button type="button" disabled={!!busy} onClick={() => run('refresh', () => refreshDealSignature(companyId, deal.id))} className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 disabled:opacity-50">
+          <button type="button" disabled={!!busy} onClick={() => run('refresh', () => refreshDealSignature(companyId, deal.id))} className={`${dealActionCls} font-normal text-zinc-400 hover:text-zinc-200`}>
             {busy === 'refresh' ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Actualizar estado
           </button>
         )}
