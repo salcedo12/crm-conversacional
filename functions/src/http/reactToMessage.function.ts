@@ -26,7 +26,7 @@ const ReactSchema = z.object({
  * Solo se puede reaccionar a mensajes ENTRANTES del lead por WhatsApp.
  */
 export const reactToMessage = onCall(
-  { region: 'us-central1', timeoutSeconds: 30, memory: '256MiB' },
+  { region: 'us-central1', timeoutSeconds: 30, memory: '512MiB' },
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, WRITE_ROLES);

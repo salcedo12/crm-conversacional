@@ -13,6 +13,7 @@ import {
   mapYcloudStatus, ycloudHeaderType, buildYcloudCreateComponents,
 } from '../modules/templates/templates.helpers';
 import { sendTemplateToLead } from '../modules/messages/templateSender.service';
+import { pauseAiForAdvisorMessage } from '../modules/ai/aiRollout';
 import { requireAuth, requireRole, assertCompany, ADMIN_ROLES, WRITE_ROLES } from '../lib/authContext';
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -340,6 +341,9 @@ export const sendTemplateMessage = onCall(
         variables: variables as Record<string, string>,
         advisorId: ctx.uid,
         fromInboxId,
+      });
+      await pauseAiForAdvisorMessage(companyId, lead, ctx.uid).catch((err) => {
+        logger.warn('[Templates] No se pudo pausar la IA tras la plantilla del asesor', { leadId, err: String(err) });
       });
       return { messageId };
     } catch (err) {

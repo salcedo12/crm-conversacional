@@ -48,6 +48,7 @@ const SOURCE_BADGES: Record<LeadSource, { icon: string; label: string }> = {
   instagram: { icon: '📷', label: 'Instagram' },
   meta_ads:  { icon: '📣', label: 'Anuncio'   },
   advisor_whatsapp: { icon: '👤', label: 'WhatsApp asesor' },
+  google_ads: { icon: '🔍', label: 'Google Ads' },
 };
 
 /** Etiqueta corta de una fuente para los filtros (sin depender de un lead). */

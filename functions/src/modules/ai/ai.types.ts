@@ -1,8 +1,9 @@
 import { Timestamp } from 'firebase-admin/firestore';
 
 export interface FollowUpStep {
-  delayMinutes: number;  // e.g. 20, 240 (4h), 1440 (24h)
-  enabled:      boolean;
+  delayMinutes:  number;  // e.g. 20, 240 (4h), 1440 (24h), 4320 (3d), 11520 (8d)
+  enabled:       boolean;
+  templateName?: string;  // Nombre de la plantilla de WhatsApp aprobada por Meta
 }
 
 export interface AiConfig {
@@ -26,5 +27,33 @@ export interface AiConfig {
    *  - 'proactive'  → ofrece la cotización apenas el cliente elige un terreno.
    */
   quoteMode:           'off' | 'on_request' | 'proactive';
+  /** 'consultive' activa las reglas comerciales, plazos 20/30/40 y el modelo nuevo. */
+  agentProfile?:       'legacy' | 'consultive';
+  /** Modelo de OpenAI. El perfil consultivo usa gpt-5.6-luna si no se indica. */
+  model?:              string;
+  maxCompletionTokens?: number;
+  /** Nota de voz de bienvenida y respuesta en audio cuando el lead envía audio. */
+  voiceEnabled?:       boolean;
+  /** Cotizar aldeas de Sobre Montañas (requiere la página de cotización corregida). */
+  sobreMontanasQuotes?: boolean;
+  /** Precio "desde" (de contado) que la IA menciona ante preguntas generales de precio. */
+  advertisedPrice?:    number;
+  /** Bono que trae toda cotización (COP). Si falta, se usa COTIZADOR_BONO_BASE. */
+  quoteBonusBase?:     number;
+  /** Tope del bono que el cliente dice haber ganado en el juego (COP). */
+  quoteBonusMax?:      number;
+  /** Respuesta a "¿cuánto valen?" (como los asesores). Campos vacíos no se mencionan. */
+  priceReference?:     number;   // precio promedio de referencia
+  priceReferenceArea?: number;   // m² a los que corresponde ese promedio
+  priceWithBonusFrom?: number;   // lo más bajo que queda con los bonos del mes
+  bonusRangeMin?:      number;   // bono mínimo del mes
+  separationAmount?:   number;   // valor de separación
+  paymentPlanExample?: string;   // ejemplo de plan de pagos (se dice tal cual)
+  /** Piloto: si existe, la IA solo atiende a estos leads (ver isLeadInAiRollout). */
+  rollout?: {
+    testPhones?: string[];
+    startAt?:    Timestamp;
+    sources?:    string[];
+  };
   updatedAt:           Timestamp;
 }

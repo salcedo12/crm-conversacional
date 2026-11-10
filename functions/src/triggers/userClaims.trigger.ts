@@ -1,7 +1,7 @@
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { getAuth }           from 'firebase-admin/auth';
 import { logger }            from '../utils/logger';
-import '../lib/admin'; // garantiza que la app de firebase-admin esté inicializada
+import { db }                from '../lib/admin';
 
 /**
  * Sincroniza los custom claims del usuario de Firebase Auth con su doc de perfil.
@@ -23,11 +23,33 @@ export const onUserProfileWritten = onDocumentWritten(
     const auth  = getAuth();
 
     try {
-      // Doc eliminado → revocar acceso limpiando claims
+      // Doc eliminado → verificar si el usuario tiene perfil en grupo_meraki_real
       if (!after?.exists) {
+        const realDoc = await db.collection('companies').doc('grupo_meraki_real').collection('users').doc(userId).get();
+        if (realDoc.exists) {
+          const rData = realDoc.data() ?? {};
+          const rawRole = typeof rData.role === 'string' ? rData.role : 'advisor';
+          const platformAdmin = rData.platformAdmin === true || rData.platformAdmin === 'true' || rawRole === 'platformAdmin';
+          const role = rawRole === 'platformAdmin' ? 'admin' : rawRole;
+          const active = rData.active !== false;
+          await auth.setCustomUserClaims(userId, { companyId: 'grupo_meraki_real', role, active, platformAdmin });
+          logger.info('[UserClaims] Claims preservados en grupo_meraki_real tras borrado en doc secundario', { userId, companyId });
+          return;
+        }
+
         await auth.setCustomUserClaims(userId, null);
         logger.info('[UserClaims] Claims limpiados', { userId, companyId });
         return;
+      }
+
+      // Si el doc escrito es de empresa_demo, solo permitirlo para google.tester
+      if (companyId === 'empresa_demo') {
+        const userRec = await auth.getUser(userId).catch(() => null);
+        const email = userRec?.email?.toLowerCase() ?? '';
+        if (!email.includes('google.tester')) {
+          logger.warn('[UserClaims] Bloqueado claim empresa_demo para usuario no-tester', { userId, email });
+          return;
+        }
       }
 
       const data   = after.data() ?? {};

@@ -121,6 +121,20 @@ export function FollowUpSequenceEditor({ steps, onChange }: FollowUpSequenceEdit
               <span className="text-xs text-zinc-500">sin respuesta</span>
             </div>
 
+            {/* Plantilla de WhatsApp */}
+            <div className="flex flex-col gap-1">
+              <input
+                type="text"
+                value={step.templateName ?? ''}
+                onChange={(e) => updateStep(index, { templateName: e.target.value.trim() || undefined })}
+                placeholder="Nombre de la plantilla aprobada (ej. seguimiento_inicial_prospecto)"
+                className="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-2.5 py-2 font-mono text-xs text-zinc-100 focus:outline-none focus:border-violet-500/50 transition-colors"
+              />
+              <span className="text-[10px] text-zinc-500">
+                Plantilla aprobada por Meta. Vacío: en los 3 primeros pasos se usa la plantilla por defecto si existe; si no, la IA redacta el mensaje, y eso solo funciona dentro de las 24 h del último mensaje del cliente.
+              </span>
+            </div>
+
             {/* Checkbox: permitir que IA envíe */}
             <label className="flex items-center gap-2 cursor-pointer group">
               <input

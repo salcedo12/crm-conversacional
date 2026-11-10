@@ -8,20 +8,22 @@
 import { Mp3Encoder } from '@breezystack/lamejs';
 
 export async function convertBlobToMp3(audioBlob: Blob): Promise<Blob> {
-  // Si ya es un formato compatible con WhatsApp, devolver tal cual
+  // Si ya es un formato compatible con WhatsApp (incluyendo OGG Opus), devolver tal cual
   const type = audioBlob.type;
   if (
     type.startsWith('audio/mpeg') ||
     type.startsWith('audio/mp4')  ||
     type.startsWith('audio/aac')  ||
-    type.startsWith('audio/amr')
+    type.startsWith('audio/amr')  ||
+    type.startsWith('audio/ogg')
   ) {
     return audioBlob;
   }
 
   // 1. Decodificar el audio a PCM usando Web Audio API
   const arrayBuffer  = await audioBlob.arrayBuffer();
-  const audioContext = new AudioContext();
+  const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const audioContext = new AudioCtxClass();
   let audioBuffer: AudioBuffer;
 
   try {

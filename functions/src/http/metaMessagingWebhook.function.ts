@@ -296,6 +296,7 @@ async function processInboundMessage(channel: LeadChannel, event: MetaMessagingE
     ...(mediaKind        && { mediaKind }),
     ...(mediaStoragePath && { mediaStoragePath }),
     createdAt:        now,
+    ...(refMeta ? { metadata: { referral: refMeta } } : {}),
   });
 
   // Actualizar lead
@@ -365,10 +366,23 @@ async function fetchInstagramProfileName(igsid: string): Promise<string | undefi
 function resolveMetaAdReferral(referral?: MetaReferral): LeadSourceMeta | undefined {
   if (!referral?.ad_id) return undefined;
   const title = referral.ads_context_data?.ad_title;
+  const photo = referral.ads_context_data?.photo_url;
+  const rawVideo = referral.ads_context_data?.video_url?.trim();
+  const isWebLink = rawVideo && (
+    rawVideo.includes('facebook.com/story.php') ||
+    rawVideo.includes('facebook.com/watch') ||
+    rawVideo.includes('facebook.com/posts') ||
+    rawVideo.includes('fb.me/')
+  );
+  const playableVideoUrl = rawVideo && !isWebLink ? rawVideo : undefined;
+  const fallbackSourceUrl = isWebLink ? rawVideo : undefined;
+
   return {
     adId: referral.ad_id,
     ...(title ? { headline: title } : {}),
-    ...(referral.ref ? { sourceUrl: referral.ref } : {}),
+    ...((referral.ref || fallbackSourceUrl) ? { sourceUrl: referral.ref || fallbackSourceUrl } : {}),
+    ...(photo ? { imageUrl: photo } : {}),
+    ...(playableVideoUrl ? { videoUrl: playableVideoUrl } : {}),
   };
 }
 

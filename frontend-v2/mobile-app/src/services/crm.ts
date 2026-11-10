@@ -42,6 +42,8 @@ export interface CreateContactInput {
   phone: string;
   source?: string;
   tags?: string[];
+  project?: string;
+  notes?: string;
 }
 
 export interface CreateContactResult {
@@ -61,7 +63,18 @@ export async function setLeadAi(companyId: string, leadId: string, enabled: bool
 export async function updateLead(
   companyId: string,
   leadId: string,
-  input: { name?: string; status?: string; tags?: string[]; metadata?: Record<string, string> }
+  input: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    city?: string;
+    documentNumber?: string;
+    status?: string;
+    tags?: string[];
+    metadata?: Record<string, string>;
+    fuenteUbicacion?: string;
+    projectInterest?: string[];
+  }
 ) {
   await callable('updateLead')({ companyId, leadId, ...input });
 }

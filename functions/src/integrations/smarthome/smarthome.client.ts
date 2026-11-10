@@ -8,9 +8,9 @@ import { logger } from '../../utils/logger';
  * lanza y lo captura el try/catch de cada función → se registra y se sigue.
  */
 const SMARTHOME_FETCH_TIMEOUT_MS = 10_000;
-async function shFetch(url: string, init?: RequestInit): Promise<Response> {
+async function shFetch(url: string, init?: RequestInit, timeoutMs = SMARTHOME_FETCH_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SMARTHOME_FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -338,6 +338,110 @@ export async function getSmartHomeSales(projectCode = env.smartHomeProject(), fo
   }
 }
 
+/** Unidad (lote) del inventario de SmartHome. status: 1 Disponible, 2 Separado, 3 Vendido, 5 Escriturado… */
+export interface SmartHomeUnit {
+  moduleId:   string;
+  status:     number;
+  code:       string;
+  name:       string;
+  unit:       string;   // sector ("MAR SANTORINI", "SAN ANTONIO - LLANO GRANDE"…)
+  lotArea?:   number;
+  totalPrice?: number;
+  [key: string]: unknown;
+}
+
+export interface SmartHomeProspectFile {
+  prospectFileId: string;
+  title:          string;
+  path?:          string | null;
+}
+
+/** Prospecto tal como lo devuelve getSales (incluye `files`). */
+export interface SmartHomeProspect extends SmartHomeSaleRecord {
+  moduleId?: string;
+  projectId?: string;
+  module?:   string;
+  totalValue?: number;
+  offerPrice?: number;
+  deposit?:  number;
+  identificationNumber?: string;
+  city?:     string;
+  probability?: number;
+  createdDate?: string;
+  closeDate?: string | null;
+  files?:    SmartHomeProspectFile[];
+}
+
+// getSales de Laguna a veces tarda más de 45 s desde Cloud Functions (lentitud
+// intermitente de SmartHome; normalmente responde en ~1 s).
+const SMARTHOME_BULK_TIMEOUT_MS = 90_000;
+
+/** Inventario completo de un proyecto. Sin caché: lo usa la sincronización de vendidos. null ante error. */
+export async function getSmartHomeUnits(projectCode: string): Promise<SmartHomeUnit[] | null> {
+  const url = `${env.smartHomeApiBase()}/api/v1/getUnits/${env.smartHomeCompany()}/${projectCode}`;
+  try {
+    const res = await shFetch(url, undefined, SMARTHOME_BULK_TIMEOUT_MS);
+    const data = (await res.json()) as { returnCode?: string; units?: SmartHomeUnit[] };
+    if (!res.ok || (data.returnCode && data.returnCode !== 'SUCCESS') || !Array.isArray(data.units)) {
+      logger.error('[smartHome] getUnits respuesta invalida', { projectCode, status: res.status, returnCode: data.returnCode });
+      return null;
+    }
+    return data.units;
+  } catch (err) {
+    logger.error('[smartHome] Error consultando getUnits', { projectCode, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+/**
+ * Todos los prospectos de getSales de un proyecto, sin filtrar por teléfono (a
+ * diferencia de getSmartHomeSales) y con sus archivos. null ante error.
+ */
+export async function getSmartHomeProjectProspects(projectCode: string): Promise<SmartHomeProspect[] | null> {
+  const url = `${env.smartHomeApiBase()}/api/v1/getSales/${env.smartHomeCompany()}/${projectCode}`;
+  try {
+    const res = await shFetch(url, undefined, SMARTHOME_BULK_TIMEOUT_MS);
+    const data = (await res.json()) as { returnCode?: string; prospects?: SmartHomeProspect[] };
+    if (!res.ok || (data.returnCode && data.returnCode !== 'SUCCESS') || !Array.isArray(data.prospects)) {
+      logger.error('[smartHome] getSales (prospectos) respuesta invalida', { projectCode, status: res.status, returnCode: data.returnCode });
+      return null;
+    }
+    return data.prospects;
+  } catch (err) {
+    logger.error('[smartHome] Error consultando getSales (prospectos)', { projectCode, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+export type SmartHomeFileDownload =
+  | { status: 'ok'; buffer: Buffer; contentType: string; fileName: string }
+  /** SmartHome lo lista pero ya no lo tiene ("No such object" en su almacenamiento). No sirve reintentar. */
+  | { status: 'missing'; reason: string };
+
+/**
+ * Descarga un archivo del cliente desde el gestor de archivos de SmartHome (el
+ * mismo enlace "Descargar" de FileManagerModal). null = fallo pasajero (reintentar).
+ */
+export async function downloadSmartHomeProspectFile(prospectId: string, fileId: string): Promise<SmartHomeFileDownload | null> {
+  const url = `${env.smartHomeStorageBase()}/FileHandler.ashx?action=download`
+    + `&prospectId=${encodeURIComponent(prospectId)}&fileId=${encodeURIComponent(fileId)}`;
+  const res = await shFetch(url, undefined, SMARTHOME_BULK_TIMEOUT_MS);
+  if (!res.ok) return null;
+  const contentType = (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim();
+  const disposition = res.headers.get('content-disposition') ?? '';
+  if (!/attachment/i.test(disposition) || contentType === 'text/html') {
+    const body = (await res.text()).replace(/\s+/g, ' ').trim();
+    // Archivo inexistente = 200 vacío; archivo perdido en su storage = página "No such object".
+    if (!body) return { status: 'missing', reason: 'SmartHome no tiene este archivo' };
+    if (/no such object|notfound/i.test(body)) return { status: 'missing', reason: 'El archivo ya no existe en el almacenamiento de SmartHome' };
+    return null;
+  }
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const fileName = match ? decodeURIComponent(match[1]).trim() : '';
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return buffer.length ? { status: 'ok', buffer, contentType, fileName } : { status: 'missing', reason: 'SmartHome entregó el archivo vacío' };
+}
+
 /** Prospectos/ventas de todos los proyectos visibles de SmartHome. */
 export async function getAllSmartHomeSales(force = false): Promise<SmartHomeSaleRecord[] | null> {
   const projects = await getSmartHomeProjects(force);
@@ -431,6 +535,42 @@ export async function findSmartHomeBiProspectsByPhone(phone: string): Promise<Sm
   }
 
   return dedupeSales(matches);
+}
+
+/** Obtiene todos los prospectos registrados o con actividad en SmartHome desde una fecha YYYY-MM-DD. */
+export async function getSmartHomeBiProspectsSince(createdDate: string): Promise<SmartHomeSaleRecord[] | null> {
+  const userKey = await getSmartHomeBiUserKey();
+  if (!userKey) return null;
+
+  const matches: SmartHomeSaleRecord[] = [];
+  const recordsPerPage = 1000;
+  let totalPages = 1;
+
+  for (let page = 1; page <= totalPages && page <= 50; page += 1) {
+    const url = `${env.smartHomeBiBase()}/api/bi/getProspectDetail/${userKey}/?page=${page}&records=${recordsPerPage}&createdDate=${createdDate}`;
+    try {
+      const res = await shFetch(url);
+      const data = (await res.json()) as { records?: SmartHomeSaleRecord[]; pages?: number; status?: string; message?: string };
+      if (!res.ok || !Array.isArray(data.records)) {
+        logger.error('[smartHome] getProspectDetail BI respuesta invalida', {
+          status: res.status,
+          page,
+          message: data.message ?? data.status,
+        });
+        return null;
+      }
+      totalPages = Number(data.pages || totalPages || 1);
+      matches.push(...data.records);
+    } catch (err) {
+      logger.error('[smartHome] Error consultando getProspectDetail BI', {
+        page,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  return matches;
 }
 
 /** Busca varios telefonos en el BI de SmartHome con un solo barrido de paginas. */

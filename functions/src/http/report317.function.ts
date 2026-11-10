@@ -12,6 +12,7 @@ import {
 import { isAdvisorNote, cleanNoteText, classifyBitacora } from '../modules/smarthome/bitacoraClassify';
 import type { Lead, LeadStatus } from '../modules/leads/leads.types';
 import { countsAs317LineLead } from '../modules/leads/leadClassification';
+import { isExcludedFromLeadAssignment } from '../modules/leads/leadAssignment.service';
 import { medianMinFromBuckets, STATS_BUCKET_COUNT } from '../modules/leads/leadStats.service';
 import type { LeadLossCategory } from '../modules/ai/leadAnalysis.types';
 
@@ -99,6 +100,7 @@ function sourceLabel(l: Lead): string {
   if (l.source === 'meta_ads') {
     return l.metadata?.metaFormId ? 'Pauta · Formulario Meta' : 'Pauta · Click a WhatsApp';
   }
+  if (l.source === 'google_ads') return 'Pauta · Google Ads (WhatsApp)';
   if (l.source === 'web') return 'Página web (formulario)';
   if (l.source === 'whatsapp') return 'WhatsApp orgánico (317)';
   return l.source;
@@ -227,12 +229,14 @@ export const getReport317 = onCall(
 
       const userName = new Map<string, string>();
       // Solo los asesores REALES (role 'advisor') aparecen en la tabla por asesor.
-      // Administrador / Pruebas / Marketing (role 'admin') se excluyen.
+      // Administrador / Pruebas / Marketing se excluyen.
       const advisorRoleIds = new Set<string>();
       for (const d of usersSnap.docs) {
         const u = d.data() as UserDoc & { role?: string };
         userName.set(d.id, u.displayName || u.email || d.id);
-        if (u.role === 'advisor') advisorRoleIds.add(d.id);
+        if (u.role === 'advisor' && !isExcludedFromLeadAssignment(d.id, u)) {
+          advisorRoleIds.add(d.id);
+        }
       }
 
       const leads = leadsSnap.docs
@@ -549,7 +553,7 @@ export const getReport317 = onCall(
  * asesor. Se resuelve por `smartHomeProspectId` (fiable) y cae a teléfono si no lo hay.
  */
 export const getLeadBitacora = onCall(
-  { region: 'us-central1', timeoutSeconds: 60, memory: '256MiB' },
+  { region: 'us-central1', timeoutSeconds: 60, memory: '512MiB' },
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, ADMIN_ROLES);

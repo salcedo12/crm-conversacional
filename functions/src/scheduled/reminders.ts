@@ -45,6 +45,16 @@ export const processReminders = onSchedule(
 
       for (const doc of snap.docs) {
         const appt = { id: doc.id, ...doc.data() } as Appointment;
+
+        // Omitir seguimientos internos de la ficha técnica (son tareas/recordatorios para el asesor, NO citas con el cliente)
+        if (
+          appt.isInternalReminder ||
+          appt.source === 'ficha_tecnica' ||
+          (appt.title && (appt.title.includes('Próxima Llamada') || appt.title.includes('Seguimiento')))
+        ) {
+          continue;
+        }
+
         const minutesUntil = (appt.startTime.toMillis() - now) / 60_000;
         if (minutesUntil <= 0) continue; // ya pasó
 
@@ -88,8 +98,8 @@ async function sendReminder(companyId: string, appt: Appointment, key: ReminderK
 
   const content =
     key === 'h24' ? buildReminder24h(businessName, name, start) :
-    key === 'h2'  ? buildReminder2h(businessName, name, start)  :
-                    buildReminder30m(name, appt.googleMeetLink);
+    key === 'h2'  ? buildReminder2h(businessName, name, start, appt.modality)  :
+                    buildReminder30m(name, appt.googleMeetLink, appt.modality);
 
   await sendTextToLead(companyId, lead, content);
 }

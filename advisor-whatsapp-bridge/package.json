@@ -2,6 +2,7 @@
   "name": "advisor-whatsapp-bridge",
   "version": "1.0.0",
   "private": true,
+  "engines": { "node": ">=20" },
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
@@ -9,7 +10,7 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "pino": "^9.5.0",

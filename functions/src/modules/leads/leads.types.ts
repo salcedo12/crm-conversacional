@@ -2,7 +2,18 @@ import { Timestamp } from 'firebase-admin/firestore';
 import type { LeadAnalysis } from '../ai/leadAnalysis.types';
 
 export type LeadStatus = 'new' | 'active' | 'qualified' | 'scheduled' | 'lost' | 'closed';
-export type LeadSource = 'whatsapp' | 'manual' | 'web' | 'facebook' | 'instagram' | 'meta_ads' | 'advisor_whatsapp';
+export type LeadSource = 'whatsapp' | 'manual' | 'web' | 'facebook' | 'instagram' | 'meta_ads' | 'advisor_whatsapp' | 'google_ads';
+
+export interface AttributionTouch {
+  source: string;
+  channel: string;
+  campaign?: string | null;
+  adName?: string | null;
+  gclid?: string | null;
+  fbclid?: string | null;
+  project?: string | null;
+  timestamp: Timestamp;
+}
 
 /** Proveedor/canal por el que entró y debe salir la conversación. */
 export type InboxProvider = 'ycloud' | 'twilio';
@@ -16,6 +27,9 @@ export interface LeadSourceMeta {
   headline?:  string;   // referral.headline
   sourceUrl?: string;   // referral.source_url
   mediaType?: string;   // referral.media_type
+  body?:      string;   // referral.body
+  imageUrl?:  string;   // referral.image_url
+  videoUrl?:  string;   // referral.video_url
   ctwaClid?:  string;   // referral.ctwa_clid — click id para atribución de conversiones
 }
 
@@ -50,6 +64,14 @@ export interface Lead {
   phoneTail?:       string;
   status:           LeadStatus;
   source:           LeadSource;
+  /** Fuente de ubicación o captación comercial (ej. 'Trabajo de campo', 'PAUTA WHATSAPP 317', 'Referidos', etc.) */
+  fuenteUbicacion?: string;
+  inbox?:           'central_317' | 'advisor_direct' | 'web_form';
+  isArchived?:      boolean;
+  reactivationCount?: number;
+  projectInterest?: string[];
+  firstTouch?:      AttributionTouch;
+  lastTouch?:       AttributionTouch;
   /** Detalle del anuncio de Meta que originó el lead (solo si source = 'meta_ads') */
   sourceMeta?:      LeadSourceMeta;
   /** Número de negocio (E.164) que recibió esta conversación. Ej: +573148209662 */
@@ -73,6 +95,8 @@ export interface Lead {
   /** Nombre de usuario público de WhatsApp (@usuario), si el lead lo tiene. Solo display. */
   username?:        string;
   assignedTo?:      string;           // userId del asesor asignado
+  previousAdvisorId?: string | null;
+  exclusivityExpiredAt?: Timestamp;
   /** Inicio del tiempo de espera para que el asesor asignado haga primer contacto. */
   advisorAssignedAt?: Timestamp;
   /** Ultima reasignacion automatica por falta de primer contacto. */
@@ -97,7 +121,12 @@ export interface Lead {
   /** true = ya se envió el aviso legal de bienvenida (Ley 1581). Se manda una sola vez,
    *  de forma determinista, como primer mensaje a un lead nuevo de WhatsApp directo. */
   legalWelcomeSent?: boolean;
+  /** Cuándo el lead dijo que no le interesa o pidió no ser contactado. */
+  aiRejectedAt?:    Timestamp;
   takeoverBy?:      string;           // userId que tomó control manual
+  aiDisabledAt?:    Timestamp;        // momento en que se apagó la IA (para SLA de 24h)
+  aiTakeoverSlaStatus?: 'pending' | 'compliant' | 'overdue'; // estado SLA 24h tras apagar IA
+  aiTakeoverOverdueAt?: Timestamp;
   /** Control de costo IA: nº de respuestas automáticas en la ventana horaria actual. */
   aiHourlyCount?:       number;
   /** Inicio de la ventana horaria del contador anti-loop de la IA. */

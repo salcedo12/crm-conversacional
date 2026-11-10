@@ -2,17 +2,19 @@ import { useState, type ChangeEvent } from 'react';
 import { Button } from '@/shared/components/Button';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useBranding } from '@/providers/BrandingProvider';
+import { ThemeToggle } from '@/shared/components/ThemeToggle';
 import { uploadBrandLogo } from '../services/brandingUpload.service';
 
 const inputClass = 'mt-1.5 h-10 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-violet-500/60';
 
+// Paleta oficial de Meraki Grupo Constructor (Manual de Marca)
 const PRESETS = [
-  '#7c3aed',
-  '#d4a017',
-  '#0ea5e9',
-  '#10b981',
-  '#ef4444',
-  '#f97316',
+  '#B7871C', // Oro Principal
+  '#B49739', // Oro Cálido
+  '#947018', // Oro Oscuro
+  '#D9B545', // Oro Claro
+  '#373634', // Grafito Meraki
+  '#0D060A', // Negro Meraki
 ];
 
 export function BrandingConfigForm() {
@@ -151,6 +153,19 @@ export function BrandingConfigForm() {
               </div>
             </div>
           </label>
+        </div>
+
+        {/* Selector de Modo Oscuro vs Modo Claro */}
+        <div className="md:col-span-2 pt-2 border-t border-zinc-800">
+          <label className="text-xs font-medium text-zinc-400 block mb-1.5">
+            Tema Visual en tu Pantalla (Modo Oscuro vs Modo Claro Meraki)
+          </label>
+          <div className="max-w-xs">
+            <ThemeToggle className="w-full" />
+          </div>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Cambia entre el modo oscuro oficial (Negro & Oro) y el modo claro (Blanco & Oro). Tu preferencia se guardará en este navegador.
+          </p>
         </div>
       </div>
 

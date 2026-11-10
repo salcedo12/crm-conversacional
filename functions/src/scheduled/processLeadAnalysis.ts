@@ -63,7 +63,9 @@ export const processLeadAnalysis = onSchedule(
         .get();
 
       const candidates = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() } as Lead))
+        // id/companyId salen de la ruta: los leads importados de SmartHome no traen
+        // `companyId` en el documento y el análisis fallaba con documentPath vacío.
+        .map((d) => ({ ...d.data(), id: d.id, companyId } as Lead))
         .filter((lead) => OPEN_STATUSES.has(lead.status) && needsAnalysis(lead))
         .slice(0, MAX_PER_COMPANY);
 

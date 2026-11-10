@@ -18,18 +18,14 @@ import { markLeadsRead } from '../services/notifications.service';
 export function InboxPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { companyId, user, role }                = useAuth();
-  // Paginacion: cargamos pocos leads al inicio (menos lecturas al abrir/volver
-  // a la Bandeja). Cuando hay busqueda activa subimos el limite para que el
-  // buscador siga cubriendo TODOS los leads, no solo los cargados.
+  // Paginación eficiente: cargamos 50 leads inicialmente para mantener costo mínimo
+  // y permitir carga incremental con 'Cargar más' sin provocar ráfagas de 2000 lecturas.
   const [pageSize, setPageSize]                  = useState(50);
   const [search, setSearch]                      = useState('');
   const searching                                = search.trim().length > 0;
-  // Al buscar cargamos MUCHOS más (hasta 2000) para cubrir también leads antiguos
-  // o cerrados/vendidos que quedan fuera del tope normal por `lastMessageAt`. Solo
-  // ocurre mientras hay búsqueda activa; en reposo se mantiene el tope pequeño.
-  const effectiveLimit                           = searching ? 2000 : pageSize;
+  const effectiveLimit                           = searching ? Math.min(pageSize * 2, 200) : pageSize;
   const { leads, loading }                       = useLeads(companyId, effectiveLimit, { uid: user?.uid ?? null, role });
-  const hasMore                                  = !searching && leads.length >= pageSize && pageSize < 500;
+  const hasMore                                  = leads.length >= effectiveLimit && effectiveLimit < 500;
   const localReadAt                              = useLocalReadReceipts();
   const visibleLeads = useMemo(() => {
     if (!user?.uid) return leads;
@@ -124,7 +120,7 @@ export function InboxPage() {
     for (const lead of unread) {
       if (lead.lastInboundAt) markLocalRead(lead.id, lead.lastInboundAt.toMillis());
     }
-    markLeadsRead(companyId ?? 'empresa_demo', unread.map((lead) => lead.id))
+    markLeadsRead(companyId ?? 'grupo_meraki_real', unread.map((lead) => lead.id))
       .catch((err) => console.warn('[Inbox] No se pudo marcar todo como leído:', err));
   };
 
@@ -156,7 +152,7 @@ export function InboxPage() {
         {activeLead ? (
           <ChatWindow
             lead={activeLead}
-            companyId={companyId ?? 'empresa_demo'}
+            companyId={companyId ?? 'grupo_meraki_real'}
             advisorNames={advisorNames}
             onBack={handleClear}
             onOpenLeadDetails={() => setDetailsOpen(true)}
@@ -176,7 +172,7 @@ export function InboxPage() {
       {activeLead && detailsOpen && (
         <LeadDrawer
           lead={activeLead}
-          companyId={companyId ?? ''}
+          companyId={companyId ?? 'grupo_meraki_real'}
           allTags={allTags}
           advisors={advisors}
           onClose={() => setDetailsOpen(false)}
@@ -185,7 +181,7 @@ export function InboxPage() {
 
       {newContactOpen && (
         <NewContactModal
-          companyId={companyId ?? 'empresa_demo'}
+          companyId={companyId ?? 'grupo_meraki_real'}
           onClose={() => setNewContactOpen(false)}
           onCreated={handleContactCreated}
         />

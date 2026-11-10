@@ -118,6 +118,8 @@ function setGradleProperty(properties, key, value) {
 const withMerakiReleaseSigning = (config) => {
   config = withGradleProperties(config, (configWithProperties) => {
     configWithProperties.modResults = setGradleProperty(configWithProperties.modResults, 'newArchEnabled', 'false');
+    configWithProperties.modResults = setGradleProperty(configWithProperties.modResults, 'android.enableMinifyInReleaseBuilds', 'true');
+    configWithProperties.modResults = setGradleProperty(configWithProperties.modResults, 'android.enableShrinkResourcesInReleaseBuilds', 'true');
     return configWithProperties;
   });
 

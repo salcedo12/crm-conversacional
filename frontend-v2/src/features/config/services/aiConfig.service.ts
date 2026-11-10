@@ -37,3 +37,24 @@ export async function testAiAssistant(
   const result = await _testAiAssistant({ companyId, messages, ...overrides });
   return result.data.reply;
 }
+
+export interface AiReportDay {
+  day:          string;
+  chats:        number;
+  respuestas:   number;
+  cotizaciones: number;
+  traspasos:    number;
+  fallos:       number;
+  fichas:       Record<string, number>;
+  entrada:      number;
+  salida:       number;
+}
+export interface AiReport { from: string; days: AiReportDay[]; chatsPeriodo: number }
+
+const _getAiReport = httpsCallable<{ companyId: string; days: number }, AiReport>(functions, 'getAiReport');
+
+/** Contadores diarios de la IA (chats, cotizaciones, citas, traspasos y consumo). */
+export async function fetchAiReport(companyId: string, days: number): Promise<AiReport> {
+  const result = await _getAiReport({ companyId, days });
+  return result.data;
+}

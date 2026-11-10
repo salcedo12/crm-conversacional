@@ -27,7 +27,7 @@ import { phoneTail, toNormalizedPhone } from '../utils/phone';
 const DEDUP_WINDOW_MS = 30 * 60 * 1000;
 
 export const errorAlertWebhook = onRequest(
-  { region: 'us-central1', cors: false, timeoutSeconds: 30, memory: '256MiB', invoker: 'public' },
+  { region: 'us-central1', cors: false, timeoutSeconds: 30, memory: '512MiB', invoker: 'public' },
   async (req, res) => {
     // ── Autenticación ────────────────────────────────────────────────────────
     const secret = env.errorAlertWebhookSecret();

@@ -4,8 +4,94 @@
     {
       "name": "frontend-v2-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "frontend-v2", "--", "--port", "5174"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "frontend-v2",
+        "--",
+        "--port",
+        "5174"
+      ],
       "port": 5174
+    },
+    {
+      "name": "firebase-emulators",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "scripts\\start-emulators.cmd"
+      ],
+      "port": 4000
+    },
+    {
+      "name": "frontend-local",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:local",
+        "--prefix",
+        "frontend-v2"
+      ],
+      "port": 5175
+    },
+    {
+      "name": "peticiones-emuladores",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "C:\\Users\\Ingenieria Software\\Documents\\control-derechos-peticiones\\scripts\\start-emulators.cmd"
+      ],
+      "port": 4010
+    },
+    {
+      "name": "peticiones-local",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:local",
+        "--prefix",
+        "C:\\Users\\Ingenieria Software\\Documents\\control-derechos-peticiones"
+      ],
+      "port": 5176
+    },
+    {
+      "name": "frontend-local-ia",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:local",
+        "--prefix",
+        "frontend-v2",
+        "--",
+        "--port",
+        "5178",
+        "--strictPort"
+      ],
+      "port": 5178
+    },
+    {
+      "name": "tour-meraki-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "C:\\Users\\Ingenieria Software\\Desktop\\meraki\\tour-meraki",
+        "--",
+        "--port",
+        "5177",
+        "--strictPort"
+      ],
+      "port": 5177
+    },
+    {
+      "name": "docublock-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/docublock-mock.cjs"
+      ],
+      "port": 4599
     }
   ]
 }

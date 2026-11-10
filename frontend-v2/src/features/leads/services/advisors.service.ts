@@ -8,6 +8,11 @@ export interface Advisor {
   role:            string;
   active:          boolean;
   googleConnected: boolean;
+  /** Si recibe leads automáticos de pauta / línea 317. */
+  receiveLeads?:   boolean;
+  /** Si está temporalmente pausado por incumplir un SLA (Pre-Cita, Post-Cita o Toma Manual 24h). */
+  isBlockedForLeads?: boolean;
+  blockedReason?:  string | null;
   /** WhatsApp para avisos automáticos (ej. aviso de cita). '' si no se definió. */
   phone?:          string;
 }
@@ -32,11 +37,11 @@ const _listCompanyUsers = httpsCallable<{ companyId: string }, { users: CompanyU
   functions, 'listCompanyUsers'
 );
 const _createCompanyUser = httpsCallable<
-  { companyId: string; email: string; displayName: string; role: string; active: boolean },
+  { companyId: string; email: string; displayName: string; role: string; active: boolean; receiveLeads?: boolean },
   { user: CompanyUser; inviteLink: string | null; emailSent?: boolean; emailError?: string | null }
 >(functions, 'createCompanyUser');
 const _updateCompanyUser = httpsCallable<
-  { companyId: string; userId: string; displayName: string; role: string; active: boolean; phone?: string },
+  { companyId: string; userId: string; displayName: string; role: string; active: boolean; receiveLeads?: boolean; phone?: string },
   { ok: boolean }
 >(functions, 'updateCompanyUser');
 
@@ -72,6 +77,7 @@ export async function createCompanyUser(input: {
   displayName: string;
   role: string;
   active: boolean;
+  receiveLeads?: boolean;
 }): Promise<{ user: CompanyUser; inviteLink: string | null; emailSent?: boolean; emailError?: string | null }> {
   return (await _createCompanyUser(input)).data;
 }
@@ -82,6 +88,7 @@ export async function updateCompanyUser(input: {
   displayName: string;
   role: string;
   active: boolean;
+  receiveLeads?: boolean;
   phone?: string;
 }): Promise<void> {
   await _updateCompanyUser(input);

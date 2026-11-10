@@ -12,17 +12,24 @@ import { BrandingConfigForm } from '../components/BrandingConfigForm';
 import { PlatformCompaniesPanel } from '../components/PlatformCompaniesPanel';
 import { NotificationSettingsPanel } from '../components/NotificationSettingsPanel';
 import { LeadFormTemplatesPanel } from '../components/LeadFormTemplatesPanel';
+import { MetaAdsConfigPanel } from '../components/MetaAdsConfigPanel';
 import { LibraryManager } from '@/features/library/components/LibraryManager';
 import { AdvisorWhatsappPanel } from '../components/AdvisorWhatsappPanel';
+import { LeadSourcesConfigPanel } from '../components/LeadSourcesConfigPanel';
+import { SlaConfigPanel } from '../components/SlaConfigPanel';
+import { FichaTecnicaConfigPanel } from '../components/FichaTecnicaConfigPanel';
 
-type Tab = 'marca' | 'ia' | 'conexiones' | 'agenda' | 'pautas' | 'portafolios' | 'usuarios' | 'campos' | 'empresas';
+type Tab = 'marca' | 'ia' | 'conexiones' | 'agenda' | 'sla' | 'ficha' | 'pautas' | 'fuentes' | 'portafolios' | 'usuarios' | 'campos' | 'empresas';
 
 const TABS: [Tab, string, boolean, boolean?][] = [
   ['marca', 'Marca', true],
   ['ia', 'Asistente IA', true],
   ['conexiones', 'Conexiones', false],
   ['agenda', 'Agenda', true],
+  ['sla', 'Protocolo SLA', true],
+  ['ficha', 'Ficha Técnica', true],
   ['pautas', 'Pautas', true],
+  ['fuentes', 'Fuentes de Origen', true],
   ['portafolios', 'Portafolios', true],
   ['usuarios', 'Usuarios', true],
   ['campos', 'Campos', true],
@@ -43,7 +50,7 @@ export function ConfigPage() {
     save, reset, update,
   } = useAiConfig(companyId);
 
-  const resolvedCompanyId = companyId ?? 'empresa_demo';
+  const resolvedCompanyId = companyId ?? 'grupo_meraki_real';
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-zinc-950">
@@ -133,9 +140,28 @@ export function ConfigPage() {
           </div>
         )}
 
+        {tab === 'sla' && (
+          <div className="max-w-4xl px-6 py-6">
+            <SlaConfigPanel companyId={resolvedCompanyId} />
+          </div>
+        )}
+
+        {tab === 'ficha' && (
+          <div className="max-w-5xl px-6 py-6">
+            <FichaTecnicaConfigPanel companyId={resolvedCompanyId} />
+          </div>
+        )}
+
         {tab === 'pautas' && (
           <div className="max-w-3xl px-6 py-6">
+            <MetaAdsConfigPanel companyId={resolvedCompanyId} />
             <LeadFormTemplatesPanel companyId={resolvedCompanyId} />
+          </div>
+        )}
+
+        {tab === 'fuentes' && (
+          <div className="max-w-5xl">
+            <LeadSourcesConfigPanel companyId={resolvedCompanyId} />
           </div>
         )}
 

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCheck, Clock, Tag, UserPlus, UsersRound, X } from 'lucide-react';
+import { AlarmClock, Archive, ArrowLeft, CheckCheck, Clock, Tag, UserPlus, UsersRound, X } from 'lucide-react';
 import { Spinner } from '@/shared/components/Spinner';
 import { EmptyState } from '@/shared/components/EmptyState';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { LeadListItem } from './LeadListItem';
-import { collectInboxes, inboxLabel, sourceLabel } from '../utils/inboxes';
+import { LeadListItem, parseFollowUpMillis } from './LeadListItem';
+import { getManualTakeoverSlaInfo } from '../utils/manualTakeoverSla';
+import { sourceLabel } from '../utils/inboxes';
 import { countUnreadLeads, isLeadUnreadForUser } from '../utils/readState';
 import type { Advisor } from '@/features/leads/services/advisors.service';
 import type { Lead } from '../types';
@@ -16,6 +17,37 @@ import type { Lead } from '../types';
  */
 function hasNoFirstContact(lead: Lead): boolean {
   return !!lead.lastInboundAt && !lead.lastAdvisorMessageAt;
+}
+
+/**
+ * Lead descartado: Perdido o etapa "No interesado / Cancelado". Sale de la
+ * bandeja principal y queda en la sección "Perdidos / No interesados".
+ */
+export function isDiscardedLead(lead: Lead): boolean {
+  if (lead.isArchived) return true;
+  if (lead.status === 'lost') return true;
+  const stage = lead.pipelineStage ?? '';
+  return stage.startsWith('no_interesado') || stage === 'cancelado';
+}
+
+/**
+ * Lead sin conversación: nunca escribió ni se le escribió por WhatsApp
+ * (p. ej. registro manual de trabajo de campo). Guardar la Ficha/bitácora
+ * actualiza `lastMessageAt` y lo subía a la bandeja aunque no hubiera chat.
+ */
+export function hasNoConversation(lead: Lead): boolean {
+  return !lead.lastInboundAt && !lead.lastMessageText?.trim();
+}
+
+function isFollowUpTodayOrOverdue(lead: Lead): boolean {
+  const ms = parseFollowUpMillis(lead.nextFollowUpDate);
+  if (ms === null) return false;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  // Considera seguimientos programados para hoy (los residuos anteriores a hoy quedan ignorados).
+  return ms >= startOfToday.getTime() && ms <= endOfToday.getTime();
 }
 
 interface LeadListProps {
@@ -53,9 +85,35 @@ export function LeadList({
   const [sourceFilterOpen, setSourceFilterOpen] = useState(false);
   const sourceFilterRef = useRef<HTMLDivElement | null>(null);
   const [noFirstContact, setNoFirstContact] = useState(false);
+  const [dueFollowUpsOnly, setDueFollowUpsOnly] = useState(false);
+  const [manualTakeoverOnly, setManualTakeoverOnly] = useState(false);
+  const [showDiscarded, setShowDiscarded] = useState(false);
   const { user } = useAuth();
 
-  const inboxes = useMemo(() => collectInboxes(leads), [leads]);
+  // Un descartado que vuelve a escribir (mensaje sin leer) se queda en la
+  // bandeja principal para que nadie pierda la reactivación.
+  const discardedIds = useMemo(
+    () => new Set(
+      leads
+        .filter((lead) => isDiscardedLead(lead) && !isLeadUnreadForUser(lead, user?.uid))
+        .map((lead) => lead.id)
+    ),
+    [leads, user?.uid]
+  );
+  const discardedCount = useMemo(
+    () => leads.filter((lead) => discardedIds.has(lead.id) && !hasNoConversation(lead)).length,
+    [leads, discardedIds]
+  );
+  // Leads de la sección visible (activos o descartados). Los contadores de los
+  // filtros rápidos se calculan sobre esta sección, no sobre todo lo cargado.
+  const sectionLeads = useMemo(
+    () => leads.filter((lead) => discardedIds.has(lead.id) === showDiscarded),
+    [leads, discardedIds, showDiscarded]
+  );
+  const sectionConversations = useMemo(
+    () => sectionLeads.filter((lead) => !hasNoConversation(lead)),
+    [sectionLeads]
+  );
 
   // Fuentes presentes en los leads cargados, con su conteo, para el filtro.
   const sourceOptions = useMemo(() => {
@@ -69,9 +127,27 @@ export function LeadList({
   }, [leads]);
 
   const noFirstContactCount = useMemo(
-    () => leads.filter(hasNoFirstContact).length,
-    [leads]
+    () => sectionConversations.filter(hasNoFirstContact).length,
+    [sectionConversations]
   );
+  const dueFollowUpsCount = useMemo(
+    () => sectionLeads.filter(isFollowUpTodayOrOverdue).length,
+    [sectionLeads]
+  );
+  const manualTakeoverStats = useMemo(() => {
+    let total = 0;
+    let pending = 0;
+    let overdue = 0;
+    for (const lead of sectionConversations) {
+      const info = getManualTakeoverSlaInfo(lead);
+      if (info) {
+        total++;
+        if (info.isOverdue) overdue++;
+        else if (!info.isCompliant) pending++;
+      }
+    }
+    return { total, pending, overdue, actionable: pending + overdue };
+  }, [sectionConversations]);
   const unreadCount = useMemo(() => countUnreadLeads(leads, user?.uid), [leads, user?.uid]);
   const advisorCount = useMemo(() => {
     const counts = new Map<string, number>();
@@ -95,22 +171,90 @@ export function LeadList({
     [advisors, selectedAdvisors]
   );
 
-  const filtered = leads.filter((lead) => {
-    if (inbox !== 'all' && lead.inboxId !== inbox) return false;
-    if (selectedAdvisors.length > 0 && (!lead.assignedTo || !selectedAdvisors.includes(lead.assignedTo))) return false;
-    if (source !== 'all' && lead.source !== source) return false;
-    if (noFirstContact && !hasNoFirstContact(lead)) return false;
+  const filtered = useMemo(() => {
+    const searching = !!search.trim();
+    const base = leads.filter((lead) => {
+      // Si está activo el filtro de seguimientos para hoy/vencidos, mostrar incluso los prospectos outbound sin chat previo
+      if (!dueFollowUpsOnly && (lead.lastMessageText === 'Prospecto outbound agregado manualmente' || lead.lastMessageText === 'Contacto importado')) {
+        return false;
+      }
+      // Registros manuales sin chat (trabajo de campo): no son conversaciones.
+      // Siguen visibles en seguimientos de hoy y al buscarlos por nombre/teléfono.
+      if (!dueFollowUpsOnly && !searching && hasNoConversation(lead)) {
+        return false;
+      }
+      // Bandeja principal = solo activos; los descartados viven en su sección.
+      // Al buscar se muestran todos para poder encontrarlos.
+      // El lead abierto no salta de lista al leerlo (se reubica al cambiar de chat).
+      const keepOpenLead = !showDiscarded && lead.id === selectedId;
+      if (!searching && !keepOpenLead && discardedIds.has(lead.id) !== showDiscarded) return false;
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      return (
-        lead.name?.toLowerCase().includes(q) ||
-        lead.phone.includes(q) ||
-        lead.lastMessageText?.toLowerCase().includes(q)
-      );
+      if (inbox !== 'all') {
+        const isAdvisorDirect =
+          lead.inbox === 'advisor_direct' ||
+          lead.source === 'advisor_whatsapp' ||
+          lead.metadata?.advisorWhatsappMirror === 'true' ||
+          (!lead.inboxId && (
+            lead.id.startsWith('sm_') ||
+            lead.tags?.includes('smarthome_migracion') ||
+            Boolean(lead.metadata?.migratedFrom) ||
+            lead.source === 'manual'
+          ));
+        if (inbox === 'central_317') {
+          if (isAdvisorDirect) {
+            return false;
+          }
+        } else if (inbox === 'advisor_direct') {
+          if (!isAdvisorDirect) return false;
+        } else if (lead.inboxId !== inbox) {
+          return false;
+        }
+      }
+      if (selectedAdvisors.length > 0 && (!lead.assignedTo || !selectedAdvisors.includes(lead.assignedTo))) return false;
+      if (source !== 'all' && lead.source !== source) return false;
+      if (noFirstContact && !hasNoFirstContact(lead)) return false;
+      if (dueFollowUpsOnly && !isFollowUpTodayOrOverdue(lead)) return false;
+      if (manualTakeoverOnly && lead.aiEnabled) return false;
+
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        return (
+          lead.name?.toLowerCase().includes(q) ||
+          lead.phone.includes(q) ||
+          lead.lastMessageText?.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    if (dueFollowUpsOnly) {
+      return [...base].sort((a, b) => {
+        const ma = parseFollowUpMillis(a.nextFollowUpDate) ?? Number.MAX_SAFE_INTEGER;
+        const mb = parseFollowUpMillis(b.nextFollowUpDate) ?? Number.MAX_SAFE_INTEGER;
+        return ma - mb;
+      });
     }
-    return true;
-  });
+
+    if (manualTakeoverOnly) {
+      return [...base].sort((a, b) => {
+        const infoA = getManualTakeoverSlaInfo(a);
+        const infoB = getManualTakeoverSlaInfo(b);
+        // 1. Vencidos primero
+        if (infoA?.isOverdue && !infoB?.isOverdue) return -1;
+        if (!infoA?.isOverdue && infoB?.isOverdue) return 1;
+        // 2. Pendientes con menos tiempo restante primero
+        if (infoA && infoB && !infoA.isCompliant && !infoB.isCompliant) {
+          return infoA.deadlineMillis - infoB.deadlineMillis;
+        }
+        // 3. Pendientes antes que compliant
+        if (!infoA?.isCompliant && infoB?.isCompliant) return -1;
+        if (infoA?.isCompliant && !infoB?.isCompliant) return 1;
+        return 0;
+      });
+    }
+
+    return base;
+  }, [leads, inbox, selectedAdvisors, source, noFirstContact, dueFollowUpsOnly, manualTakeoverOnly, search, discardedIds, showDiscarded, selectedId]);
 
   const toggleAdvisor = (advisorId: string) => {
     setSelectedAdvisors((current) =>
@@ -142,9 +286,21 @@ export function LeadList({
     };
   }, [advisorFilterOpen, sourceFilterOpen]);
 
-  const anyFilterActive = !!search || selectedAdvisors.length > 0 || source !== 'all' || noFirstContact;
-  const emptyTitle = anyFilterActive ? 'Sin resultados' : 'Sin leads aun';
-  const emptySubtitle = anyFilterActive
+  const anyFilterActive = !!search || selectedAdvisors.length > 0 || source !== 'all' || noFirstContact || dueFollowUpsOnly || manualTakeoverOnly;
+  const emptyTitle = dueFollowUpsOnly
+    ? '¡Al día! Cero seguimientos pendientes hoy'
+    : manualTakeoverOnly
+    ? '¡Excelente! Cero prospectos en toma manual'
+    : anyFilterActive
+    ? 'Sin resultados'
+    : showDiscarded
+    ? 'Sin perdidos ni descartados'
+    : 'Sin leads aun';
+  const emptySubtitle = dueFollowUpsOnly
+    ? 'Todos tus recordatorios y seguimientos de hoy han sido evacuados.'
+    : manualTakeoverOnly
+    ? 'No tienes prospectos con la IA apagada pendientes de Ficha Técnica.'
+    : anyFilterActive
     ? 'Prueba con otro filtro o busqueda'
     : 'Los mensajes de WhatsApp apareceran aqui';
 
@@ -153,10 +309,10 @@ export function LeadList({
       <div className="border-b border-zinc-800 px-4 py-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-zinc-100">
-            Bandeja de Entrada
+            {showDiscarded ? 'Perdidos / No interesados' : 'Bandeja de Entrada'}
             {!loading && (
               <span className="ml-2 text-xs font-normal text-zinc-500">
-                ({filtered.length}{filtered.length !== leads.length ? `/${leads.length}` : ''})
+                ({filtered.length})
               </span>
             )}
             {!loading && unreadCount > 0 && (
@@ -185,33 +341,62 @@ export function LeadList({
           </button>
         )}
 
-        {inboxes.length > 1 && (
-          <div className="mb-2 flex flex-wrap gap-1">
-            <button
-              onClick={() => setInbox('all')}
-              className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
-                inbox === 'all'
-                  ? 'border-violet-500/40 bg-violet-600/25 text-violet-200'
-                  : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Todos
-            </button>
-            {inboxes.map((ib) => (
-              <button
-                key={ib.id}
-                onClick={() => setInbox(ib.id)}
-                title={ib.id}
-                className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
-                  inbox === ib.id
-                    ? 'border-violet-500/40 bg-violet-600/25 text-violet-200'
-                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                {inboxLabel(ib.id)} ({ib.count})
-              </button>
-            ))}
-          </div>
+        <div className="mb-2 flex flex-wrap gap-1">
+          <button
+            onClick={() => setInbox('all')}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              inbox === 'all'
+                ? 'border-violet-500/40 bg-violet-600/25 text-violet-200'
+                : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Todos ({sectionConversations.length})
+          </button>
+          <button
+            onClick={() => setInbox('central_317')}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              inbox === 'central_317'
+                ? 'border-emerald-500/40 bg-emerald-600/25 text-emerald-200'
+                : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            🏢 Línea 317
+          </button>
+          <button
+            onClick={() => setInbox('advisor_direct')}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              inbox === 'advisor_direct'
+                ? 'border-sky-500/40 bg-sky-600/25 text-sky-200'
+                : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            👤 Asesores Directo
+          </button>
+        </div>
+
+        {/* Sección aparte: Perdidos / No interesados. No salen en la bandeja principal. */}
+        {(discardedCount > 0 || showDiscarded) && (
+          <button
+            onClick={() => setShowDiscarded((v) => !v)}
+            title={showDiscarded
+              ? 'Volver a la bandeja de leads activos'
+              : 'Ver los leads marcados como Perdido / No interesado (no salen en la bandeja principal)'}
+            className={`mb-2 flex h-8 w-full items-center justify-between gap-2 rounded-lg border px-3 text-xs font-medium transition-colors ${
+              showDiscarded
+                ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              {showDiscarded ? <ArrowLeft size={13} /> : <Archive size={13} />}
+              <span className="truncate">
+                {showDiscarded ? 'Volver a activos' : 'Perdidos / No interesados'}
+              </span>
+            </span>
+            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${showDiscarded ? 'bg-red-500/20 text-red-200' : 'bg-zinc-700 text-zinc-400'}`}>
+              {discardedCount}
+            </span>
+          </button>
         )}
 
         {advisorOptions.length > 1 && (
@@ -325,10 +510,112 @@ export function LeadList({
           </div>
         )}
 
+        {/* Filtro rápido: Seguimientos para Hoy / Vencidos ordenados por hora */}
+        <button
+          onClick={() => {
+            setDueFollowUpsOnly((v) => {
+              const next = !v;
+              if (next) setManualTakeoverOnly(false);
+              return next;
+            });
+          }}
+          title="Ver tus seguimientos y llamadas programadas para hoy o vencidas, ordenadas por hora"
+          className={`mb-2 flex h-8 w-full items-center justify-between gap-2 rounded-lg border px-3 text-xs font-medium transition-colors ${
+            dueFollowUpsOnly
+              ? 'border-amber-500/50 bg-amber-500/15 text-amber-200 shadow-sm'
+              : dueFollowUpsCount > 0
+              ? 'border-amber-500/30 bg-amber-500/5 text-amber-300 hover:bg-amber-500/10'
+              : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <AlarmClock size={13} className={dueFollowUpsCount > 0 ? 'text-amber-400' : ''} />
+            <span className="truncate">⏰ Seguimientos para Hoy / Vencidos</span>
+          </span>
+          <span
+            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+              dueFollowUpsOnly
+                ? 'bg-amber-500/30 text-amber-100'
+                : dueFollowUpsCount > 0
+                ? 'bg-amber-500/20 text-amber-300'
+                : 'bg-zinc-700 text-zinc-400'
+            }`}
+          >
+            {dueFollowUpsCount}
+          </span>
+        </button>
+
+        {/* Filtro rápido: En Toma Manual / SLA 24h */}
+        {manualTakeoverStats.total > 0 && (
+          <button
+            onClick={() => {
+              setManualTakeoverOnly((v) => {
+                const next = !v;
+                if (next) {
+                  setDueFollowUpsOnly(false);
+                  setNoFirstContact(false);
+                }
+                return next;
+              });
+            }}
+            title="Ver prospectos con atención manual activa (IA apagada) ordenados por urgencia del SLA de 24h"
+            className={`mb-2 flex h-8 w-full items-center justify-between gap-2 rounded-lg border px-3 text-xs font-medium transition-colors ${
+              manualTakeoverOnly
+                ? 'border-amber-500/50 bg-amber-500/15 text-amber-200 shadow-sm'
+                : manualTakeoverStats.overdue > 0
+                ? 'border-rose-500/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/15'
+                : manualTakeoverStats.actionable > 0
+                ? 'border-amber-500/30 bg-amber-500/5 text-amber-300 hover:bg-amber-500/10'
+                : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Clock
+                size={13}
+                className={
+                  manualTakeoverStats.overdue > 0
+                    ? 'text-rose-400 animate-pulse'
+                    : manualTakeoverStats.actionable > 0
+                    ? 'text-amber-400'
+                    : ''
+                }
+              />
+              <span className="truncate">⏳ En Toma Manual / SLA 24h</span>
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              {manualTakeoverStats.overdue > 0 && (
+                <span
+                  title={`${manualTakeoverStats.overdue} con SLA 24h vencido`}
+                  className="rounded-full bg-rose-500/25 border border-rose-500/40 px-1.5 py-0.5 text-[9px] font-bold text-rose-200"
+                >
+                  {manualTakeoverStats.overdue} vencidos
+                </span>
+              )}
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                  manualTakeoverOnly
+                    ? 'bg-amber-500/30 text-amber-100'
+                    : manualTakeoverStats.actionable > 0
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : 'bg-zinc-700 text-zinc-400'
+                }`}
+              >
+                {manualTakeoverStats.total}
+              </span>
+            </div>
+          </button>
+        )}
+
         {/* Auditoría: leads a los que el cliente escribió pero ningún asesor respondió. */}
         {noFirstContactCount > 0 && (
           <button
-            onClick={() => setNoFirstContact((v) => !v)}
+            onClick={() => {
+              setNoFirstContact((v) => {
+                const next = !v;
+                if (next) setManualTakeoverOnly(false);
+                return next;
+              });
+            }}
             title="Clientes que escribieron y aún no reciben respuesta de un asesor"
             className={`mb-2 flex h-8 w-full items-center justify-between gap-2 rounded-lg border px-3 text-xs transition-colors ${
               noFirstContact

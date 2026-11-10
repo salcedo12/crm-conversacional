@@ -14,6 +14,18 @@ export interface LeadNote {
   createdAt:  Timestamp;
   dueAt?:     Timestamp;
   done?:      boolean;
+  type?:      string;
+  actionType?: string;
+  result?:    string;
+  evidenceUrl?: string | null;
+  nextAction?: string;
+  nextActionDate?: string;
+  leadName?:   string;
+  leadPhone?:  string;
+  project?:    string;
+  notified?:   boolean;
+  dealId?:     string;
+  dealEvent?:  string;
 }
 
 const _add  = httpsCallable<{ companyId: string; leadId: string; kind: LeadNoteKind; text: string; dueAt?: number }, { noteId: string }>(functions, 'addLeadNote');

@@ -12,7 +12,7 @@ import type { Lead } from '../leads/leads.types';
 import type { Call } from '../calls/calls.types';
 
 /** Fuentes de lead que "escriben" (mensajería entrante). Manual/web quedan fuera. */
-const MESSAGING_SOURCES = new Set(['whatsapp', 'facebook', 'instagram', 'meta_ads']);
+const MESSAGING_SOURCES = new Set(['whatsapp', 'facebook', 'instagram', 'meta_ads', 'google_ads']);
 
 /** Estados de lead en los que ya no tiene sentido llamar. */
 const TERMINAL_LEAD_STATUS = new Set(['scheduled', 'closed', 'lost']);

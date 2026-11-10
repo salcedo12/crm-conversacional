@@ -70,6 +70,7 @@ export interface CreateEventInput {
   start:       Date;
   end:         Date;
   withMeet?:   boolean;       // default true
+  location?:   string;
 }
 
 export interface CreateEventResult {
@@ -99,9 +100,17 @@ export async function createMeetEvent(
     requestBody: {
       summary:     input.title,
       description: input.description,
+      ...(input.location ? { location: input.location } : {}),
       start:       { dateTime: input.start.toISOString(), timeZone: tz },
       end:         { dateTime: input.end.toISOString(),   timeZone: tz },
       attendees:   input.attendees.filter(Boolean).map((email) => ({ email })),
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'popup', minutes: 60 },
+          { method: 'popup', minutes: 15 },
+        ],
+      },
       ...(withMeet ? {
         conferenceData: {
           createRequest: {

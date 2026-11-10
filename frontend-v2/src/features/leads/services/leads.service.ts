@@ -11,6 +11,8 @@ interface UpdateLeadInput {
   assignedTo?: string | null;
   tags?:       string[];
   metadata?:   Record<string, string>;
+  fuenteUbicacion?: string | null;
+  projectInterest?: string[];
 }
 
 const _updateLead = httpsCallable<UpdateLeadInput, { leadId: string }>(

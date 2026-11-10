@@ -1,10 +1,13 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { db } from '../lib/admin';
+import { getAiConfig } from '../modules/ai/aiConfig.repository';
+import { isLeadInAiRollout } from '../modules/ai/aiRollout';
 import { appointmentsRepository } from '../modules/appointments/appointments.repository';
 import { transferFutureAppointmentsToAdvisor } from '../modules/appointments/appointments.service';
 import { getSchedulingConfigCached } from '../modules/appointments/schedulingConfig';
-import { pickAdvisorForFirstContactReassignment } from '../modules/leads/leadAssignment.service';
+import { pickAdvisorForFirstContactReassignment, markAdvisorTurnUsed } from '../modules/leads/leadAssignment.service';
+import { isDirectAdvisorLead, countsAs317LineLead } from '../modules/leads/leadClassification';
 import type { Lead } from '../modules/leads/leads.types';
 import { sendAdvisorPush } from '../modules/messages/pushNotifications.service';
 import { logger } from '../utils/logger';
@@ -71,8 +74,12 @@ export const processFirstContactReassignments = onSchedule(
         .where('advisorAssignedAt', '<=', cutoff)
         .get();
 
+      const aiConfig = leadsSnapshot.empty ? null : await getAiConfig(companyId);
+
       for (const leadDoc of leadsSnapshot.docs) {
         const lead = { id: leadDoc.id, ...leadDoc.data() } as Lead;
+        // Mientras la IA atiende, el asesor sigue asignado y el reloj no cuenta.
+        if (aiConfig?.enabled && lead.aiEnabled && isLeadInAiRollout(aiConfig, lead)) continue;
         // Guardas de defensa (la query ya excluye la mayoría de estos casos):
         if (
           !lead.assignedTo
@@ -81,7 +88,12 @@ export const processFirstContactReassignments = onSchedule(
           || lead.advisorFirstContactAt
           || lead.lastAdvisorMessageAt
           || TERMINAL_STATUSES.has(String(lead.status ?? '').toLowerCase())
+          || isDirectAdvisorLead(lead)    // Leads del WhatsApp del asesor NUNCA se reasignan
+          || !countsAs317LineLead(lead)   // Solo se reasignan leads de la Línea 317
         ) {
+          if (isDirectAdvisorLead(lead) && lead.pendingFirstContact) {
+            await leadDoc.ref.update({ pendingFirstContact: false });
+          }
           continue;
         }
 
@@ -130,6 +142,8 @@ export const processFirstContactReassignments = onSchedule(
         });
 
         if (!reassigned) continue;
+
+        await markAdvisorTurnUsed(companyId, newAdvisorId);
 
         await companyRef.collection('leadReassignmentEvents').add({
           leadId: lead.id,

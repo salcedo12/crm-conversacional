@@ -21,7 +21,7 @@ export const ev = onRequest(
     region:         'us-central1',
     cors:           false,
     timeoutSeconds: 30,
-    memory:         '256MiB',
+    memory:         '512MiB',
     invoker:        'public',
   },
   async (req, res) => {

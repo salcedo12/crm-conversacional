@@ -71,6 +71,8 @@ export async function syncTemplates(companyId: string) {
   return r.data.synced;
 }
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function sendTemplateMessage(
   companyId:  string,
   leadId:     string,
@@ -79,6 +81,27 @@ export async function sendTemplateMessage(
   /** Línea (+E.164) elegida para enviar. Omitir = usar la línea del lead. */
   fromInboxId?: string,
 ) {
-  const r = await _send({ companyId, leadId, templateId, variables, ...(fromInboxId ? { fromInboxId } : {}) });
-  return r.data.messageId;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await _send({ companyId, leadId, templateId, variables, ...(fromInboxId ? { fromInboxId } : {}) });
+      return r.data.messageId;
+    } catch (err: any) {
+      lastError = err;
+      const isTransient =
+        err?.code === 'internal' ||
+        err?.code === 'unavailable' ||
+        err?.code === 'deadline-exceeded' ||
+        err?.message?.includes('network') ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.message?.includes('500');
+
+      if (!isTransient || attempt === 3) {
+        throw err;
+      }
+      console.warn(`[sendTemplateMessage] Intento ${attempt} falló, reintentando en ${attempt * 700}ms...`);
+      await delay(attempt * 700);
+    }
+  }
+  throw lastError;
 }

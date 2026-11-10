@@ -11,7 +11,6 @@ import { Spinner } from '@/shared/components/Spinner';
 import { VoiceRecorder } from './VoiceRecorder';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { uploadMedia } from '../services/media.service';
-import { convertBlobToMp3 } from '../utils/convertToMp3';
 import type { MediaUploadResult } from '../services/media.service';
 import { PortfolioPicker } from '@/features/library/components/PortfolioPicker';
 import { itemToMedia } from '@/features/library/services/library.service';
@@ -114,8 +113,16 @@ export function MessageComposer({
     setUploading(true);
     setUploadPct(0);
     try {
-      const mp3Blob = await convertBlobToMp3(recorder.audioBlob);
-      const audioFile = new File([mp3Blob], `voz_${Date.now()}.mp3`, { type: 'audio/mpeg' });
+      const blob = recorder.audioBlob;
+      const type = blob.type || 'audio/webm';
+      let ext = 'webm';
+      if (type.includes('ogg')) ext = 'ogg';
+      else if (type.includes('mp4') || type.includes('m4a')) ext = 'mp4';
+      else if (type.includes('aac')) ext = 'aac';
+      else if (type.includes('mpeg') || type.includes('mp3')) ext = 'mp3';
+
+      const fileName = `voz_${Date.now()}.${ext}`;
+      const audioFile = new File([blob], fileName, { type });
       const media = await uploadMedia(audioFile, companyId, leadId, ({ percent }) => {
         setUploadPct(percent);
       });
@@ -123,7 +130,7 @@ export function MessageComposer({
       await onSend('', media, deliveryChannel);
       setErrorMsg(null);
     } catch (err) {
-      setErrorMsg('No se pudo enviar la nota de voz. Intentalo de nuevo.');
+      setErrorMsg('No se pudo enviar la nota de voz. Inténtalo de nuevo.');
       console.error('[Composer] Error enviando nota de voz:', err);
     } finally {
       setSending(false);
@@ -306,9 +313,9 @@ export function MessageComposer({
           type="button"
           onClick={() => setShowPortfolios(true)}
           disabled={sending || uploading}
-          className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
-          title="Enviar portafolio"
-          aria-label="Enviar portafolio"
+          className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-300 transition-colors hover:bg-amber-500/20 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Portafolio / Brochures y Planos"
+          aria-label="Portafolio / Brochures y Planos"
         >
           <FolderOpen size={18} />
         </button>

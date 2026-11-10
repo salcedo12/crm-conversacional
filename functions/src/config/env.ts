@@ -136,16 +136,16 @@ export const env = {
    */
   cotizadorUrl:       () => process.env.COTIZADOR_URL
     ?? 'https://us-central1-disponibilidad-e8a81.cloudfunctions.net/cotizacionNow',
-  /** Bono/descuento base (COP) que la IA aplica en cada cotización. Default $30.000.000. */
-  cotizadorBonoBase:  () => Number(process.env.COTIZADOR_BONO_BASE ?? '30000000') || 0,
+  /** Bono/descuento base (COP) que la IA aplica en cada cotización. Default $20.000.000. */
+  cotizadorBonoBase:  () => Number(process.env.COTIZADOR_BONO_BASE ?? '20000000') || 0,
   /** Tope del bono GANADO que la IA acepta del cliente (evita montos absurdos). Default $100M. */
-  cotizadorBonoMax:   () => Number(process.env.COTIZADOR_BONO_MAX ?? '100000000') || 100000000,
+  cotizadorBonoMax:   () => Number(process.env.COTIZADOR_BONO_MAX ?? '50000000') || 50000000,
   /**
    * Tope anti-loop/costo: máximo de respuestas automáticas de la IA a un mismo lead
    * por hora. Si se supera, se pausa la IA del lead. Default 60 (clientes muy activos).
    */
   aiHourlyCap:        () => Number(process.env.AI_HOURLY_CAP ?? '60') || 60,
-  /** URL del juego de bonos (puertabono) que la IA ofrece para ganar un bono adicional. */
+  /** URL del juego de bonos (puertabono) que la IA ofrece para probar suerte y cambiar por un bono mayor. */
   puertabonoUrl:      () => process.env.PUERTABONO_URL
     ?? 'https://puertabono.grupoconstructormeraki.com.co/',
 
@@ -160,6 +160,11 @@ export const env = {
    * de la ventana no se envía confirmación (solo se registra la advertencia).
    */
   appointmentConfirmationTemplate: () => process.env.APPOINTMENT_CONFIRMATION_TEMPLATE ?? '',
+  /**
+   * Nombre de la plantilla de WhatsApp aprobada para enviar recordatorio de seguimiento
+   * al asesor comercial. Por defecto 'recordatorio_seguimiento_asesor'.
+   */
+  advisorReminderTemplate: () => process.env.ADVISOR_REMINDER_TEMPLATE || 'recordatorio_seguimiento_asesor',
 
   // ── Dapta (llamadas con IA) ────────────────────────────────────────────────
   /** URL del trigger en Dapta (Flow Studio / API) que inicia una llamada saliente. */
@@ -225,6 +230,8 @@ export const env = {
   /** Valor del campo "Atendido En" en SmartHome. */
   smartHomeAttendedIn: () => process.env.SMARTHOME_ATTENDED_IN ?? 'WhatsApp',
   /** true = el trigger crea automáticamente cada lead nuevo en SmartHome. Empieza APAGADO. */
+  /** Servidor de archivos de SmartHome (FileHandler.ashx, descarga por prospectId + fileId). */
+  smartHomeStorageBase: () => process.env.SMARTHOME_STORAGE_BASE ?? 'https://storage.smart-home.com.co',
   smartHomeBiBase: () => process.env.SMARTHOME_BI_BASE ?? 'https://manage.smart-home.com.co',
   smartHomeBiUserId: () => process.env.SMARTHOME_BI_USER_ID ?? 'e4995136-7a0a-433c-8df6-b612a3e07c38',
   smartHomeSyncEnabled: () => process.env.SMARTHOME_SYNC_ENABLED === 'true',
@@ -247,8 +254,11 @@ export const env = {
   mailFrom:       () => process.env.MAIL_FROM ?? 'Meraki CRM <alertas@grupoconstructormeraki.com.co>',
   mailConfigured: () => !!process.env.SMTP_HOST && !!process.env.SMTP_USER && !!process.env.SMTP_PASS,
 
-  // ── Comunes ───────────────────────────────────────────────────────────────
-  openaiApiKey:      () => process.env.OPENAI_API_KEY      ?? '',
+  openaiApiKey:      () => process.env.OPENAI_API_KEY ?? '',
+  /** ElevenLabs API Key para notas de voz de Victoria Sarmiento (Andrea Paisa). */
+  elevenlabsApiKey:  () => process.env.ELEVENLABS_API_KEY ?? '',
+  /** Voice ID de Andrea Paisa en ElevenLabs. */
+  elevenlabsVoiceId: () => process.env.ELEVENLABS_VOICE_ID ?? 'qHkrJuifPpn95wK3rm2A',
   /** DSN de Sentry para monitoreo de errores. Vacío = desactivado (no-op). */
   sentryDsn:         () => process.env.SENTRY_DSN ?? '',
   /**

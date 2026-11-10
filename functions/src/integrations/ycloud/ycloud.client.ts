@@ -165,6 +165,10 @@ export class YcloudClient {
   ): Promise<YcloudSendResult> {
     const dest = this.destinationField(to);
     const type  = mimeToYcloudType(mimeType);
+    // WhatsApp Cloud API PTT voice notes (con ondas y micrófono) SOLO son compatibles con OGG Opus (audio/ogg; codecs=opus).
+    // Si se envía voice: true para MP3 u otro formato, WhatsApp móvil falla con:
+    // "Este audio no está disponible porque algo falló con el archivo de audio."
+    const isVoice = type === 'audio' && (mimeType.includes('ogg') || mimeType.includes('opus'));
     const res = await this.request<{ id: string; status: string }>(
       'POST', '/v2/whatsapp/messages',
       {
@@ -176,10 +180,12 @@ export class YcloudClient {
           ...(caption ? { caption } : {}),
           // WhatsApp muestra este nombre en el documento; sin él pone uno genérico.
           ...(type === 'document' && fileName ? { filename: fileName } : {}),
+          // Para que WhatsApp renderice PTT nativo con micrófono y ondas (Meta usa voice: true y varios wrappers usan is_voice: true)
+          ...(isVoice ? { voice: true, is_voice: true } : {}),
         },
       }
     );
-    logger.info('[ycloud] Media enviada', { to: this.destinationLabel(dest), type, id: res.id });
+    logger.info('[ycloud] Media enviada', { to: this.destinationLabel(dest), type, isVoice, id: res.id });
     return { id: res.id, status: res.status };
   }
 

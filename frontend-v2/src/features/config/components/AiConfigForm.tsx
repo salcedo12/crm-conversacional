@@ -5,7 +5,15 @@ import { FormField }               from './FormField';
 import { TagListInput }            from './TagListInput';
 import { FollowUpSequenceEditor }  from './FollowUpSequenceEditor';
 import { AiTestChat }              from './AiTestChat';
-import type { AiConfigDraft, AiTone } from '../types';
+import { AiStatusPanel, Switch }   from './AiStatusPanel';
+import { AiPricingPanel }          from './AiPricingPanel';
+import { AiReportPanel }           from './AiReportPanel';
+import type { AgentProfile, AiConfigDraft, AiTone } from '../types';
+
+const MODEL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna — recomendado' },
+  { value: 'gpt-4o-mini',  label: 'GPT-4o mini — respaldo si Luna falla' },
+];
 
 interface AiConfigFormProps {
   companyId: string;
@@ -89,41 +97,17 @@ export function AiConfigForm({
   return (
     <div className="flex flex-col gap-8">
 
+      <AiStatusPanel draft={draft} onUpdate={onUpdate} />
+
+      <AiReportPanel companyId={companyId} />
+
       {/* ── Sección: General ────────────────────────────────────────── */}
       <section className="flex flex-col gap-5">
         <div>
           <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-            General
+            Identidad y modelo
           </h3>
-          <p className="mt-1 text-xs text-zinc-500">Quién es tu asistente y cómo suena al escribir.</p>
-        </div>
-
-        {/* Enable toggle */}
-        <div className="flex items-center justify-between rounded-xl bg-zinc-800/60 border border-zinc-700/50 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-zinc-100">IA activa por defecto</p>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Los leads nuevos tendrán la IA encendida automáticamente
-            </p>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={draft.enabled}
-            onClick={() => onUpdate('enabled', !draft.enabled)}
-            className={`
-              relative inline-flex h-6 w-11 shrink-0 items-center rounded-full
-              transition-colors focus:outline-none
-              ${draft.enabled ? 'bg-violet-600' : 'bg-zinc-600'}
-            `}
-          >
-            <span
-              className={`
-                inline-block h-4 w-4 rounded-full bg-white shadow transition-transform
-                ${draft.enabled ? 'translate-x-6' : 'translate-x-1'}
-              `}
-            />
-          </button>
+          <p className="mt-1 text-xs text-zinc-500">Quién es tu asistente, cómo suena y con qué reglas trabaja.</p>
         </div>
 
         {/* Nombre del asistente */}
@@ -177,24 +161,51 @@ export function AiConfigForm({
           </div>
         </FormField>
 
-        {/* Cotización de precios */}
-        <FormField
-          label="Cotización de precios en el chat"
-          htmlFor="quoteMode"
-          hint="Controla si Victoria entrega precios/cotizaciones exactas al cliente"
-        >
-          <select
-            id="quoteMode"
-            value={draft.quoteMode ?? 'off'}
-            onChange={(e) => onUpdate('quoteMode', e.target.value as AiConfigDraft['quoteMode'])}
-            className={inputClass}
-          >
-            <option value="off">Desactivado — solo rangos ("desde $129M") y empuja a la llamada</option>
-            <option value="on_request">Solo si el cliente pregunta el precio</option>
-            <option value="proactive">Proactivo — ofrece la cotización al elegir un terreno</option>
-          </select>
-        </FormField>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <FormField label="Reglas de venta" htmlFor="agentProfile" hint="Cómo atiende y cotiza">
+            <select
+              id="agentProfile"
+              value={draft.agentProfile ?? 'legacy'}
+              onChange={(e) => onUpdate('agentProfile', e.target.value as AgentProfile)}
+              className={inputClass}
+            >
+              <option value="consultive">Asesoría consultiva — plazos 20/30/40, objeciones, Sobre Montañas</option>
+              <option value="legacy">Anterior — reglas originales</option>
+            </select>
+          </FormField>
+
+          <FormField label="Modelo de IA" htmlFor="model">
+            <select
+              id="model"
+              value={draft.model ?? 'gpt-5.6-luna'}
+              onChange={(e) => onUpdate('model', e.target.value)}
+              disabled={draft.agentProfile !== 'consultive'}
+              className={`${inputClass} disabled:opacity-50`}
+            >
+              {MODEL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </FormField>
+        </div>
+        {draft.agentProfile !== 'consultive' && (
+          <p className="-mt-3 text-xs text-amber-400">
+            Las reglas anteriores usan GPT-4o mini y no incluyen lo trabajado: plazos 20/30/40, objeciones de precio, Sobre Montañas ni detección de compradores.
+          </p>
+        )}
+
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-zinc-700/50 bg-zinc-800/60 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-zinc-100">Notas de voz</p>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              Bienvenida en audio y respuesta en audio cuando el cliente envía una nota de voz (solo WhatsApp).
+            </p>
+          </div>
+          <Switch checked={draft.voiceEnabled === true} onChange={(v) => onUpdate('voiceEnabled', v)} label="Notas de voz" />
+        </div>
       </section>
+
+      <AiPricingPanel draft={draft} onUpdate={onUpdate} />
 
       {/* ── Sección: Prompt principal ────────────────────────────────── */}
       <section className="flex flex-col gap-5">
@@ -438,12 +449,14 @@ export function AiConfigForm({
         </Button>
 
         <Button
-          onClick={onReset}
+          onClick={() => {
+            if (window.confirm('Se reemplazarán las instrucciones por las originales del sistema. Lo demás (estado, piloto, precios) no cambia. ¿Continuar?')) onReset();
+          }}
           disabled={saving}
           variant="secondary"
           size="md"
         >
-          Restaurar prompt original
+          Restaurar instrucciones originales
         </Button>
 
         {saved && !isDirty && (

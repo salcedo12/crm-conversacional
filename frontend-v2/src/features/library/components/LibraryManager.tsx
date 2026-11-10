@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { FileText, Pencil, Trash2, Upload, X, Check, FolderOpen, Video, Users } from 'lucide-react';
+import { FileText, Pencil, Trash2, Upload, X, Check, FolderOpen, Video, Users, Contact, Eye } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { Spinner } from '@/shared/components/Spinner';
 import {
@@ -53,14 +53,19 @@ export function LibraryManager({ companyId }: { companyId: string }) {
   // Proyectos existentes (para sugerir en el datalist).
   const projectNames = useMemo(() => {
     const set = new Set<string>();
-    items.forEach((i) => { if (i.project?.trim()) set.add(i.project.trim()); });
+    items.forEach((i) => {
+      const p = i.project?.trim();
+      if (p && p !== 'Tarjeta de Presentación' && p !== 'Videos') {
+        set.add(p);
+      }
+    });
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [items]);
 
   // Items agrupados por proyecto para mostrarlos.
   const groups = useMemo(() => {
     const map = new Map<string, LibraryItem[]>();
-    items.filter((i) => !isVideoItem(i)).forEach((i) => {
+    items.filter((i) => !isVideoItem(i) && i.project !== 'Tarjeta de Presentación').forEach((i) => {
       const key = i.project?.trim() || NO_PROJECT;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(i);
@@ -233,6 +238,8 @@ export function LibraryManager({ companyId }: { companyId: string }) {
           </div>
         )}
       </div>
+
+      <PresentationCardsPanel companyId={companyId} items={items} />
 
       <VideoLibraryPanel companyId={companyId} items={items} />
 
@@ -542,3 +549,257 @@ function VideoLibraryPanel({ companyId, items }: { companyId: string; items: Lib
     </div>
   );
 }
+
+function PresentationCardsPanel({ companyId, items }: { companyId: string; items: LibraryItem[] }) {
+  const [users, setUsers] = useState<CompanyUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [uploadingAdvisorId, setUploadingAdvisorId] = useState<string | null>(null);
+  const [uploadPct, setUploadPct] = useState(0);
+  const [previewCard, setPreviewCard] = useState<LibraryItem | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const fileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+
+  useEffect(() => {
+    setLoadingUsers(true);
+    listCompanyUsers(companyId)
+      .then((list) => setUsers(list.filter((user) => user.active && user.role !== 'viewer')))
+      .catch((err) => {
+        console.error('[PresentationCards] users error:', err);
+        setError('No se pudieron cargar los asesores.');
+      })
+      .finally(() => setLoadingUsers(false));
+  }, [companyId]);
+
+  const cards = useMemo(() => items.filter((i) => i.project === 'Tarjeta de Presentación'), [items]);
+  const cardByAdvisor = useMemo(() => {
+    const map = new Map<string, LibraryItem>();
+    cards.forEach((c) => {
+      if (c.advisorId) map.set(c.advisorId, c);
+    });
+    return map;
+  }, [cards]);
+
+  const handlePickFile = async (user: CompanyUser, e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Por favor selecciona una imagen (JPG, PNG o WebP).');
+      return;
+    }
+    const limitError = mediaLimitMessage(file.type, file.size);
+    if (limitError) {
+      setError(limitError);
+      return;
+    }
+
+    setError(null);
+    setUploadingAdvisorId(user.id);
+    setUploadPct(0);
+
+    try {
+      const oldCard = cardByAdvisor.get(user.id);
+      await addLibraryItem(
+        file,
+        companyId,
+        `Tarjeta - ${user.displayName}`,
+        'Tarjeta de Presentación',
+        ({ percent }) => setUploadPct(percent),
+        {
+          kind: 'document',
+          visibility: 'advisor',
+          advisorId: user.id,
+          advisorName: user.displayName,
+        }
+      );
+
+      // Si ya existía una tarjeta anterior para este asesor, la borramos para mantener solo una activa
+      if (oldCard) {
+        try {
+          await deleteLibraryItem(companyId, oldCard.id);
+        } catch (delErr) {
+          console.warn('[PresentationCards] no se pudo borrar la tarjeta previa:', delErr);
+        }
+      }
+    } catch (err) {
+      console.error('[PresentationCards] upload error:', err);
+      setError('No se pudo subir la tarjeta de presentación.');
+    } finally {
+      setUploadingAdvisorId(null);
+    }
+  };
+
+  const removeCard = async (card: LibraryItem) => {
+    if (!window.confirm(`¿Eliminar la tarjeta de presentación de "${card.advisorName || card.title}"?`)) return;
+    setBusyId(card.id);
+    setError(null);
+    try {
+      await deleteLibraryItem(companyId, card.id);
+    } catch (err) {
+      console.error('[PresentationCards] delete error:', err);
+      setError('No se pudo eliminar la tarjeta.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="mb-8 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+      {/* Header */}
+      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <Contact size={18} className="text-amber-400" />
+          <h3 className="text-sm font-semibold text-zinc-100">Tarjetas de presentación de asesores</h3>
+        </div>
+        <span className="text-xs text-zinc-500">
+          {cards.length} de {users.length} asesor(es) con tarjeta
+        </span>
+      </div>
+      <p className="mb-4 text-xs text-zinc-400">
+        Sube la tarjeta personalizada para cada asesor (con foto, saludo oficial y datos de contacto). Al asesor le aparecerá de primera en la carpeta <strong className="text-amber-300">"Mi Tarjeta de Presentación"</strong> en el chat para enviarla a los clientes con un clic.
+      </p>
+
+      {error && (
+        <div className="mb-4 flex items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-red-300 hover:text-red-100"><X size={14} /></button>
+        </div>
+      )}
+
+      {loadingUsers ? (
+        <div className="flex justify-center py-6"><Spinner size="sm" /></div>
+      ) : users.length === 0 ? (
+        <p className="py-4 text-center text-xs text-zinc-500">No hay asesores registrados en la empresa.</p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {users.map((user) => {
+            const card = cardByAdvisor.get(user.id);
+            const isUploading = uploadingAdvisorId === user.id;
+            const isBusy = card && busyId === card.id;
+
+            return (
+              <div
+                key={user.id}
+                className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3"
+              >
+                {/* Advisor info & card thumbnail */}
+                <div className="flex min-w-0 items-center gap-3">
+                  {card ? (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewCard(card)}
+                      className="group relative h-14 w-12 shrink-0 overflow-hidden rounded-md border border-zinc-700 bg-zinc-800 transition-transform hover:scale-105"
+                      title="Ver tarjeta completa"
+                    >
+                      <img src={card.downloadUrl} alt={user.displayName} className="h-full w-full object-cover" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
+                        <Eye size={14} className="text-white" />
+                      </div>
+                    </button>
+                  ) : (
+                    <div className="flex h-14 w-12 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-zinc-700 bg-zinc-800/50 text-zinc-500">
+                      <Contact size={18} />
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-zinc-200">{user.displayName}</p>
+                    <p className="truncate text-[11px] text-zinc-500">{user.email}</p>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      {card ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                          <Check size={12} /> Tarjeta activa
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-zinc-500">Sin tarjeta</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    ref={(el) => {
+                      if (el) fileInputRefs.current.set(user.id, el);
+                      else fileInputRefs.current.delete(user.id);
+                    }}
+                    onChange={(e) => handlePickFile(user, e)}
+                  />
+
+                  {isUploading ? (
+                    <div className="flex items-center gap-1 px-2 text-xs text-amber-400">
+                      <Spinner size="sm" />
+                      <span>{uploadPct}%</span>
+                    </div>
+                  ) : (
+                    <>
+                      <Button
+                        size="sm"
+                        variant={card ? 'ghost' : 'secondary'}
+                        onClick={() => fileInputRefs.current.get(user.id)?.click()}
+                        className="text-xs"
+                      >
+                        <Upload size={13} />
+                        {card ? 'Cambiar' : 'Subir'}
+                      </Button>
+
+                      {card && (
+                        <button
+                          type="button"
+                          onClick={() => removeCard(card)}
+                          disabled={isBusy}
+                          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-red-400 disabled:opacity-50"
+                          title="Eliminar tarjeta"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Lightbox / Preview modal */}
+      {previewCard && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setPreviewCard(null)}
+        >
+          <div
+            className="relative flex max-h-[90vh] max-w-lg flex-col items-center rounded-2xl border border-zinc-700 bg-zinc-900 p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex w-full items-center justify-between">
+              <p className="text-sm font-semibold text-zinc-200">{previewCard.title}</p>
+              <button
+                type="button"
+                onClick={() => setPreviewCard(null)}
+                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="max-h-[75vh] overflow-hidden rounded-lg">
+              <img
+                src={previewCard.downloadUrl}
+                alt={previewCard.title}
+                className="max-h-[75vh] w-auto object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

@@ -55,25 +55,33 @@ interface InsightsResponse {
 }
 
 /**
- * Trae el gasto de anuncios (lifetime) por anuncio desde la Meta Marketing API.
+ * Trae el gasto de anuncios (lifetime o por rango) por anuncio desde la Meta Marketing API.
  * Devuelve un mapa adId → gasto/impresiones/clics. Ante cualquier error de red o
  * de permisos, loguea y devuelve null (el ranking de calidad sigue funcionando
- * sin costos). Requiere `metaAdsConfigured()`.
+ * sin costos).
  */
-export async function getLifetimeAdSpend(range: AdSpendRange = 'all'): Promise<Map<string, AdSpend> | null> {
-  if (!env.metaAdsConfigured()) return null;
+export async function getLifetimeAdSpend(
+  range: AdSpendRange = 'all',
+  config?: { accessToken?: string; adAccountId?: string },
+  /** Rango personalizado (YYYY-MM-DD, inclusivo). Si viene, reemplaza a `range`. */
+  customRange?: { since: string; until: string }
+): Promise<Map<string, AdSpend> | null> {
+  const token = config?.accessToken || env.metaAdsAccessToken();
+  const rawAccount = config?.adAccountId || env.metaAdAccountId();
+  const account = rawAccount ? rawAccount.replace(/^act_/, '') : '';
+
+  if (!token || !account) return null;
 
   const version = env.metaGraphVersion();
-  const account = env.metaAdAccountId();
-  const token   = env.metaAdsAccessToken();
 
   const params = new URLSearchParams({
     level:       'ad',
     fields:      'ad_id,ad_name,spend,impressions,clicks',
-    date_preset: datePresetFor(range),
     limit:       '500',
     access_token: token,
   });
+  if (customRange) params.set('time_range', JSON.stringify(customRange));
+  else params.set('date_preset', datePresetFor(range));
 
   let url: string | null =
     `https://graph.facebook.com/${version}/act_${account}/insights?${params.toString()}`;
@@ -135,14 +143,17 @@ interface AdsMetaResponse {
  * Trae el estado (Activo/Pausado/…) y la campaña de cada anuncio de la cuenta,
  * para poder mostrar/filtrar por estado y por campaña. Excluye anuncios
  * archivados/borrados. Ante error devuelve null (la página sigue sin estado).
- * Requiere `metaAdsConfigured()`.
  */
-export async function getAdsMeta(): Promise<Map<string, AdMeta> | null> {
-  if (!env.metaAdsConfigured()) return null;
+export async function getAdsMeta(
+  config?: { accessToken?: string; adAccountId?: string }
+): Promise<Map<string, AdMeta> | null> {
+  const token = config?.accessToken || env.metaAdsAccessToken();
+  const rawAccount = config?.adAccountId || env.metaAdAccountId();
+  const account = rawAccount ? rawAccount.replace(/^act_/, '') : '';
+
+  if (!token || !account) return null;
 
   const version = env.metaGraphVersion();
-  const account = env.metaAdAccountId();
-  const token   = env.metaAdsAccessToken();
 
   const params = new URLSearchParams({
     fields: 'id,name,effective_status,campaign{name},adset{name}',

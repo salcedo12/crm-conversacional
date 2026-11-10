@@ -1,0 +1,288 @@
+[
+  {
+    "id": "0ChIZU1Qp19GtAjGdYBn",
+    "companyId": "grupo_meraki_real",
+    "name": "pregunta_por_interes",
+    "displayName": "pregunta por interes",
+    "category": "marketing",
+    "language": "es",
+    "body": "Hola , ¿cómo estás?\n\nQueríamos saludarte y saber si aún sigues interesado(a) en tener tu espacio en el campo 🌿. \n\nActualmente contamos con proyectos en Melgar, Mariquita y Alvarado (Tolima), sobre vía nacional, con toda la documentación legal y con la tranquilidad de que ya hemos entregado 4 proyectos. \n\nAdemás, ofrecemos facilidades de pago para que invertir sea mucho más sencillo 🤝\n\nNos ayudaría mucho saber si deseas continuar con la información. Puedes responder a este mensaje con un sí o un no, sin compromiso 🙌\n\nQuedamos muy atentos a tu respuesta.",
+    "variables": [],
+    "status": "pending",
+    "headerType": "none",
+    "createdAt": {
+      "_seconds": 1787765430,
+      "_nanoseconds": 241000000
+    },
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "updatedAt": {
+      "_seconds": 1787927288,
+      "_nanoseconds": 323000000
+    }
+  },
+  {
+    "id": "lYoJIZLStJp4TX3rpNlN",
+    "companyId": "grupo_meraki_real",
+    "name": "confirmacion_de_cita",
+    "displayName": "confirmacion de cita",
+    "category": "marketing",
+    "language": "es",
+    "body": "Hola {{1}} \nSoy Victoria Sarmiento, agente inmobiliaria de Grupo Constructor Meraki. 🌿\n\nTe confirmo tu cita para conocer más sobre nuestros clubes de campo y proyectos campestres.\n\n🗓 Fecha y hora: {{2}}\n\nEstaré esperándote para resolver todas tus dudas y acompañarte a dar el siguiente paso hacia una inversión inteligente. 🍃",
+    "variables": [
+      {
+        "key": "1",
+        "example": "Eduardo salcedo"
+      },
+      {
+        "key": "2",
+        "example": "agosto 3 de 2026"
+      }
+    ],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853723,
+      "_nanoseconds": 149000000
+    },
+    "updatedAt": {
+      "_seconds": 1787927255,
+      "_nanoseconds": 672000000
+    }
+  },
+  {
+    "id": "AY14NeBc5P0bfPrwVbmJ",
+    "companyId": "grupo_meraki_real",
+    "name": "reactivacion_de_clientes",
+    "displayName": "reactivacion de clientes",
+    "category": "marketing",
+    "language": "es",
+    "body": "Hola, {{1}} 👋 Vimos que dejaste pendiente la información sobre nuestros terrenos campestres.\n\nHoy puedes retomar tu proceso y conocer las opciones disponibles, precios y planes de pago.\n\n¿Te envío la información actualizada?",
+    "variables": [
+      {
+        "key": "1",
+        "example": "pedro"
+      }
+    ],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853723,
+      "_nanoseconds": 27000000
+    },
+    "updatedAt": {
+      "_seconds": 1790020446,
+      "_nanoseconds": 742000000
+    }
+  },
+  {
+    "id": "E9fBwgaZ5IuMOZ0dluIZ",
+    "companyId": "grupo_meraki_real",
+    "name": "beneficios_corferias_presencial_virtual_2026",
+    "displayName": "beneficios corferias presencial virtual 2026",
+    "category": "marketing",
+    "language": "es",
+    "body": "🔥 ¡Los beneficios de Corferias también llegan hasta ti!\n\nDel 20 al 23 de agosto, Grupo Constructor Meraki estará en el Gran Salón Inmobiliario 2026 con beneficios exclusivos para invertir en proyectos campestres en el Tolima. 🌳\n\n📍 Corferias, pabellón 6, stand 125.\n\n¿No puedes viajar a Bogotá? ¡No importa! Puedes acceder a los beneficios y precios especiales de feria desde cualquier ciudad de Colombia o desde el exterior.\n\n🎁 Si asistirás, responde con el día: 20, 21, 22 o 23.\n📲 Si quieres recibir atención a distancia, responde: QUIERO BENEFICIOS.\n\n¡Esta oportunidad estará disponible únicamente durante los días de feria!\n\nMeraki — Líderes en hacer del campo tu segundo hogar.",
+    "variables": [],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "footer": "Con Meraki, vas a la fija! ",
+    "createdAt": {
+      "_seconds": 1787853722,
+      "_nanoseconds": 399000000
+    },
+    "updatedAt": {
+      "_seconds": 1790020446,
+      "_nanoseconds": 385000000
+    }
+  },
+  {
+    "id": "GujvLiJ8QVTKh51itWvD",
+    "companyId": "grupo_meraki_real",
+    "name": "saludo_pagina_web",
+    "displayName": "saludo pagina web",
+    "category": "marketing",
+    "language": "es",
+    "body": "Hola {{1}}\n🌳🌴 ¡Bienvenido(a) a Grupo Constructor MERAKI! 🌴🌳\nGracias por registrarte en nuestro sitio web. Este es nuestro canal oficial de ventas y atención al cliente.\n\nAl comunicarte por este medio, y conforme a la Ley 1581 de 2012, autorizas el tratamiento de tus datos personales con fines informativos, institucionales y comerciales.\n\n✨ ¡Gracias por tu interés! En breve uno de nuestros asesores te contactará.\n¿Podrías confirmarme con quién tengo el gusto de hablar?",
+    "variables": [
+      {
+        "key": "1",
+        "example": "Eduardo salcedo"
+      }
+    ],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853723,
+      "_nanoseconds": 301000000
+    },
+    "updatedAt": {
+      "_seconds": 1790020446,
+      "_nanoseconds": 980000000
+    }
+  },
+  {
+    "id": "aqO3bPEwXi8QUW61h6F2",
+    "companyId": "grupo_meraki_real",
+    "name": "pauta_formulario_corferias_2026",
+    "displayName": "pauta formulario corferias 2026",
+    "category": "marketing",
+    "language": "es",
+    "body": " Hola 👋\n\n¡Recibimos tu registro!\n\nSoy tu asesor de Grupo Constructor Meraki, y estaré acompañándote para que conozcas nuestros proyectos y beneficios disponibles durante el Gran Salón Inmobiliario en Corferias 2026.\n\nAntes de enviarte la información, cuéntame:\n\n¿Qué te gustaría conocer primero?",
+    "variables": [],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "footer": "Con Meraki, vas a la fija!",
+    "createdAt": {
+      "_seconds": 1787853722,
+      "_nanoseconds": 808000000
+    },
+    "updatedAt": {
+      "_seconds": 1787927255,
+      "_nanoseconds": 490000000
+    }
+  },
+  {
+    "id": "RQbXU2fvtq0mZAw3EEzM",
+    "companyId": "grupo_meraki_real",
+    "name": "cita_asesor",
+    "displayName": "cita asesor",
+    "category": "utility",
+    "language": "es",
+    "body": "📅 ¡Nueva cita agendada!\n\nCliente: {{1}}\nTeléfono: {{2}}\nFecha: {{3}}\nHora: {{4}}\n\nContáctalo y revisa los detalles en el CRM.",
+    "variables": [
+      {
+        "key": "1",
+        "example": "María Pérez"
+      },
+      {
+        "key": "2",
+        "example": "+57 300 123 4567"
+      },
+      {
+        "key": "3",
+        "example": "sábado 16 de agosto de 2026"
+      },
+      {
+        "key": "4",
+        "example": "10:00 a. m."
+      }
+    ],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853722,
+      "_nanoseconds": 286000000
+    },
+    "updatedAt": {
+      "_seconds": 1790020446,
+      "_nanoseconds": 264000000
+    }
+  },
+  {
+    "id": "WZ97akQpUsXaXhKczX9m",
+    "companyId": "grupo_meraki_real",
+    "name": "alerta_sistema",
+    "displayName": "alerta sistema",
+    "category": "utility",
+    "language": "es",
+    "body": "🚨 Alerta del CRM:\n\n{{1}}\n\nRevisa el panel para más detalle",
+    "variables": [
+      {
+        "key": "1",
+        "example": "no se entrego el ultimo mensaje "
+      }
+    ],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853723,
+      "_nanoseconds": 402000000
+    },
+    "updatedAt": {
+      "_seconds": 1790020447,
+      "_nanoseconds": 97000000
+    }
+  },
+  {
+    "id": "yg8k7wZRKZbE4E8FmeZY",
+    "companyId": "grupo_meraki_real",
+    "name": "ultima_oportunidad_corferias",
+    "displayName": "ultima oportunidad corferias",
+    "category": "marketing",
+    "language": "es",
+    "body": "🔥 ¡ÚLTIMO DÍA DE FERIA!\n\nLotes campestres desde 490 m² por $109.990.000. 🌴🏡\n\n📍 Corferias – Pabellón 6, Stand 125\n📲 O escríbenos desde cualquier lugar.\n\n¡Aprovecha HOY!",
+    "variables": [],
+    "status": "approved",
+    "headerType": "video",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "headerMediaUrl": "https://firebasestorage.googleapis.com/v0/b/crm-conversacional.firebasestorage.app/o/companies%2Fgrupo_meraki_real%2Fmedia%2Ftemplates%2F1787500951686_VIDEO_7_-_1920_2_.mp4?alt=media&token=5f157c60-7d28-4921-bcb0-ed67f3f1f89a",
+    "createdAt": {
+      "_seconds": 1787853722,
+      "_nanoseconds": 137000000
+    },
+    "updatedAt": {
+      "_seconds": 1787927254,
+      "_nanoseconds": 999000000
+    }
+  },
+  {
+    "id": "jUoLMSXlH0CyyPttKt1S",
+    "companyId": "grupo_meraki_real",
+    "name": "reactivacion_con_pregunta_de_interes",
+    "displayName": "reactivacion con pregunta de interes",
+    "category": "marketing",
+    "language": "es",
+    "body": "Hola , ¿cómo estás?\n\nQueríamos saludarte y saber si aún sigues interesado(a) en tener tu espacio en el campo 🌿. \n\nActualmente contamos con proyectos en Melgar, Mariquita y Alvarado (Tolima), sobre vía nacional, con toda la documentación legal y con la tranquilidad de que ya hemos entregado 4 proyectos. \n\nAdemás, ofrecemos facilidades de pago para que invertir sea mucho más sencillo 🤝\n\nNos ayudaría mucho saber si deseas continuar con la información. Puedes responder a este mensaje con un sí o un no, sin compromiso 🙌\n\nQuedamos muy atentos a tu respuesta.",
+    "variables": [],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853721,
+      "_nanoseconds": 630000000
+    },
+    "updatedAt": {
+      "_seconds": 1787927254,
+      "_nanoseconds": 806000000
+    }
+  },
+  {
+    "id": "bldtNALWywuUYwtg50E1",
+    "companyId": "grupo_meraki_real",
+    "name": "lead_espana_marketing",
+    "displayName": "lead espana marketing",
+    "category": "marketing",
+    "language": "es",
+    "body": "Hola,  👋 Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki.\n\nRecibimos tu solicitud desde España 🇪🇸 para conocer nuestras opciones de inversión en lotes campestres en Colombia.\n\nUn asesor puede ayudarte con:\n• Proyectos disponibles\n• Precios y beneficios comerciales\n• Opciones de pago\n• Proceso de compra desde el exterior\n\n¿Quieres que te conecte ahora con un asesor comercial?",
+    "variables": [],
+    "status": "approved",
+    "headerType": "none",
+    "wabaId": "1643056187826489",
+    "lineNumber": "+573176820728",
+    "createdAt": {
+      "_seconds": 1787853722,
+      "_nanoseconds": 544000000
+    },
+    "updatedAt": {
+      "_seconds": 1790020446,
+      "_nanoseconds": 520000000
+    }
+  }
+]

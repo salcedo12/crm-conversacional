@@ -29,7 +29,13 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
     emailSent: boolean;
   } | null>(null);
   const [copied, setCopied] = useState(false);
-  const [draft, setDraft] = useState({ email: '', displayName: '', role: 'advisor', active: true });
+  const [draft, setDraft] = useState({
+    email: '',
+    displayName: '',
+    role: 'advisor',
+    active: true,
+    receiveLeads: true,
+  });
 
   const load = async () => {
     setLoading(true);
@@ -55,9 +61,15 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
     setInvite(null);
     setCopied(false);
     try {
-      const result = await createCompanyUser({ companyId, ...draft, email, displayName });
+      const result = await createCompanyUser({
+        companyId,
+        ...draft,
+        email,
+        displayName,
+        receiveLeads: draft.role === 'advisor' ? draft.receiveLeads : false,
+      });
       setInvite({ email, displayName, link: result.inviteLink, emailSent: result.emailSent === true });
-      setDraft({ email: '', displayName: '', role: 'advisor', active: true });
+      setDraft({ email: '', displayName: '', role: 'advisor', active: true, receiveLeads: true });
       await load();
     } catch (err) {
       console.error('[UsersPanel] create error:', err);
@@ -84,6 +96,7 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
         displayName: user.displayName,
         role: user.role,
         active: user.active,
+        receiveLeads: user.receiveLeads,
         phone: user.phone ?? '',
       });
       await load();
@@ -107,17 +120,35 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
       </div>
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-        <p className="mb-3 text-xs font-medium text-zinc-300">Invitar usuario</p>
-        <div className="grid gap-2 md:grid-cols-[1fr_1fr_140px_auto]">
+        <p className="mb-3 text-xs font-medium text-zinc-300">Invitar / Crear nuevo usuario</p>
+        <div className="grid gap-2 md:grid-cols-[1fr_1fr_130px_220px_auto]">
           <input className={inputClass} value={draft.email} onChange={(event) => setDraft((prev) => ({ ...prev, email: event.target.value }))} placeholder="correo@empresa.com" />
           <input className={inputClass} value={draft.displayName} onChange={(event) => setDraft((prev) => ({ ...prev, displayName: event.target.value }))} placeholder="Nombre visible" />
           <select className={inputClass} value={draft.role} onChange={(event) => setDraft((prev) => ({ ...prev, role: event.target.value }))}>
             {ROLES.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
           </select>
+          {draft.role === 'advisor' ? (
+            <select
+              className={`${inputClass} font-medium ${draft.receiveLeads ? 'border-emerald-500/40 text-emerald-300' : 'border-sky-500/40 text-sky-300'}`}
+              value={draft.receiveLeads ? 'pauta' : 'seguimiento'}
+              onChange={(event) => setDraft((prev) => ({ ...prev, receiveLeads: event.target.value === 'pauta' }))}
+              title="Define si este asesor entra en la rueda de leads nuevos o solo hace seguimientos"
+            >
+              <option value="pauta">🟢 Recibe Pauta + Seguimiento</option>
+              <option value="seguimiento">🔵 Solo Seguimientos (Sin Pauta)</option>
+            </select>
+          ) : (
+            <div className="flex h-9 items-center rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-xs text-zinc-500">
+              Rol administrativo / lectura
+            </div>
+          )}
           <Button size="sm" onClick={create} loading={savingId === 'new'} disabled={!draft.email.trim() || !draft.displayName.trim()}>
             <Plus size={14} /> Invitar
           </Button>
         </div>
+        <p className="mt-2 text-[11px] text-zinc-500">
+          💡 Puedes elegir desde aquí si el nuevo asesor entra a la <strong>Rueda de Pauta (317 / Meta Ads)</strong> o si es un usuario de <strong>Solo Seguimientos / Cartera Propia</strong>.
+        </p>
         {invite && (
           <div className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -164,10 +195,19 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-800">
           {users.map((user) => (
-            <div key={user.id} className="grid gap-2 border-b border-zinc-800 bg-zinc-900/30 p-3 last:border-b-0 md:grid-cols-[1fr_150px_110px_auto]">
+            <div key={user.id} className="grid gap-2 border-b border-zinc-800 bg-zinc-900/30 p-3 last:border-b-0 md:grid-cols-[1fr_140px_210px_auto]">
               <div className="min-w-0">
-                <input className={`${inputClass} w-full`} value={user.displayName} onChange={(event) => patchUser(user.id, { displayName: event.target.value })} />
-                <p className="mt-1 truncate text-[11px] text-zinc-500">{user.email || user.id}{user.googleConnected ? ' - Calendar conectado' : ''}</p>
+                <div className="flex items-center gap-2">
+                  <input className={`${inputClass} w-full`} value={user.displayName} onChange={(event) => patchUser(user.id, { displayName: event.target.value })} />
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
+                  <span className="truncate">{user.email || user.id}{user.googleConnected ? ' · Calendar conectado' : ''}</span>
+                  {user.isBlockedForLeads && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                      🔴 Pausado por SLA {user.blockedReason ? `(${user.blockedReason})` : ''}
+                    </span>
+                  )}
+                </div>
                 <input
                   className={`${inputClass} mt-1.5 w-full`}
                   value={user.phone ?? ''}
@@ -179,10 +219,27 @@ export function UserManagementPanel({ companyId }: { companyId: string }) {
               <select className={inputClass} value={user.role} onChange={(event) => patchUser(user.id, { role: event.target.value })}>
                 {ROLES.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
               </select>
-              <label className="flex h-9 items-center gap-2 rounded-md border border-zinc-800 px-3 text-xs text-zinc-300">
-                <input type="checkbox" checked={user.active} onChange={(event) => patchUser(user.id, { active: event.target.checked })} />
-                Activo
-              </label>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex h-9 items-center gap-2 rounded-md border border-zinc-800 px-3 text-xs text-zinc-300 cursor-pointer">
+                  <input type="checkbox" checked={user.active} onChange={(event) => patchUser(user.id, { active: event.target.checked })} />
+                  <span>{user.active ? 'Cuenta Activa' : 'Cuenta Inactiva'}</span>
+                </label>
+                {user.role === 'advisor' && (
+                  <select
+                    className={`h-9 rounded-md border px-2.5 text-xs font-medium outline-none cursor-pointer ${
+                      user.receiveLeads !== false
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                        : 'border-sky-500/40 bg-sky-500/10 text-sky-300'
+                    }`}
+                    value={user.receiveLeads !== false ? 'pauta' : 'seguimiento'}
+                    onChange={(event) => patchUser(user.id, { receiveLeads: event.target.value === 'pauta' })}
+                    title="Define si recibe datos automáticos de pauta (línea 317) o si solo hace seguimientos de su cartera"
+                  >
+                    <option value="pauta" className="bg-zinc-900 text-emerald-300">🟢 Recibe Pauta (Rueda 317)</option>
+                    <option value="seguimiento" className="bg-zinc-900 text-sky-300">🔵 Solo Seguimientos (Sin Pauta)</option>
+                  </select>
+                )}
+              </div>
               <Button size="sm" variant="secondary" onClick={() => update(user)} loading={savingId === user.id}>
                 <Save size={14} /> Guardar
               </Button>

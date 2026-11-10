@@ -28,6 +28,18 @@ function cursorValueForStartAfter(field: string, value: unknown): unknown {
 }
 
 export const leadsRepository = {
+  async findByPhone(
+    companyId: string,
+    phone: string
+  ): Promise<Lead | null> {
+    if (!phone) return null;
+    const snap = await col(companyId)
+      .where('phone', '==', phone)
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    return { id: snap.docs[0].id, ...snap.docs[0].data() } as Lead;
+  },
   async findByNormalizedPhone(
     companyId: string,
     normalizedPhone: string
@@ -96,6 +108,22 @@ export const leadsRepository = {
       .get();
     if (snap.empty) return null;
     return { id: snap.docs[0].id, ...snap.docs[0].data() } as Lead;
+  },
+
+  /** Busca un lead de WhatsApp por su ID de usuario encriptado de Meta CTWA (BSUID como CO.xxxx) */
+  async findByWhatsappUserId(
+    companyId: string,
+    whatsappUserId: string
+  ): Promise<Lead | null> {
+    if (!whatsappUserId) return null;
+    const snap = await col(companyId)
+      .where('whatsappUserId', '==', whatsappUserId)
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      return { id: snap.docs[0].id, ...snap.docs[0].data() } as Lead;
+    }
+    return this.findByExternalId(companyId, 'whatsapp', whatsappUserId);
   },
 
   async findById(companyId: string, leadId: string): Promise<Lead | null> {
@@ -218,20 +246,107 @@ export const leadsRepository = {
     }
 
     const search = filters.search?.trim();
-    let orderField: 'lastMessageAt' | 'createdAt' | 'name' | 'status' | 'normalizedPhone' = input.sortField;
+
+    // ── Si el usuario está buscando (por teléfono, nombre, etc.) ──────────────
     if (search) {
-      const phoneSearch = search.replace(/[^\d+]/g, '');
-      if (/^\+?\d{3,}$/.test(phoneSearch)) {
-        orderField = 'normalizedPhone';
-        const normalizedPhoneSearch = phoneSearch.startsWith('+') ? phoneSearch : `+${phoneSearch}`;
-        query = query
-          .where('normalizedPhone', '>=', normalizedPhoneSearch)
-          .where('normalizedPhone', '<=', `${normalizedPhoneSearch}\uf8ff`);
+      const cleanDigits = search.replace(/\D/g, '');
+      const isDigitsSearch = cleanDigits.length >= 3 && /^\+?[\d\s\-().]+$/.test(search);
+      const docsMap = new Map<string, Lead>();
+
+      if (isDigitsSearch) {
+        const promises: Promise<FirebaseFirestore.QuerySnapshot>[] = [];
+        if (cleanDigits.length >= 7) {
+          const tail = cleanDigits.slice(-10);
+          promises.push(col(companyId).where('phoneTail', '==', tail).limit(input.pageSize).get());
+          promises.push(col(companyId).where('normalizedPhone', '==', `+57${tail}`).limit(input.pageSize).get());
+          promises.push(col(companyId).where('normalizedPhone', '==', `+${cleanDigits}`).limit(input.pageSize).get());
+          promises.push(col(companyId).where('phone', '==', `+57${tail}`).limit(input.pageSize).get());
+          promises.push(col(companyId).where('phone', '==', tail).limit(input.pageSize).get());
+        } else {
+          // Búsqueda por prefijo numérico
+          promises.push(
+            col(companyId).where('normalizedPhone', '>=', `+57${cleanDigits}`)
+              .where('normalizedPhone', '<=', `+57${cleanDigits}\uf8ff`)
+              .limit(input.pageSize).get()
+          );
+          promises.push(
+            col(companyId).where('normalizedPhone', '>=', `+${cleanDigits}`)
+              .where('normalizedPhone', '<=', `+${cleanDigits}\uf8ff`)
+              .limit(input.pageSize).get()
+          );
+        }
+        const snaps = await Promise.all(promises);
+        snaps.forEach(s => s.forEach(d => docsMap.set(d.id, { id: d.id, ...d.data() } as Lead)));
       } else {
-        orderField = 'name';
-        query = query.where('name', '>=', search).where('name', '<=', `${search}\uf8ff`);
+        // Búsqueda por texto (nombre, apellido) soportando variaciones de mayúsculas/minúsculas
+        const variations = new Set<string>([
+          search,
+          search.toLowerCase(),
+          search.toUpperCase(),
+          search.charAt(0).toUpperCase() + search.slice(1).toLowerCase(),
+        ]);
+        const promises: Promise<FirebaseFirestore.QuerySnapshot>[] = [];
+        for (const v of variations) {
+          promises.push(
+            col(companyId).where('name', '>=', v).where('name', '<=', v + '\uf8ff').limit(input.pageSize).get()
+          );
+        }
+        const snaps = await Promise.all(promises);
+        snaps.forEach(s => s.forEach(d => docsMap.set(d.id, { id: d.id, ...d.data() } as Lead)));
       }
+
+      let results = Array.from(docsMap.values());
+
+      // Aplicar filtros adicionales en memoria si se especificaron
+      if (filters.status && filters.status !== 'all') {
+        results = results.filter(l => l.status === filters.status);
+      }
+      if (filters.source && filters.source !== 'all') {
+        results = results.filter(l => l.source === filters.source);
+      }
+      if (filters.aiEnabled === 'active') {
+        results = results.filter(l => l.aiEnabled === true);
+      } else if (filters.aiEnabled === 'manual') {
+        results = results.filter(l => l.aiEnabled === false);
+      }
+      if (filters.assignedTo && filters.assignedTo !== 'all') {
+        if (filters.assignedTo === 'unassigned') {
+          results = results.filter(l => !l.assignedTo);
+        } else {
+          results = results.filter(l => l.assignedTo === filters.assignedTo);
+        }
+      }
+      if (filters.inboxId && filters.inboxId !== 'all') {
+        results = results.filter(l => l.inboxId === filters.inboxId);
+      }
+      if (filters.listId && filters.listId !== 'all') {
+        results = results.filter(l => l.listIds?.includes(filters.listId!));
+      }
+      if (filters.tags?.length) {
+        results = results.filter(l => l.tags?.some(t => filters.tags!.includes(t)));
+      }
+
+      // Ordenar resultados según sortField y sortDir
+      results.sort((a: any, b: any) => {
+        let valA = a[input.sortField] ?? 0;
+        let valB = b[input.sortField] ?? 0;
+        if (valA?.toMillis) valA = valA.toMillis();
+        if (valB?.toMillis) valB = valB.toMillis();
+        if (input.sortDir === 'desc') {
+          return valA < valB ? 1 : (valA > valB ? -1 : 0);
+        }
+        return valA > valB ? 1 : (valA < valB ? -1 : 0);
+      });
+
+      const pageLeads = results.slice(0, input.pageSize);
+      return {
+        leads: pageLeads,
+        nextCursor: null,
+        hasMore: results.length > input.pageSize,
+      };
     }
+
+    let orderField: 'lastMessageAt' | 'createdAt' | 'name' | 'status' | 'normalizedPhone' = input.sortField;
 
     query = query.orderBy(orderField, input.sortDir);
 

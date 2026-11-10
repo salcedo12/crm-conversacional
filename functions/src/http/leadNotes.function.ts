@@ -70,18 +70,78 @@ export const addLeadNote = onCall(
     }
 
     const now = Timestamp.now();
+    const author = await authorName(data.companyId, ctx.uid);
     const ref = await notesCol(data.companyId, data.leadId).add({
       companyId:  data.companyId,
       leadId:     data.leadId,
       kind:       data.kind,
       text:       data.text,
       authorId:   ctx.uid,
-      authorName: await authorName(data.companyId, ctx.uid),
+      authorName: author,
       createdAt:  now,
       ...(data.kind === 'reminder' && data.dueAt
         ? { dueAt: Timestamp.fromMillis(data.dueAt), done: false, notified: false }
         : {}),
     });
+
+    const leadRef = db.collection('companies').doc(data.companyId).collection('leads').doc(data.leadId);
+    const leadSnap = await leadRef.get().catch(() => null);
+    const leadData = leadSnap?.exists ? leadSnap.data() : null;
+
+    const nowFormatted = new Date(Date.now() - 5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    const newBitEntry = {
+      id_registro: `crm_note_${Date.now()}`,
+      origen: 'CRM',
+      fecha: nowFormatted,
+      action: data.kind === 'reminder' ? 'Recordatorio Programado' : 'Nota de Seguimiento Comercial',
+      description: data.text.slice(0, 200),
+      asesor: author,
+      lastDate: nowFormatted,
+    };
+    const rawExisting = [
+      ...(Array.isArray(leadData?.bitacoras) ? leadData.bitacoras : []),
+      ...(Array.isArray(leadData?.metadata?.smarthomeBitacoras) ? leadData.metadata.smarthomeBitacoras : []),
+      ...(Array.isArray(leadData?.smarthomeBitacoras) ? leadData.smarthomeBitacoras : []),
+    ];
+    const seenBitKeys = new Set<string>();
+    const existingBitacoras: any[] = [];
+    for (const b of rawExisting) {
+      if (!b || typeof b !== 'object') continue;
+      const bKey = `${String(b.action || '').trim()}|${String(b.description || '').trim()}|${String(b.fecha || b.lastDate || '').slice(0, 16)}`;
+      if (!seenBitKeys.has(bKey)) {
+        seenBitKeys.add(bKey);
+        existingBitacoras.push(b);
+      }
+    }
+    const updatedBitacoras = [newBitEntry, ...existingBitacoras].slice(0, 60);
+
+    const leadUpdate: Record<string, any> = {
+      lastFollowUpAt: now,
+      lastFollowUpAction: data.kind === 'reminder' ? 'recordatorio' : 'nota_comercial',
+      lastFollowUpSummary: data.text.slice(0, 180),
+      lastFollowUpAuthor: author,
+      bitacoras: updatedBitacoras,
+      'metadata.smarthomeBitacoras': updatedBitacoras,
+      updatedAt: now,
+    };
+    if (Array.isArray(leadData?.smarthomeBitacoras)) {
+      leadUpdate.smarthomeBitacoras = updatedBitacoras;
+    }
+
+    if (data.kind === 'reminder' && data.dueAt) {
+      const d = new Date(data.dueAt);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hours = String(d.getHours()).padStart(2, '0');
+      const mins = String(d.getMinutes()).padStart(2, '0');
+      const dateFormatted = `${year}-${month}-${day} ${hours}:${mins}`;
+
+      leadUpdate.nextFollowUpDate = dateFormatted;
+      leadUpdate.nextFollowUpAction = data.text.slice(0, 80);
+    }
+
+    await leadRef.update(leadUpdate).catch(() => {});
 
     logger.info('[LeadNotes] Nota creada', { companyId: data.companyId, leadId: data.leadId, kind: data.kind, noteId: ref.id });
     return { noteId: ref.id };
@@ -92,7 +152,7 @@ export const deleteLeadNote = onCall(
   { region: 'us-central1', timeoutSeconds: 30 },
   async (request) => {
     const ctx = requireAuth(request);
-    requireRole(ctx, WRITE_ROLES);
+    requireRole(ctx, ADMIN_ROLES);
     const data = parseInput(DeleteLeadNoteSchema, request.data);
     assertCompany(ctx, data.companyId);
     await assertCanEditLead(ctx, data.companyId, data.leadId);

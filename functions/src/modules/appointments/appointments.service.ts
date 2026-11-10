@@ -11,7 +11,7 @@ import { buildEventTitle, buildEventDescription } from './appointmentMessages';
 import { getAiConfig } from '../ai/aiConfig.repository';
 import { postLeadSmartHomeBitacora } from '../smarthome/smarthomeEvents.service';
 import { notifyAdvisorAppointmentBooked } from './advisorNotifier.service';
-import type { Appointment } from './appointments.types';
+import type { Appointment, AppointmentModality } from './appointments.types';
 
 export interface BookInput {
   companyId:        string;
@@ -22,6 +22,8 @@ export interface BookInput {
   description?:     string;
   /** 'ai' si la agendó el asistente virtual; 'manual' si la creó un asesor. */
   source?:          'ai' | 'manual';
+  /** Llamada telefónica (por defecto) o videollamada por Google Meet. */
+  modality?:        AppointmentModality;
 }
 
 /**
@@ -97,6 +99,7 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
     endTime:   Timestamp.fromDate(endTime),
     googleEventId,
     googleMeetLink,
+    modality:  input.modality ?? 'llamada',
     status:    'scheduled',
     source:    input.source ?? 'manual',
   });
@@ -114,6 +117,7 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
       [
         `Registro automático enviado desde CRM Meraki: ${fromAi ? 'el asistente IA agendó una cita' : 'se agendó una cita desde el CRM'} para ${when}.`,
         `Duración: ${durationMinutes} minutos.`,
+        `Modalidad: ${input.modality === 'videollamada' ? 'videollamada por Google Meet' : 'llamada telefónica'}.`,
         googleMeetLink ? `Enlace Meet: ${googleMeetLink}` : '',
       ].filter(Boolean).join('\n')
     );
@@ -127,7 +131,7 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
 
   // Avisar al asesor asignado por WhatsApp (best-effort, no bloquea la cita).
   await notifyAdvisorAppointmentBooked({
-    companyId, advisorId, leadName: lead.name, leadPhone: lead.phone, startTime,
+    companyId, advisorId, leadName: lead.name, leadPhone: lead.phone, startTime, modality: input.modality ?? 'llamada',
   });
 
   logger.info('[Appointments] Cita agendada', {
@@ -284,6 +288,8 @@ export interface RescheduleInput {
   leadId:           string;
   startTime:        Date;
   durationMinutes?: number;
+  /** Si no se da, se conserva la de la cita anterior. */
+  modality?:        AppointmentModality;
 }
 
 /**
@@ -315,7 +321,30 @@ export async function rescheduleAppointment(
     startTime:       input.startTime,
     durationMinutes,
     source:          'ai',
+    modality:        input.modality ?? previous?.modality ?? 'llamada',
   });
 
   return { appointment, hadPrevious: !!previous };
+}
+
+/**
+ * El lead tiene una cita agendada que aún no pasa (o pasó hace menos de un día). En ese
+ * caso no se le envían seguimientos de "dejaste pendiente la información".
+ */
+export async function hasPendingAppointment(companyId: string, leadId: string): Promise<boolean> {
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const appts = await appointmentsRepository.findByLead(companyId, leadId);
+  return appts.some((a) => a.status === 'scheduled' && a.startTime.toMillis() >= since);
+}
+
+/** Cambia solo la modalidad de la cita activa (llamada ↔ videollamada). */
+export async function changeAppointmentModality(
+  companyId: string,
+  leadId: string,
+  modality: AppointmentModality
+): Promise<Appointment | null> {
+  const active = await findActiveAppointmentForLead(companyId, leadId);
+  if (!active || active.startTime.toMillis() < Date.now()) return null;
+  await appointmentsRepository.update(companyId, active.id, { modality });
+  return { ...active, modality };
 }

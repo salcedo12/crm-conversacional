@@ -19,26 +19,27 @@ export const ADVISOR_WHATSAPP_SOURCE = 'advisor_whatsapp' as const;
  * informes) ni en el reparto/asignación de datos, pero SÍ siguen visibles en el
  * CRM y asignados a su asesor.
  */
-export function isDirectAdvisorLead(lead: Pick<Lead, 'source' | 'metadata'>): boolean {
+export function isDirectAdvisorLead(lead: Pick<Lead, 'source' | 'metadata' | 'inbox'>): boolean {
+  if (lead.inbox === 'advisor_direct') return true;
   if (lead.source === ADVISOR_WHATSAPP_SOURCE) return true;
   const meta = lead.metadata as { advisorWhatsappMirror?: unknown } | undefined;
   return meta?.advisorWhatsappMirror === 'true' || meta?.advisorWhatsappMirror === true;
 }
 
 /** Inverso de {@link isDirectAdvisorLead}: ¿este lead cuenta como dato del negocio? */
-export function countsAsBusinessLead(lead: Pick<Lead, 'source' | 'metadata'>): boolean {
+export function countsAsBusinessLead(lead: Pick<Lead, 'source' | 'metadata' | 'inbox'>): boolean {
   return !isDirectAdvisorLead(lead);
 }
 
 /**
  * Fuentes que representan tráfico REAL a nuestra línea principal (317): la pauta
- * (anuncios click-to-WhatsApp y Meta Lead Ads → `meta_ads`), los formularios /
- * botón de la web (→ `web`) y el WhatsApp orgánico directo al 317 (→ `whatsapp`).
+ * (anuncios click-to-WhatsApp y Meta Lead Ads → `meta_ads`, Google Ads → `google_ads`),
+ * los formularios / botón de la web (→ `web`) y el WhatsApp orgánico directo al 317 (→ `whatsapp`).
  *
  * Deja fuera Messenger/Instagram orgánico (`facebook`/`instagram`), los leads
  * creados a mano (`manual`) y el WhatsApp personal del asesor (`advisor_whatsapp`).
  */
-export const LINE_317_SOURCES = new Set<Lead['source']>(['whatsapp', 'web', 'meta_ads']);
+export const LINE_317_SOURCES = new Set<Lead['source']>(['whatsapp', 'web', 'meta_ads', 'google_ads']);
 
 /**
  * ¿Este lead entró por la línea 317 (pauta, formulario o WhatsApp directo al 317)?
@@ -47,6 +48,6 @@ export const LINE_317_SOURCES = new Set<Lead['source']>(['whatsapp', 'web', 'met
  * informe por asesor y en el reparto/asignación de datos para medir SOLO nuestra
  * pauta/formularios al 317, sin contar otros canales.
  */
-export function countsAs317LineLead(lead: Pick<Lead, 'source' | 'metadata'>): boolean {
+export function countsAs317LineLead(lead: Pick<Lead, 'source' | 'metadata' | 'inbox'>): boolean {
   return !isDirectAdvisorLead(lead) && LINE_317_SOURCES.has(lead.source);
 }

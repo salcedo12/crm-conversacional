@@ -41,10 +41,12 @@ export function useLeadsPage(leads: Lead[]) {
     // Búsqueda
     const q = filters.search.trim().toLowerCase();
     if (q) {
+      const qDigits = q.replace(/\D/g, '');
       list = list.filter(
         (l) =>
           l.name?.toLowerCase().includes(q) ||
           l.phone.includes(q) ||
+          (qDigits.length >= 3 && l.phone.replace(/\D/g, '').includes(qDigits)) ||
           l.lastMessageText?.toLowerCase().includes(q) ||
           l.tags?.some((t) => t.toLowerCase().includes(q))
       );

@@ -20,7 +20,7 @@ export const processErrorAlerts = onSchedule(
     schedule:       'every 5 minutes',
     region:         'us-central1',
     timeoutSeconds: 120,
-    memory:         '256MiB',
+    memory:         '512MiB',
     timeZone:       'America/Bogota',
   },
   async () => {

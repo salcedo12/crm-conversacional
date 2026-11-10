@@ -3,6 +3,7 @@ import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { leadsRepository } from '../modules/leads/leads.repository';
 import { syncLeadToSmartHome } from '../modules/smarthome/smarthomeSync.service';
+import { isDirectAdvisorLead, countsAs317LineLead } from '../modules/leads/leadClassification';
 import type { Lead } from '../modules/leads/leads.types';
 
 /**
@@ -48,6 +49,15 @@ export const processSmartHomeRetries = onSchedule(
       const parts = doc.ref.path.split('/'); // companies/{cid}/leads/{lid}
       const companyId = parts[1];
       const data = doc.data() as Lead & { smartHomeSyncRetries?: number };
+
+      if (isDirectAdvisorLead(data) || !countsAs317LineLead(data)) {
+        // Los leads de asesor no se sincronizan a SmartHome. Limpiamos el error para no reintentar.
+        await leadsRepository.update(companyId, doc.id, {
+          smartHomeSyncError: '',
+          smartHomeSyncRetries: 0,
+        });
+        continue;
+      }
 
       const retries = data.smartHomeSyncRetries ?? 0;
       if (retries >= MAX_RETRIES) {

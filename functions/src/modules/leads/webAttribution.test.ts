@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseWebRefTag, webAttributionToMetadata, resolveTrafficOrigin } from './webAttribution';
+import { parseWebRefTag, webAttributionToMetadata, resolveTrafficOrigin, isGoogleAdsWhatsAppText } from './webAttribution';
 
 /**
  * Simula lo que hace el botón de WhatsApp de la web: añade el tag [meraki-ref:…]
@@ -69,5 +69,18 @@ describe('atribución del botón de WhatsApp de la web (round-trip web → CRM)'
     expect(resolveTrafficOrigin({ utm_source: 'instagram' })).toBe('Meta (Facebook/Instagram)');
     expect(resolveTrafficOrigin({ utm_source: 'newsletter' })).toBe('newsletter');
     expect(resolveTrafficOrigin({})).toBeUndefined();
+  });
+});
+
+describe('anuncio de Google Ads con botón de WhatsApp', () => {
+  it('detecta el texto precargado del anuncio (aunque el cliente le pegue más texto)', () => {
+    expect(isGoogleAdsWhatsAppText('Hola, vi su anuncio en Google y quiero información sobre los lotes campestres en TolimaBusco mas información')).toBe(true);
+    expect(isGoogleAdsWhatsAppText('vi el ANUNCIO DE GOOGLE')).toBe(true);
+  });
+
+  it('no confunde mensajes que solo nombran Google', () => {
+    expect(isGoogleAdsWhatsAppText('1. Abre este enlace: https://play.google.com/apps/testing')).toBe(false);
+    expect(isGoogleAdsWhatsAppText('Hola, me gustaría hablar con el área de Ventas')).toBe(false);
+    expect(isGoogleAdsWhatsAppText(undefined)).toBe(false);
   });
 });

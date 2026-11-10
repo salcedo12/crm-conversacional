@@ -15,6 +15,7 @@ export interface SendTemplateParams {
   variables: Record<string, string>;
   /** uid del asesor que origina el envío (para el mensaje guardado). */
   advisorId?: string;
+  senderType?: 'advisor' | 'ai';
   broadcastId?: string;
   /**
    * Línea (+E.164) desde la que el asesor ELIGIÓ enviar, ignorando el `inboxId`
@@ -39,7 +40,7 @@ export interface SendTemplateResult {
  * como por el envío masivo (sendBroadcast). Lanza si el proveedor falla.
  */
 export async function sendTemplateToLead(params: SendTemplateParams): Promise<SendTemplateResult> {
-  const { companyId, lead, template, variables, advisorId, broadcastId, fromInboxId } = params;
+  const { companyId, lead, template, variables, advisorId, senderType = 'advisor', broadcastId, fromInboxId } = params;
   // Línea efectiva: la elegida por el asesor (si envió una) o la del lead.
   const sendInboxId = fromInboxId || lead.inboxId;
 
@@ -96,7 +97,7 @@ export async function sendTemplateToLead(params: SendTemplateParams): Promise<Se
     companyId,
     leadId:           lead.id,
     direction:        'outbound',
-    senderType:       'advisor',
+    senderType:       senderType,
     content:          body,
     channel:          'whatsapp',
     status:           'sent',

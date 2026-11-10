@@ -7,14 +7,19 @@ import { sendLeadReassignedPush } from '../modules/messages/pushNotifications.se
 import { normalizePhone, phoneTail, toNormalizedPhone } from '../utils/phone';
 
 const UpdateLeadSchema = z.object({
-  companyId:  z.string().min(1),
-  leadId:     z.string().min(1),
-  name:       z.string().min(1).max(120).optional(),
-  phone:      z.string().min(7).max(40).optional(),
-  status:     z.enum(['new', 'active', 'qualified', 'scheduled', 'lost', 'closed']).optional(),
-  assignedTo: z.string().optional().nullable(),
-  tags:       z.array(z.string().max(40)).max(20).optional(),
-  metadata:   z.record(z.string(), z.string().max(500)).optional(),
+  companyId:       z.string().min(1),
+  leadId:          z.string().min(1),
+  name:            z.string().min(1).max(120).optional(),
+  phone:           z.string().min(7).max(40).optional(),
+  email:           z.string().max(160).optional().nullable(),
+  city:            z.string().max(120).optional().nullable(),
+  documentNumber:  z.string().max(60).optional().nullable(),
+  status:          z.enum(['new', 'active', 'qualified', 'scheduled', 'lost', 'closed']).optional(),
+  assignedTo:      z.string().optional().nullable(),
+  tags:            z.array(z.string().max(40)).max(20).optional(),
+  metadata:        z.record(z.string(), z.any()).optional(),
+  fuenteUbicacion: z.string().max(120).optional().nullable(),
+  projectInterest: z.array(z.string().max(120)).optional(),
 });
 
 /**
@@ -44,14 +49,52 @@ export const updateLead = onCall(
 
     // Construir objeto de actualización solo con los campos presentes
     const update: Record<string, unknown> = {};
-    if (fields.name       !== undefined) update.name       = fields.name;
-    if (fields.status     !== undefined) update.status     = fields.status;
-    if (fields.tags       !== undefined) update.tags       = fields.tags;
-    if (fields.assignedTo !== undefined && (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))) update.assignedTo = fields.assignedTo ?? null;
-    if (fields.metadata   !== undefined) update.metadata   = fields.metadata;
+    if (fields.name            !== undefined) update.name            = fields.name;
+    if (fields.email           !== undefined) update.email           = fields.email ?? null;
+    if (fields.city            !== undefined) update.city            = fields.city ?? null;
+    if (fields.documentNumber  !== undefined) update.documentNumber  = fields.documentNumber ?? null;
+    if (fields.status          !== undefined) update.status          = fields.status;
+    if (fields.tags            !== undefined) update.tags            = fields.tags;
+    if (fields.assignedTo      !== undefined && (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))) update.assignedTo = fields.assignedTo ?? null;
+    if (fields.metadata !== undefined) {
+      const currentMeta = (lead.metadata as Record<string, any>) || {};
+      const incomingMeta = { ...fields.metadata };
+      // Proteger bitácoras / fichas técnicas contra sobrescritura accidental desde formularios con estado viejo
+      const rawBitacoras = [
+        ...(Array.isArray((lead as any).bitacoras) ? (lead as any).bitacoras : []),
+        ...(Array.isArray(currentMeta.smarthomeBitacoras) ? currentMeta.smarthomeBitacoras : []),
+        ...(Array.isArray(incomingMeta.smarthomeBitacoras) ? incomingMeta.smarthomeBitacoras : []),
+      ];
+      if (rawBitacoras.length > 0) {
+        const seen = new Set<string>();
+        const mergedBitacoras: any[] = [];
+        for (const b of rawBitacoras) {
+          if (!b || typeof b !== 'object') continue;
+          const k = `${String(b.action || '').trim()}|${String(b.description || '').trim()}|${String(b.fecha || b.lastDate || '').slice(0, 16)}`;
+          if (!seen.has(k)) {
+            seen.add(k);
+            mergedBitacoras.push(b);
+          }
+        }
+        incomingMeta.smarthomeBitacoras = mergedBitacoras.slice(0, 60);
+        update.bitacoras = mergedBitacoras.slice(0, 60);
+      }
+      update.metadata = {
+        ...currentMeta,
+        ...incomingMeta,
+      };
+    }
+    if (fields.fuenteUbicacion !== undefined) update.fuenteUbicacion = fields.fuenteUbicacion ?? null;
+    if (fields.projectInterest !== undefined) update.projectInterest = fields.projectInterest;
     if (fields.phone !== undefined) {
-      if (!(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))) {
-        throw new HttpsError('permission-denied', 'Solo un administrador puede editar el telefono.');
+      const isLeadAdmin = ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role);
+      const isAssignedAdvisor = lead.assignedTo === ctx.uid;
+      const hasRealPhone = Boolean(lead.phone && !lead.phone.startsWith('user_') && !lead.phone.includes('CO.'));
+
+      // Permitir actualizar teléfono si es Administrador, o si es el asesor asignado a este lead,
+      // o si el lead entró sin teléfono real (por usuario/BSUID de WhatsApp).
+      if (!isLeadAdmin && !isAssignedAdvisor && hasRealPhone) {
+        throw new HttpsError('permission-denied', 'Solo puedes editar el teléfono de tus propios prospectos asignados.');
       }
 
       let digits = normalizePhone(fields.phone).replace(/\D/g, '');

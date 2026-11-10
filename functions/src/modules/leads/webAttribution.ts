@@ -50,6 +50,18 @@ export function webAttributionToMetadata(a: WebAttribution): Record<string, stri
 }
 
 /**
+ * Detecta el texto precargado del anuncio de Google Ads con botón de WhatsApp
+ * (recurso de mensajes): "Hola, vi su anuncio en Google y quiero información…".
+ * Ese clic va DIRECTO al chat del 317 sin pasar por la web, así que no trae
+ * gclid ni referral: el texto es la única señal. Si el cliente lo borra, no se detecta.
+ */
+export function isGoogleAdsWhatsAppText(text?: string): boolean {
+  if (!text) return false;
+  const norm = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  return /\banuncio (en|de) google\b/.test(norm);
+}
+
+/**
  * Extrae y LIMPIA el tag de atribución `[meraki-ref: k=v&k=v]` que el botón de
  * WhatsApp de la web añade al texto precargado (solo cuando el visitante llegó de
  * una pauta). Un wa.me normal solo conserva el `text`, así que este tag es el

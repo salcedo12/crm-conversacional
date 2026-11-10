@@ -6,6 +6,7 @@ import { logger }             from '../utils/logger';
 import { env }                from '../config/env';
 import { db }                 from '../lib/admin';
 import { leadsRepository }     from '../modules/leads/leads.repository';
+import { isExcludedFromLeadAssignment } from '../modules/leads/leadAssignment.service';
 import { googleConnectionRepository } from '../modules/calendar/googleConnection.repository';
 import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/authContext';
 import { normalizePhone } from '../utils/phone';
@@ -23,6 +24,11 @@ export interface AdvisorDTO {
   role:            string;
   active:          boolean;
   googleConnected: boolean;
+  /** Si el usuario recibe datos automáticos de pauta / línea 317 (Round-Robin). */
+  receiveLeads?:   boolean;
+  /** Si está temporalmente pausado por incumplir un SLA (Pre-Cita, Post-Cita o Toma Manual 24h). */
+  isBlockedForLeads?: boolean;
+  blockedReason?:  string | null;
   /** WhatsApp E.164 para avisos automáticos (ej. aviso de cita). '' si no se definió. */
   phone?:          string;
 }
@@ -40,6 +46,9 @@ function serializeUser(id: string, data: FirebaseFirestore.DocumentData, googleC
     role: data.role ?? 'advisor',
     active: data.active !== false,
     googleConnected,
+    receiveLeads: !isExcludedFromLeadAssignment(id, data),
+    isBlockedForLeads: data.isBlockedForLeads === true,
+    blockedReason: data.blockedReason ?? null,
     phone: data.phone ?? '',
     invitedAt: data.invitedAt?.toMillis?.() ?? null,
     updatedAt: data.updatedAt?.toMillis?.() ?? null,
@@ -84,8 +93,10 @@ export const createCompanyUser = onCall(
       displayName: z.string().trim().min(1).max(120),
       role: RoleSchema.default('advisor'),
       active: z.boolean().default(true),
+      receiveLeads: z.boolean().optional().nullable(),
     }).parse(request.data);
     assertCompany(ctx, data.companyId);
+    const shouldReceiveLeads = data.receiveLeads !== false;
 
     const auth = getAuth();
     let userId = '';
@@ -145,6 +156,8 @@ export const createCompanyUser = onCall(
       displayName: data.displayName,
       role: data.role,
       active: data.active,
+      receiveLeads: shouldReceiveLeads,
+      excludeFromLeadAssignment: !shouldReceiveLeads,
       invitedAt: now,
       updatedAt: now,
       createdAt: now,
@@ -153,10 +166,16 @@ export const createCompanyUser = onCall(
     logger.info('[Users] Usuario creado/invitado', {
       companyId: data.companyId,
       userId,
+      receiveLeads: shouldReceiveLeads,
       emailSent,
       by: ctx.uid,
     });
-    return { user: serializeUser(userId, data), inviteLink, emailSent, emailError };
+    return {
+      user: serializeUser(userId, { ...data, receiveLeads: shouldReceiveLeads, excludeFromLeadAssignment: !shouldReceiveLeads }),
+      inviteLink,
+      emailSent,
+      emailError,
+    };
   }
 );
 
@@ -171,6 +190,7 @@ export const updateCompanyUser = onCall(
       displayName: z.string().trim().min(1).max(120),
       role: RoleSchema,
       active: z.boolean(),
+      receiveLeads: z.boolean().optional(),
       // WhatsApp para avisos (ej. aviso de cita). Opcional; vacío = limpiar.
       phone: z.string().trim().max(25).optional(),
     }).parse(request.data);
@@ -184,6 +204,12 @@ export const updateCompanyUser = onCall(
       displayName: data.displayName,
       role: data.role,
       active: data.active,
+      ...(data.receiveLeads !== undefined
+        ? {
+            receiveLeads: data.receiveLeads,
+            excludeFromLeadAssignment: !data.receiveLeads,
+          }
+        : {}),
       // Solo si viene el campo: número normalizado a E.164, o '' para limpiarlo.
       ...(data.phone !== undefined ? { phone: data.phone ? normalizePhone(data.phone) : '' } : {}),
       updatedAt: Timestamp.now(),
@@ -272,7 +298,12 @@ export const reassignLead = onCall(
       }
     }
 
-    const update: Record<string, unknown> = { assignedTo: advisorId ?? null };
+    const now = Timestamp.now();
+    const update: Record<string, unknown> = {
+      assignedTo: advisorId ?? null,
+      advisorAssignedAt: now,
+      ...(lead.assignedTo && lead.assignedTo !== advisorId ? { previousAdvisorId: lead.assignedTo } : {}),
+    };
     await leadsRepository.update(companyId, leadId, update);
 
     if (advisorId && advisorId !== lead.assignedTo && advisorId !== ctx.uid) {

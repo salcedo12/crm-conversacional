@@ -148,3 +148,25 @@ export function useLeadEvidence(companyId: string, leadId: string) {
 
   return { evidence, loading };
 }
+
+export interface SyncBitacoraResult {
+  ok: boolean;
+  message: string;
+  eventsCount: number;
+  bitacoras: { action: string; count: number; lastDate: string; description: string; system?: boolean }[];
+  summary?: {
+    prospectId?: string;
+    advisor?: string;
+    stage?: string;
+    saleCycle?: string;
+  };
+}
+
+const _syncBitacora = httpsCallable<{ companyId: string; leadId: string }, SyncBitacoraResult>(
+  functions,
+  'syncSmartHomeLeadBitacora'
+);
+
+export async function syncSmartHomeLeadBitacora(companyId: string, leadId: string): Promise<SyncBitacoraResult> {
+  return (await _syncBitacora({ companyId, leadId })).data;
+}

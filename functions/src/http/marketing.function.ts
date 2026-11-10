@@ -1,11 +1,13 @@
-import { onCall } from 'firebase-functions/v2/https';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { z } from 'zod';
+import { Timestamp } from 'firebase-admin/firestore';
 import { db } from '../lib/admin';
 import { env } from '../config/env';
 import { getLifetimeAdSpend, getAdsMeta, type AdSpendRange } from '../integrations/meta/metaAds.client';
 import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/authContext';
 import type { Lead } from '../modules/leads/leads.types';
 import { countsAsBusinessLead } from '../modules/leads/leadClassification';
+import { getMetaAdsConfigForCompany } from '../modules/companies/channelCredentials.repository';
 
 /** Score a partir del cual un lead se considera "calificado" (para costo por lead calificado). */
 const QUALIFIED_SCORE = 60;
@@ -22,6 +24,47 @@ const GOOD_SCORE = 60;
 
 /** Días de la ventana temporal (para filtrar leads por createdAt). */
 const RANGE_DAYS: Record<Exclude<AdSpendRange, 'all'>, number> = { '7d': 7, '30d': 30, '90d': 90 };
+
+/** Las fechas del calendario se interpretan en hora de Colombia (UTC-5, sin horario de verano). */
+const BOGOTA_OFFSET = '-05:00';
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Parámetros de ventana temporal comunes a los dos callables. */
+const windowSchema = {
+  range: z.enum(['all', '7d', '30d', '90d', 'custom']).default('all'),
+  from:  z.string().regex(ISO_DAY).optional(),   // YYYY-MM-DD (inclusivo)
+  to:    z.string().regex(ISO_DAY).optional(),   // YYYY-MM-DD (inclusivo)
+};
+
+/** Ventana temporal resuelta: [startMs, endMs) sobre createdAt + cómo pedir el gasto a Meta. */
+interface TimeWindow {
+  range:   AdSpendRange | 'custom';
+  startMs: number;          // 0 = sin límite inferior
+  endMs:   number | null;   // null = hasta ahora
+  from:    string | null;
+  to:      string | null;
+  /** Rango para la API de Meta (time_range) cuando es personalizado. */
+  metaRange?: { since: string; until: string };
+}
+
+function resolveWindow(input: { range: AdSpendRange | 'custom'; from?: string; to?: string }): TimeWindow {
+  if (input.range === 'custom') {
+    if (!input.from || !input.to) throw new HttpsError('invalid-argument', 'Rango personalizado sin fechas.');
+    const [from, to] = input.from <= input.to ? [input.from, input.to] : [input.to, input.from];
+    const startMs = Date.parse(`${from}T00:00:00${BOGOTA_OFFSET}`);
+    const endMs = Date.parse(`${to}T00:00:00${BOGOTA_OFFSET}`) + 86_400_000;   // fin del día `to`
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) throw new HttpsError('invalid-argument', 'Fecha inválida.');
+    return { range: 'custom', startMs, endMs, from, to, metaRange: { since: from, until: to } };
+  }
+  const startMs = input.range === 'all' ? 0 : Date.now() - RANGE_DAYS[input.range] * 86_400_000;
+  return { range: input.range, startMs, endMs: null, from: null, to: null };
+}
+
+function inWindow(lead: Lead, w: TimeWindow): boolean {
+  if (w.startMs === 0 && w.endMs === null) return true;
+  const ms = lead.createdAt?.toMillis?.() ?? 0;
+  return ms >= w.startMs && (w.endMs === null || ms < w.endMs);
+}
 
 /** Recomendación accionable que el panel muestra arriba del ranking. */
 export type InsightKind = 'scale' | 'pause' | 'review' | 'info';
@@ -186,34 +229,110 @@ function buildInsights(
   return insights;
 }
 
-export const getMarketingMetrics = onCall(
-  { region: 'us-central1', timeoutSeconds: 60 },
+/** Clave de anuncio de un lead (misma regla que el ranking) o null si no viene de un anuncio. */
+function adKeyOf(lead: Lead): string | null {
+  const meta = lead.sourceMeta;
+  if (lead.source !== 'meta_ads' && !meta?.adId && !meta?.headline) return null;
+  return meta?.adId || meta?.headline || '__sin_id__';
+}
+
+/** Lee los leads de negocio de la empresa dentro de la ventana temporal. */
+async function loadBusinessLeads(companyId: string, w: TimeWindow, fields: string[]): Promise<Lead[]> {
+  let q = db.collection('companies').doc(companyId).collection('leads').select(...fields);
+  if (w.startMs > 0) q = q.where('createdAt', '>=', Timestamp.fromMillis(w.startMs));
+  if (w.endMs !== null) q = q.where('createdAt', '<', Timestamp.fromMillis(w.endMs));
+  const snap = await q.get();
+  // Fuera los leads directos al WhatsApp del asesor: no son dato de pauta.
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Lead))
+    .filter(countsAsBusinessLead)
+    .filter((l) => inWindow(l, w));
+}
+
+/**
+ * Contactos que entraron por uno o varios anuncios (botón "Ver contactos" del
+ * ranking, por anuncio o por campaña). Usa la misma atribución que
+ * getMarketingMetrics para que el listado cuadre con la columna "Leads".
+ */
+export const getMarketingAdLeads = onCall(
+  { region: 'us-central1', timeoutSeconds: 120, memory: '1GiB' },
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, ADMIN_ROLES);
 
-    const { companyId, range } = z.object({
+    const { companyId, adKeys, ...winInput } = z.object({
       companyId: z.string().min(1),
-      range:     z.enum(['all', '7d', '30d', '90d']).default('all'),
+      ...windowSchema,
+      adKeys:    z.array(z.string().min(1)).min(1).max(1000),
+    }).parse(request.data);
+    assertCompany(ctx, companyId);
+    const win = resolveWindow(winInput);
+
+    const wanted = new Set(adKeys);
+    const [leads, usersSnap] = await Promise.all([
+      loadBusinessLeads(companyId, win, [
+        'name', 'phone', 'source', 'status', 'createdAt', 'lastMessageAt', 'sourceMeta',
+        'aiAnalysis', 'metadata', 'inbox', 'assignedTo', 'channel', 'username',
+      ]),
+      db.collection('companies').doc(companyId).collection('users').get(),
+    ]);
+
+    const userName = new Map<string, string>();
+    usersSnap.forEach((u) => {
+      const d = u.data();
+      userName.set(u.id, d.displayName || d.email || 'Asesor');
+    });
+
+    const contacts = leads
+      .map((lead) => ({ lead, key: adKeyOf(lead) }))
+      .filter((x): x is { lead: Lead; key: string } => x.key !== null && wanted.has(x.key))
+      .map(({ lead, key }) => {
+        const m = lead.metadata ?? {};
+        const emailKey = Object.keys(m).find((k) => /e-?mail|correo/i.test(k));
+        return {
+          id:             lead.id,
+          adKey:          key,
+          name:           lead.name || lead.username || null,
+          phone:          lead.phone || null,
+          email:          emailKey ? m[emailKey] : null,
+          channel:        lead.channel ?? 'whatsapp',
+          status:         lead.status,
+          score:          typeof lead.aiAnalysis?.score === 'number' ? lead.aiAnalysis.score : null,
+          temperature:    lead.aiAnalysis?.temperature ?? null,
+          lossCategory:   lead.status === 'lost' ? (lead.aiAnalysis?.lossCategory ?? null) : null,
+          advisorName:    lead.assignedTo ? (userName.get(lead.assignedTo) ?? null) : null,
+          adName:         m.metaAdName || lead.sourceMeta?.headline || null,
+          campaignName:   m.metaCampaignName || null,
+          formName:       m.metaFormName || null,
+          createdAt:      lead.createdAt?.toMillis?.() ?? null,
+          lastMessageAt:  lead.lastMessageAt?.toMillis?.() ?? null,
+        };
+      })
+      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+
+    return { range: win.range, contacts };
+  }
+);
+
+export const getMarketingMetrics = onCall(
+  { region: 'us-central1', timeoutSeconds: 120, memory: '1GiB' },
+  async (request) => {
+    const ctx = requireAuth(request);
+    requireRole(ctx, ADMIN_ROLES);
+
+    const { companyId, ...winInput } = z.object({
+      companyId: z.string().min(1),
+      ...windowSchema,
     }).parse(request.data);
     assertCompany(ctx, companyId);
 
-    const leadsSnap = await db
-      .collection('companies').doc(companyId)
-      .collection('leads')
-      .get();
-
-    // Fuera los leads directos al WhatsApp del asesor: no son dato de pauta.
-    const allLeads = leadsSnap.docs
-      .map((d) => ({ id: d.id, ...d.data() } as Lead))
-      .filter(countsAsBusinessLead);
-
     // Ventana temporal: filtra leads por createdAt (el gasto se filtra vía date_preset
-    // en Meta, más abajo). 'all' = histórico completo.
-    const cutoffMs = range === 'all' ? 0 : Date.now() - RANGE_DAYS[range] * 86_400_000;
-    const leads = cutoffMs === 0
-      ? allLeads
-      : allLeads.filter((l) => (l.createdAt?.toMillis?.() ?? 0) >= cutoffMs);
+    // o time_range en Meta, más abajo). 'all' = histórico completo.
+    const win = resolveWindow(winInput);
+
+    const leads = await loadBusinessLeads(companyId, win, [
+      'source', 'status', 'createdAt', 'sourceMeta', 'aiAnalysis', 'metadata', 'inbox',
+    ]);
 
     const adMap = new Map<string, AdAcc>();       // por anuncio (meta_ads)
     const sourceMap = new Map<string, AdAcc>();    // por fuente (todas)
@@ -252,8 +371,17 @@ export const getMarketingMetrics = onCall(
 
     const leadRows = [...adMap.values()].map(finalizeAd);
 
+    // ── Credenciales dinámicas por empresa (channelCredentials) ────────────────
+    const metaConfig = await getMetaAdsConfigForCompany(companyId);
+    const hasConfig = !!metaConfig.accessToken && !!metaConfig.adAccountId;
+
     // ── Gasto + estado/campaña de Meta (en paralelo; null si no configurado) ────
-    const [spendMap, adsMeta] = await Promise.all([getLifetimeAdSpend(range), getAdsMeta()]);
+    const [spendMap, adsMeta] = hasConfig
+      ? await Promise.all([
+          getLifetimeAdSpend(win.range === 'custom' ? 'all' : win.range, metaConfig, win.metaRange),
+          getAdsMeta(metaConfig),
+        ])
+      : [null, null];
     let totalSpend = 0;
 
     // Índice de filas de leads por adId (para unir con el gasto).
@@ -264,10 +392,18 @@ export const getMarketingMetrics = onCall(
       else headlineOnly.push(r);
     }
 
-    const withSpend = (row: ReturnType<typeof finalizeAd>, s?: { spend: number; impressions: number; clicks: number }) => {
+    const withSpend = (row: ReturnType<typeof finalizeAd>, s?: { spend: number; impressions: number; clicks: number; adName?: string }) => {
       const meta = row.adId ? adsMeta?.get(row.adId) : undefined;
+      const cleanAdName = meta?.adName || s?.adName || null;
+
+      // Si el titular es una plantilla cruda de catálogo o Advantage+ ({{product.name}}...)
+      // o está vacío, usamos el nombre real del anuncio configurado en Meta Ads Manager.
+      const isTemplate = !row.headline || row.headline.includes('{{') || row.headline.includes('product.name');
+      const resolvedHeadline = isTemplate && cleanAdName ? cleanAdName : (row.headline || cleanAdName);
+
       const withMeta = {
         ...row,
+        headline:        resolvedHeadline,
         status:          meta?.status ?? null,           // 'active' | 'paused' | 'other' | null (desconocido)
         effectiveStatus: meta?.effectiveStatus ?? null,
         campaignName:    meta?.campaignName ?? null,
@@ -351,12 +487,14 @@ export const getMarketingMetrics = onCall(
     });
 
     return {
-      range,
+      range: win.range,
+      from: win.from,
+      to: win.to,
       totalLeads: leads.length,
       totalMetaLeads,
       metaLeadsWithAdId,
       attributionCoverage: pct(metaLeadsWithAdId, totalMetaLeads), // % de leads de anuncio con adId identificado
-      adsConfigured: env.metaAdsConfigured(),
+      adsConfigured: hasConfig || env.metaAdsConfigured(),
       spendAvailable: spendMap !== null,
       statusAvailable: adsMeta !== null,
       totalSpend: Math.round(totalSpend * 100) / 100,

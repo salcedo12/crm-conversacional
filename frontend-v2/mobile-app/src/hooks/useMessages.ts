@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react';
 import firestore from '@react-native-firebase/firestore';
 import type { Message } from '../types';
 
-export function useMessages(companyId: string | null, leadId: string) {
+export function useMessages(companyId: string | null, leadId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!companyId) return;
+    if (!companyId || !leadId) {
+      setMessages([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     return firestore()
       .collection('companies').doc(companyId)

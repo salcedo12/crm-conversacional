@@ -2,15 +2,18 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { Timestamp } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { logger }          from '../utils/logger';
+import { pauseAiForAdvisorMessage } from '../modules/ai/aiRollout';
 import { sendTextToLeadChannel, sendMediaToLeadChannel } from '../modules/messages/outboundText.service';
 import { leadsRepository }    from '../modules/leads/leads.repository';
 import { messagesRepository } from '../modules/messages/messages.repository';
 import { syncLeadToSmartHome } from '../modules/smarthome/smarthomeSync.service';
+import { isDirectAdvisorLead, countsAs317LineLead } from '../modules/leads/leadClassification';
 import { describeSendError }  from '../utils/sendError';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import { advisorWhatsappBridgeClient } from '../integrations/advisorWhatsapp/advisorWhatsappBridge.client';
 import { getAdvisorLineForAdvisor } from '../modules/companies/companyRouting';
 import { getYcloudClientForInbox } from '../integrations/ycloud/ycloud.client';
+import { convertToWhatsAppVoiceNote } from '../utils/voiceTranscoder';
 
 const SendMessageSchema = z.object({
   companyId: z.string().min(1),
@@ -44,7 +47,8 @@ export const sendManualMessage = onCall(
   {
     region:         'us-central1',
     timeoutSeconds: 120,
-    memory:         '256MiB',
+    memory:         '512MiB',
+    minInstances:   1,
   },
   async (request) => {
     // ── Auth: usuario autenticado, con empresa, y rol con permiso de escritura ──
@@ -76,6 +80,30 @@ export const sendManualMessage = onCall(
     const now        = Timestamp.now();
     const advisorId  = ctx.uid;
 
+    // Si es un audio enviado como nota de voz del asesor (o cualquier audio no OGG para WhatsApp),
+    // transcodificar a OGG Opus nativo (mono, 48kHz, 32k) para que Meta WhatsApp Cloud API lo
+    // renderice como NOTA DE VOZ NATIVA PTT (con avatar, ondas y micrófono verde).
+    let activeMediaUrl = mediaUrl;
+    let activeMediaType = mediaType;
+    let activeFileName = fileName;
+
+    const isVoiceRecording = !!(mediaType?.startsWith('audio/') && (
+      fileName?.toLowerCase().startsWith('voz_') ||
+      fileName?.toLowerCase().includes('voice') ||
+      !mediaType.includes('ogg')
+    ));
+
+    if (mediaUrl && isVoiceRecording && (lead.channel ?? 'whatsapp') === 'whatsapp') {
+      try {
+        const transcoded = await convertToWhatsAppVoiceNote(mediaUrl, companyId, leadId);
+        activeMediaUrl = transcoded.downloadUrl;
+        activeMediaType = transcoded.mimeType;
+        activeFileName = transcoded.fileName;
+      } catch (err) {
+        logger.warn('[ManualMessage] Error al preparar nota de voz OGG Opus, usando original', { err });
+      }
+    }
+
     let externalMsgId: string | undefined;
     let advisorWhatsappPhone: string | undefined;
     // Número de la línea de coexistencia del asesor si "Mi WhatsApp" salió por YCloud
@@ -106,8 +134,8 @@ export const sendManualMessage = onCall(
           // enviar desde el WABA del asesor → Meta responde 131000. El guard de
           // arriba ya garantizó que hay teléfono para esta rama.
           const dest = lead.phone;
-          const r = (mediaUrl && mediaType)
-            ? await client.sendMedia(dest, mediaUrl, mediaType, content || undefined, fileName || undefined)
+          const r = (activeMediaUrl && activeMediaType)
+            ? await client.sendMedia(dest, activeMediaUrl, activeMediaType, content || undefined, activeFileName || undefined)
             : await client.sendText(dest, content);
           externalMsgId = r.id;
           advisorWhatsappPhone = advisorLine.number;
@@ -119,19 +147,19 @@ export const sendManualMessage = onCall(
             advisorId,
             to: lead.phone,
             content,
-            ...(mediaUrl ? { mediaUrl } : {}),
-            ...(mediaType ? { mediaType } : {}),
-            ...(fileName ? { fileName } : {}),
+            ...(activeMediaUrl ? { mediaUrl: activeMediaUrl } : {}),
+            ...(activeMediaType ? { mediaType: activeMediaType } : {}),
+            ...(activeFileName ? { fileName: activeFileName } : {}),
           });
           externalMsgId = r.id;
           advisorWhatsappPhone = r.phone;
         } else {
           throw new Error('No tienes una línea de WhatsApp propia conectada (ni coexistencia ni puente).');
         }
-      } else if (mediaUrl && mediaType) {
+      } else if (activeMediaUrl && activeMediaType) {
         // Línea oficial: pasar quién envía → si el lead vive en la línea PERSONAL de
         // otro asesor, NO sale por su número; sale por el 317 (ver getYcloudClientForInbox).
-        const r = await sendMediaToLeadChannel(lead, mediaUrl, mediaType, content || undefined, fileName || undefined, advisorId);
+        const r = await sendMediaToLeadChannel(lead, activeMediaUrl, activeMediaType, content || undefined, activeFileName || undefined, advisorId);
         externalMsgId = r.externalMsgId;
         companyLineFrom = r.fromNumber;
       } else {
@@ -174,15 +202,15 @@ export const sendManualMessage = onCall(
           ...((companyLineFrom || lead.inboxId) ? { businessPhone: companyLineFrom || lead.inboxId } : {}),
         }),
       },
-      ...(mediaUrl  ? { mediaUrl }  : {}),
-      ...(mediaType ? { mediaType } : {}),
-      ...(fileName  ? { fileName }  : {}),
+      ...(activeMediaUrl  ? { mediaUrl: activeMediaUrl }   : {}),
+      ...(activeMediaType ? { mediaType: activeMediaType } : {}),
+      ...(activeFileName  ? { fileName: activeFileName }   : {}),
       createdAt:        now,
     });
 
     // ── Actualizar lastMessage del lead ──────────────────────────────────────
-    const mt = mediaType ?? '';
-    const previewText = content.trim() || (mt.startsWith('image') ? '📷 Imagen' : mt.startsWith('video') ? '🎥 Video' : mt.startsWith('audio') ? '🎵 Audio' : '📎 Archivo');
+    const mt = activeMediaType ?? '';
+    const previewText = content.trim() || (mt.startsWith('image') ? '📷 Imagen' : mt.startsWith('video') ? '🎥 Video' : mt.startsWith('audio') ? '🎤 Nota de voz' : '📎 Archivo');
     const isFirstAdvisorContact = !lead.advisorFirstContactAt;
     const leadUpdate: Record<string, unknown> = {
       lastMessageText: previewText,
@@ -197,16 +225,28 @@ export const sendManualMessage = onCall(
       // 317. La línea del asesor solo es "casa" de los leads que ENTRARON por ella.
     };
 
+    const isDirectAdvisor = isDirectAdvisorLead(lead);
+
     if (isFirstAdvisorContact) {
       leadUpdate.advisorFirstContactAt = now;
       leadUpdate.advisorFirstContactBy = advisorId;
       leadUpdate.assignedTo = advisorId;
-      if (!lead.smartHomeCustomerId) leadUpdate.smartHomeSyncAttemptedAt = now;
+      // Solo marcamos intento de sincronización en leads de la línea 317
+      if (!isDirectAdvisor && countsAs317LineLead(lead) && !lead.smartHomeCustomerId) {
+        leadUpdate.smartHomeSyncAttemptedAt = now;
+      }
     }
 
     await leadsRepository.update(companyId, leadId, leadUpdate);
 
-    if (isFirstAdvisorContact && !lead.smartHomeCustomerId) {
+    // El asesor escribió: si la IA atendía este chat, se pausa.
+    await pauseAiForAdvisorMessage(companyId, lead, advisorId).catch((err) => {
+      logger.warn('[ManualMessage] No se pudo pausar la IA', { leadId, err: String(err) });
+    });
+
+    // Sincronizar con SmartHome ÚNICAMENTE si es el primer contacto de un lead de la LÍNEA 317.
+    // Los leads que entran al WhatsApp personal de los asesores NUNCA se sincronizan a SmartHome.
+    if (isFirstAdvisorContact && !lead.smartHomeCustomerId && !isDirectAdvisor && countsAs317LineLead(lead)) {
       // La sincronización con SmartHome es "mejor esfuerzo": NUNCA debe demorar ni
       // tumbar el envío del mensaje (que ya salió arriba). Aunque el cliente ya tiene
       // timeout por llamada, le ponemos un presupuesto total: si se pasa, la función

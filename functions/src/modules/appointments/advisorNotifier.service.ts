@@ -3,6 +3,7 @@ import { logger } from '../../utils/logger';
 import { getYcloudClientForCompany } from '../../integrations/ycloud/ycloud.client';
 import { getYcloudConfigForCompany } from '../companies/channelCredentials.repository';
 import { formatLongDate, formatTime } from './appointmentMessages';
+import type { AppointmentModality } from './appointments.types';
 
 /** Nombre de la plantilla aprobada que avisa al asesor de una nueva cita. */
 const ADVISOR_TEMPLATE = 'cita_asesor';
@@ -38,6 +39,7 @@ export interface AdvisorAppointmentNotice {
   leadName?:  string;
   leadPhone?: string;
   startTime:  Date;
+  modality?:  AppointmentModality;
 }
 
 /**
@@ -50,7 +52,7 @@ export interface AdvisorAppointmentNotice {
  * aún no está aprobada, YCloud responde error y solo se registra la advertencia.
  */
 export async function notifyAdvisorAppointmentBooked(notice: AdvisorAppointmentNotice): Promise<void> {
-  const { companyId, advisorId, leadName, leadPhone, startTime } = notice;
+  const { companyId, advisorId, leadName, leadPhone, startTime, modality } = notice;
   if (!advisorId) return;
 
   try {
@@ -71,7 +73,7 @@ export async function notifyAdvisorAppointmentBooked(notice: AdvisorAppointmentN
           { type: 'text', text: (leadName  || 'Cliente').slice(0, 60) },
           { type: 'text', text: (leadPhone || 'Sin número').slice(0, 40) },
           { type: 'text', text: formatLongDate(startTime) },
-          { type: 'text', text: formatTime(startTime) },
+          { type: 'text', text: `${formatTime(startTime)} (${modality === 'videollamada' ? 'videollamada Meet' : 'llamada telefónica'})` },
         ],
       },
     ];

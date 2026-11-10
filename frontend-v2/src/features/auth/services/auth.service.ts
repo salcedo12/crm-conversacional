@@ -14,7 +14,7 @@ import {
 import { auth, db } from '@/config/firebase';
 import type { UserProfile, UserRole } from '../types';
 
-const DEFAULT_COMPANY_ID = import.meta.env.VITE_DEFAULT_COMPANY_ID ?? 'empresa_demo';
+const DEFAULT_COMPANY_ID = import.meta.env.VITE_DEFAULT_COMPANY_ID ?? 'grupo_meraki_real';
 const AUTH_TIMEOUT_MS = 12000;
 
 function withTimeout<T>(promise: Promise<T>, label: string, ms = AUTH_TIMEOUT_MS): Promise<T> {
@@ -79,25 +79,41 @@ async function waitForCompanyClaim(user: User, attempts = 5): Promise<ParsedToke
  * los claims automáticamente).
  */
 export async function loadOrCreateUserProfile(user: User): Promise<UserProfile> {
-  // 1. Resolver companyId desde los claims (con fallback al default para bootstrap)
-  let { claims } = await withTimeout(user.getIdTokenResult(), 'La lectura de permisos');
-  let companyId  = typeof claims.companyId === 'string' && claims.companyId
+  const isTester = user.email?.toLowerCase().includes('google.tester');
+
+  // 1. Forzar refresh de claims (true) para evitar leer tokens obsoletos de IndexedDB
+  let { claims } = await withTimeout(user.getIdTokenResult(true), 'La lectura de permisos');
+
+  // Si el claim trae empresa_demo y no es tester, ignorarlo y apuntar a DEFAULT_COMPANY_ID
+  let companyId = typeof claims.companyId === 'string' && claims.companyId && (isTester || claims.companyId !== 'empresa_demo')
     ? claims.companyId
     : DEFAULT_COMPANY_ID;
+
+  // Priorizar siempre grupo_meraki_real si el usuario ya existe allí y no es tester
+  if (!isTester && companyId !== 'grupo_meraki_real') {
+    try {
+      const realSnap = await withTimeout(
+        getDoc(doc(db, 'companies', 'grupo_meraki_real', 'users', user.uid)),
+        'Verificación grupo_meraki_real'
+      );
+      if (realSnap.exists()) {
+        companyId = 'grupo_meraki_real';
+      }
+    } catch (_) {}
+  }
 
   const ref  = doc(db, 'companies', companyId, 'users', user.uid);
   const snap = await withTimeout(getDoc(ref), 'La carga del perfil');
 
   if (snap.exists()) {
-    // Si el doc existe pero los claims aún no traen companyId, hacer backfill:
-    // tocar el doc → el trigger setea los claims → refrescar el token.
-    if (!claims.companyId) {
+    // Si el doc existe pero los claims aún no coinciden con companyId, hacer backfill:
+    if (!claims.companyId || (!isTester && claims.companyId === 'empresa_demo') || claims.companyId !== companyId) {
       await withTimeout(
         setDoc(ref, { updatedAt: Timestamp.now() }, { merge: true }),
         'La sincronizacion del perfil'
       );
       claims = await waitForCompanyClaim(user);
-      if (typeof claims.companyId === 'string' && claims.companyId) {
+      if (typeof claims.companyId === 'string' && claims.companyId && (isTester || claims.companyId !== 'empresa_demo')) {
         companyId = claims.companyId;
       }
     }
@@ -105,6 +121,7 @@ export async function loadOrCreateUserProfile(user: User): Promise<UserProfile> 
     const data = snap.data();
     return {
       ...data,          // datos de Firestore (role, displayName, etc.)
+      active:    data.active !== false,
       id:        snap.id,
       companyId,        // companyId siempre desde el claim resuelto (no del doc)
     } as UserProfile;

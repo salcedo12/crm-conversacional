@@ -47,7 +47,8 @@ export function useAiConfig(companyId: string | null) {
       setTimeout(() => setStatus('idle'), 2500);
     } catch (err) {
       console.error('[useAiConfig] save error:', err);
-      setError('Error al guardar. Intenta nuevamente.');
+      const detail = err instanceof Error && err.message && !/internal/i.test(err.message) ? ` ${err.message}` : '';
+      setError(`No se pudo guardar.${detail || ' Intenta nuevamente.'}`);
       setStatus('error');
     }
   }, [companyId, draft]);
@@ -86,6 +87,7 @@ function toDraft(cfg: AiConfig): AiConfigDraft {
     followUpSequence: rest.followUpSequence ?? [],
     transferKeywords: rest.transferKeywords ?? [],
     blockedTopics:    rest.blockedTopics    ?? [],
+    rollout:          rest.rollout          ?? null,
     tags:             (rest as unknown as Record<string, unknown>).tags as string[] ?? undefined,
   } as AiConfigDraft;
 }

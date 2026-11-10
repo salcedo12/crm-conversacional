@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider }     from '@/providers/AuthProvider';
+import { ThemeProvider }    from '@/providers/ThemeProvider';
 import { BrandingProvider } from '@/providers/BrandingProvider';
 import { ProtectedRoute }   from '@/routes/ProtectedRoute';
 import { RoleRoute }        from '@/routes/RoleRoute';
@@ -14,7 +15,9 @@ const LoginPage         = lazy(() => import('@/features/auth/pages/LoginPage').t
 const DashboardPage     = lazy(() => import('@/features/dashboard/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
 const InboxPage         = lazy(() => import('@/features/inbox/pages/InboxPage').then((m) => ({ default: m.InboxPage })));
 const LeadsPage         = lazy(() => import('@/features/leads/pages/LeadsPage').then((m) => ({ default: m.LeadsPage })));
-const PhotoEvidencePage = lazy(() => import('@/features/photoEvidence/pages/PhotoEvidencePage').then((m) => ({ default: m.PhotoEvidencePage })));
+const PipelinePage      = lazy(() => import('@/features/pipeline/pages/PipelinePage').then((m) => ({ default: m.PipelinePage })));
+const CommercialManagementPage = lazy(() => import('@/features/commercial/pages/CommercialManagementPage').then((m) => ({ default: m.CommercialManagementPage })));
+const DatabasePage      = lazy(() => import('@/features/database/pages/DatabasePage').then((m) => ({ default: m.DatabasePage })));
 const ConfigPage        = lazy(() => import('@/features/config/pages/ConfigPage').then((m) => ({ default: m.ConfigPage })));
 const TemplatesPage     = lazy(() => import('@/features/templates/pages/TemplatesPage').then((m) => ({ default: m.TemplatesPage })));
 const BroadcastsPage    = lazy(() => import('@/features/broadcasts/pages/BroadcastsPage').then((m) => ({ default: m.BroadcastsPage })));
@@ -22,6 +25,7 @@ const CalendarPage      = lazy(() => import('@/features/calendar/pages/CalendarP
 const CallsPage         = lazy(() => import('@/features/calls/pages/CallsPage').then((m) => ({ default: m.CallsPage })));
 const MarketingPage     = lazy(() => import('@/features/marketing/pages/MarketingPage').then((m) => ({ default: m.MarketingPage })));
 const ReportsPage       = lazy(() => import('@/features/reports/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
+const DealsPage         = lazy(() => import('@/features/deals/pages/DealsPage').then((m) => ({ default: m.DealsPage })));
 const BrandHomePage     = lazy(() => import('@/features/legal/pages/BrandHomePage').then((m) => ({ default: m.BrandHomePage })));
 const PrivacyPolicyPage = lazy(() => import('@/features/legal/pages/PrivacyPolicyPage').then((m) => ({ default: m.PrivacyPolicyPage })));
 const TermsPage         = lazy(() => import('@/features/legal/pages/TermsPage').then((m) => ({ default: m.TermsPage })));
@@ -64,8 +68,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <BrandingProvider>
-          <AppErrorBoundary>
+        <ThemeProvider>
+          <BrandingProvider>
+            <AppErrorBoundary>
             <Suspense fallback={<PageLoader />}>
               <Routes>
             {/* Public */}
@@ -78,15 +83,18 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<DashboardLayout />}>
                 <Route path="/dashboard"        element={<DashboardPage />} />
+                <Route path="/dashboard/commercial-management" element={<CommercialManagementPage />} />
                 <Route path="/dashboard/inbox"  element={<InboxPage />} />
+                <Route path="/dashboard/pipeline"  element={<PipelinePage />} />
                 <Route path="/dashboard/leads"     element={<LeadsPage />} />
-                <Route path="/dashboard/photo-evidence" element={<PhotoEvidencePage />} />
+                <Route path="/dashboard/deals"     element={<DealsPage />} />
                 <Route path="/dashboard/calls"     element={<CallsPage />} />
                 <Route path="/dashboard/calendar"  element={<CalendarPage />} />
                 <Route path="/dashboard/config"    element={<ConfigPage />} />
 
                 {/* Solo admin/manager */}
                 <Route element={<RoleRoute allowed={['admin', 'manager']} />}>
+                  <Route path="/dashboard/database"   element={<DatabasePage />} />
                   <Route path="/dashboard/marketing"  element={<MarketingPage />} />
                   <Route path="/dashboard/reports"    element={<ReportsPage />} />
                   <Route path="/dashboard/templates"  element={<TemplatesPage />} />
@@ -102,7 +110,8 @@ export default function App() {
             </Suspense>
           </AppErrorBoundary>
         </BrandingProvider>
-      </AuthProvider>
+      </ThemeProvider>
+    </AuthProvider>
     </BrowserRouter>
   );
 }

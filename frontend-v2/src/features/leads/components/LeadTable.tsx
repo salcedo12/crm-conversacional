@@ -109,7 +109,7 @@ export function LeadTable({
                   <LeadScoreBadge score={lead.aiAnalysis?.score} temperature={lead.aiAnalysis?.temperature} />
                 </td>
                 <td className="px-4 py-3"><LeadStatusBadge status={lead.status} /></td>
-                <td className="px-4 py-3"><LeadSourceBadge source={lead.source} /></td>
+                <td className="px-4 py-3"><LeadSourceBadge source={lead.source} fuenteUbicacion={lead.fuenteUbicacion || lead.metadata?.smarthomeFuenteOriginal} /></td>
                 <td className="px-4 py-3"><AiStatusBadge aiEnabled={lead.aiEnabled} /></td>
                 <td className="px-4 py-3">
                   <p className={`max-w-[140px] truncate text-xs ${advisor ? 'text-zinc-300' : 'text-zinc-600'}`}>

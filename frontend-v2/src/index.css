@@ -27,6 +27,12 @@
   /* Ocultar scrollbar (tabs/filtros con scroll horizontal en móvil) */
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  /* iOS Safe Area variables y soporte PWA Standalone (Pantalla de Inicio) */
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 @layer utilities {
@@ -107,3 +113,418 @@
     accent-color: rgb(var(--brand-primary-rgb, 124 58 237)) !important;
   }
 }
+
+/* ==========================================================================
+   SISTEMA DE TEMA MERAKI: MODO CLARO & MODO OSCURO (Manual de Marca)
+   ========================================================================== */
+
+/* Variables Corporativas Meraki */
+:root {
+  --meraki-gold-primary: #B7871C;
+  --meraki-gold-warm:    #B49739;
+  --meraki-gold-dark:    #947018;
+  --meraki-gold-light:   #D9B545;
+  --meraki-charcoal:     #373634;
+  --meraki-black:        #0D060A;
+}
+
+/* ── MODO CLARO MERAKI (Blanco & Oro) ─────────────────────────────────────── */
+html.light,
+[data-theme="light"] {
+  color-scheme: light;
+  --brand-primary-text: #947018 !important; /* Oro Oscuro Meraki para contraste en blanco */
+  --brand-primary-soft: rgba(183, 135, 28, 0.12) !important;
+  --brand-primary-border: rgba(183, 135, 28, 0.38) !important;
+}
+
+html.light body,
+[data-theme="light"] body {
+  background-color: #f8f9fa !important;
+  color: #0D060A !important;
+}
+
+/* Fondos y Superficies Principales */
+html.light .bg-zinc-950,
+[data-theme="light"] .bg-zinc-950 {
+  background-color: #ffffff !important;
+}
+
+html.light .bg-zinc-950\/95,
+html.light .bg-zinc-950\/90,
+html.light .bg-zinc-950\/85,
+html.light .bg-zinc-950\/80,
+html.light .bg-zinc-950\/60,
+html.light .bg-zinc-950\/50,
+[data-theme="light"] .bg-zinc-950\/95,
+[data-theme="light"] .bg-zinc-950\/90,
+[data-theme="light"] .bg-zinc-950\/85,
+[data-theme="light"] .bg-zinc-950\/80,
+[data-theme="light"] .bg-zinc-950\/60,
+[data-theme="light"] .bg-zinc-950\/50 {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+}
+
+html.light .bg-zinc-900,
+html.light .bg-zinc-900\/95,
+html.light .bg-zinc-900\/90,
+html.light .bg-zinc-900\/80,
+html.light .bg-zinc-900\/70,
+html.light .bg-zinc-900\/60,
+html.light .bg-zinc-900\/50,
+html.light .bg-zinc-900\/40,
+[data-theme="light"] .bg-zinc-900,
+[data-theme="light"] .bg-zinc-900\/95,
+[data-theme="light"] .bg-zinc-900\/90,
+[data-theme="light"] .bg-zinc-900\/80,
+[data-theme="light"] .bg-zinc-900\/70,
+[data-theme="light"] .bg-zinc-900\/60,
+[data-theme="light"] .bg-zinc-900\/50,
+[data-theme="light"] .bg-zinc-900\/40 {
+  background-color: #ffffff !important;
+}
+
+html.light .bg-zinc-800,
+html.light .bg-zinc-800\/90,
+html.light .bg-zinc-800\/80,
+html.light .bg-zinc-800\/70,
+html.light .bg-zinc-800\/60,
+html.light .bg-zinc-800\/50,
+html.light .bg-zinc-800\/40,
+[data-theme="light"] .bg-zinc-800,
+[data-theme="light"] .bg-zinc-800\/90,
+[data-theme="light"] .bg-zinc-800\/80,
+[data-theme="light"] .bg-zinc-800\/70,
+[data-theme="light"] .bg-zinc-800\/60,
+[data-theme="light"] .bg-zinc-800\/50,
+[data-theme="light"] .bg-zinc-800\/40 {
+  background-color: #f1f3f5 !important;
+}
+
+html.light .bg-zinc-700,
+html.light .bg-zinc-700\/60,
+[data-theme="light"] .bg-zinc-700,
+[data-theme="light"] .bg-zinc-700\/60 {
+  background-color: #e2e8f0 !important;
+}
+
+/* Bordes Sutiles y Limpios */
+html.light .border-zinc-800,
+html.light .border-zinc-800\/90,
+html.light .border-zinc-800\/80,
+html.light .border-zinc-800\/60,
+html.light .border-zinc-800\/50,
+html.light .border-zinc-800\/40,
+html.light .border-zinc-800\/30,
+html.light .border-zinc-700,
+html.light .border-zinc-700\/80,
+html.light .border-zinc-700\/60,
+html.light .border-zinc-700\/50,
+[data-theme="light"] .border-zinc-800,
+[data-theme="light"] .border-zinc-800\/90,
+[data-theme="light"] .border-zinc-800\/80,
+[data-theme="light"] .border-zinc-800\/60,
+[data-theme="light"] .border-zinc-800\/50,
+[data-theme="light"] .border-zinc-800\/40,
+[data-theme="light"] .border-zinc-800\/30,
+[data-theme="light"] .border-zinc-700,
+[data-theme="light"] .border-zinc-700\/80,
+[data-theme="light"] .border-zinc-700\/60,
+[data-theme="light"] .border-zinc-700\/50 {
+  border-color: #e2e8f0 !important;
+}
+
+/* Tipografía Corporativa Meraki */
+html.light .text-zinc-100,
+html.light .text-zinc-200,
+html.light .text-white,
+[data-theme="light"] .text-zinc-100,
+[data-theme="light"] .text-zinc-200,
+[data-theme="light"] .text-white {
+  color: #0D060A !important; /* Negro Meraki */
+}
+
+html.light .text-zinc-300,
+[data-theme="light"] .text-zinc-300 {
+  color: #373634 !important; /* Grafito Meraki */
+}
+
+html.light .text-zinc-400,
+[data-theme="light"] .text-zinc-400 {
+  color: #4b5563 !important;
+}
+
+html.light .text-zinc-500,
+html.light .text-zinc-600,
+[data-theme="light"] .text-zinc-500,
+[data-theme="light"] .text-zinc-600 {
+  color: #64748b !important;
+}
+
+/* Estados Hover e Interactivos */
+html.light .hover\:bg-zinc-800:hover,
+html.light .hover\:bg-zinc-800\/80:hover,
+html.light .hover\:bg-zinc-800\/70:hover,
+html.light .hover\:bg-zinc-800\/60:hover,
+html.light .hover\:bg-zinc-800\/40:hover,
+html.light .hover\:bg-zinc-900:hover,
+html.light .hover\:bg-zinc-700:hover,
+[data-theme="light"] .hover\:bg-zinc-800:hover,
+[data-theme="light"] .hover\:bg-zinc-800\/80:hover,
+[data-theme="light"] .hover\:bg-zinc-800\/70:hover,
+[data-theme="light"] .hover\:bg-zinc-800\/60:hover,
+[data-theme="light"] .hover\:bg-zinc-800\/40:hover,
+[data-theme="light"] .hover\:bg-zinc-900:hover,
+[data-theme="light"] .hover\:bg-zinc-700:hover {
+  background-color: #e9ecef !important;
+}
+
+html.light .hover\:text-zinc-100:hover,
+html.light .hover\:text-zinc-200:hover,
+html.light .hover\:text-zinc-300:hover,
+html.light .hover\:text-white:hover,
+[data-theme="light"] .hover\:text-zinc-100:hover,
+[data-theme="light"] .hover\:text-zinc-200:hover,
+[data-theme="light"] .hover\:text-zinc-300:hover,
+[data-theme="light"] .hover\:text-white:hover {
+  color: #0D060A !important;
+}
+
+/* Inputs, Textareas y Selectores */
+html.light input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
+html.light textarea,
+html.light select,
+[data-theme="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background-color: #ffffff !important;
+  color: #0D060A !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder,
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+html.light input:focus,
+html.light textarea:focus,
+html.light select:focus,
+[data-theme="light"] input:focus,
+[data-theme="light"] textarea:focus,
+[data-theme="light"] select:focus {
+  border-color: #B7871C !important;
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(183, 135, 28, 0.2) !important;
+}
+
+/* Badges y Chips de Estado Adaptados */
+html.light .text-amber-300,
+html.light .text-amber-400,
+html.light .text-amber-200,
+[data-theme="light"] .text-amber-300,
+[data-theme="light"] .text-amber-400,
+[data-theme="light"] .text-amber-200 {
+  color: #947018 !important; /* Oro Oscuro Meraki */
+}
+
+html.light .bg-amber-500\/20,
+html.light .bg-amber-500\/15,
+html.light .bg-amber-500\/10,
+[data-theme="light"] .bg-amber-500\/20,
+[data-theme="light"] .bg-amber-500\/15,
+[data-theme="light"] .bg-amber-500\/10 {
+  background-color: rgba(183, 135, 28, 0.12) !important;
+  border-color: rgba(183, 135, 28, 0.3) !important;
+}
+
+html.light .text-emerald-300,
+html.light .text-emerald-400,
+html.light .text-emerald-200,
+html.light .text-green-300,
+html.light .text-green-400,
+html.light .text-green-500,
+[data-theme="light"] .text-emerald-300,
+[data-theme="light"] .text-emerald-400,
+[data-theme="light"] .text-emerald-200,
+[data-theme="light"] .text-green-300,
+[data-theme="light"] .text-green-400,
+[data-theme="light"] .text-green-500 {
+  color: #166534 !important; /* Verde bosque profundo de alto contraste (WCAG AAA) */
+}
+
+html.light .bg-emerald-500\/20,
+html.light .bg-emerald-500\/15,
+html.light .bg-emerald-500\/10,
+html.light .bg-emerald-500\/5,
+html.light .bg-green-500\/20,
+html.light .bg-green-500\/15,
+html.light .bg-green-500\/10,
+html.light .bg-green-500\/5,
+[data-theme="light"] .bg-emerald-500\/20,
+[data-theme="light"] .bg-emerald-500\/15,
+[data-theme="light"] .bg-emerald-500\/10,
+[data-theme="light"] .bg-emerald-500\/5,
+[data-theme="light"] .bg-green-500\/20,
+[data-theme="light"] .bg-green-500\/15,
+[data-theme="light"] .bg-green-500\/10,
+[data-theme="light"] .bg-green-500\/5 {
+  background-color: #f0fdf4 !important;
+  border-color: #bbf7d0 !important;
+}
+
+html.light .bg-emerald-400,
+html.light .bg-green-400,
+[data-theme="light"] .bg-emerald-400,
+[data-theme="light"] .bg-green-400 {
+  background-color: #16a34a !important;
+}
+
+html.light .text-rose-300,
+html.light .text-rose-400,
+html.light .text-rose-200,
+html.light .text-red-400,
+[data-theme="light"] .text-rose-300,
+[data-theme="light"] .text-rose-400,
+[data-theme="light"] .text-rose-200,
+[data-theme="light"] .text-red-400 {
+  color: #b91c1c !important;
+}
+
+html.light .bg-rose-500\/20,
+html.light .bg-rose-500\/15,
+html.light .bg-rose-500\/10,
+html.light .bg-rose-950\/70,
+html.light .bg-rose-950\/80,
+[data-theme="light"] .bg-rose-500\/20,
+[data-theme="light"] .bg-rose-500\/15,
+[data-theme="light"] .bg-rose-500\/10,
+[data-theme="light"] .bg-rose-950\/70,
+[data-theme="light"] .bg-rose-950\/80 {
+  background-color: rgba(239, 68, 68, 0.12) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
+
+html.light .text-sky-300,
+html.light .text-sky-400,
+html.light .text-blue-300,
+html.light .text-blue-100,
+[data-theme="light"] .text-sky-300,
+[data-theme="light"] .text-sky-400,
+[data-theme="light"] .text-blue-300,
+[data-theme="light"] .text-blue-100 {
+  color: #0369a1 !important;
+}
+
+html.light .bg-sky-500\/20,
+html.light .bg-sky-500\/15,
+html.light .bg-sky-500\/10,
+html.light .bg-blue-600\/20,
+[data-theme="light"] .bg-sky-500\/20,
+[data-theme="light"] .bg-sky-500\/15,
+[data-theme="light"] .bg-sky-500\/10,
+[data-theme="light"] .bg-blue-600\/20 {
+  background-color: rgba(14, 165, 233, 0.12) !important;
+  border-color: rgba(14, 165, 233, 0.3) !important;
+}
+
+/* Burbujas de Chat en Modo Claro */
+html.light .bg-zinc-700,
+[data-theme="light"] .bg-zinc-700 {
+  background-color: #ffffff !important;
+  color: #0D060A !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Scrollbar en Modo Claro */
+html.light ::-webkit-scrollbar-thumb,
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+html.light ::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ==========================================================================
+   BARRA LATERAL / MENÚ IZQUIERDO DORADO MERAKI
+   ========================================================================== */
+
+/* Modo Claro: Fondo Champagne Dorado Cálido y Distinguido */
+html.light aside,
+[data-theme="light"] aside {
+  background: linear-gradient(180deg, #FBF8F0 0%, #FAF5EA 45%, #F4ECE0 100%) !important;
+  border-right: 1px solid #E8DCB8 !important;
+  box-shadow: 2px 0 12px rgba(183, 135, 28, 0.05) !important;
+}
+
+/* Divisores internos de la barra lateral */
+html.light aside > div,
+[data-theme="light"] aside > div {
+  border-color: #E8DCB8 !important;
+}
+
+/* Encabezado del logo con halo dorado */
+html.light aside > div:first-child,
+[data-theme="light"] aside > div:first-child {
+  background: linear-gradient(135deg, rgba(183, 135, 28, 0.12) 0%, rgba(183, 135, 28, 0.03) 100%) !important;
+}
+
+/* Ítems no activos del menú */
+html.light aside nav a:not([class*="bg-violet"]):not(.active),
+[data-theme="light"] aside nav a:not([class*="bg-violet"]):not(.active) {
+  color: #373634 !important; /* Grafito Meraki */
+  font-weight: 500 !important;
+}
+
+html.light aside nav a:not([class*="bg-violet"]):not(.active) svg,
+[data-theme="light"] aside nav a:not([class*="bg-violet"]):not(.active) svg {
+  color: #947018 !important; /* Iconos en Oro Oscuro Meraki */
+}
+
+html.light aside nav a:not([class*="bg-violet"]):not(.active):hover,
+[data-theme="light"] aside nav a:not([class*="bg-violet"]):not(.active):hover {
+  background-color: rgba(183, 135, 28, 0.12) !important;
+  color: #0D060A !important;
+}
+
+/* Ítem activo del menú (como Bandeja) con marco Dorado Meraki */
+html.light aside nav a.active,
+html.light aside nav a[class*="bg-violet"],
+[data-theme="light"] aside nav a.active,
+[data-theme="light"] aside nav a[class*="bg-violet"] {
+  background: linear-gradient(90deg, rgba(183, 135, 28, 0.20) 0%, rgba(183, 135, 28, 0.09) 100%) !important;
+  border: 1px solid #B7871C !important;
+  color: #7A530A !important; /* Oro Meraki de alto contraste */
+  font-weight: 700 !important;
+  box-shadow: 0 1px 4px rgba(183, 135, 28, 0.18) !important;
+}
+
+html.light aside nav a.active svg,
+html.light aside nav a[class*="bg-violet"] svg,
+[data-theme="light"] aside nav a.active svg,
+[data-theme="light"] aside nav a[class*="bg-violet"] svg {
+  color: #B7871C !important; /* Icono Oro Principal Meraki */
+}
+
+/* Tarjeta del selector de tema y logout en la barra lateral */
+html.light aside .border-t,
+[data-theme="light"] aside .border-t {
+  border-top-color: #E8DCB8 !important;
+}
+
+/* Barra inferior móvil en Modo Claro */
+html.light nav.fixed.bottom-0,
+[data-theme="light"] nav.fixed.bottom-0 {
+  background-color: #FAF5EA !important;
+  border-top-color: #E8DCB8 !important;
+}
+
+html.light nav.fixed.bottom-0 a.active,
+[data-theme="light"] nav.fixed.bottom-0 a.active {
+  color: #855C0E !important;
+}
+
+

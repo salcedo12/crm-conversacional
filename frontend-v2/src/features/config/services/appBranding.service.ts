@@ -15,7 +15,7 @@ export const DEFAULT_APP_BRANDING: AppBrandingDraft = {
   appName: 'Meraki CRM',
   tagline: 'Conversacional',
   logoUrl: '/meraki-logo.png',
-  primaryColor: '#7c3aed',
+  primaryColor: '#B7871C',
 };
 
 const _getAppBranding = httpsCallable<{ companyId: string }, AppBranding>(functions, 'getAppBranding');

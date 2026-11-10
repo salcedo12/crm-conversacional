@@ -11,6 +11,7 @@ import {
 } from '../../integrations/smarthome/smarthome.client';
 import type { SmartHomeSaleRecord } from '../../integrations/smarthome/smarthome.client';
 import type { Lead, SmartHomeDuplicateMatch } from '../leads/leads.types';
+import { isDirectAdvisorLead, countsAs317LineLead } from '../leads/leadClassification';
 
 export interface SyncResult {
   ok:          boolean;
@@ -103,6 +104,19 @@ export async function resolveOwnerId(companyId: string, advisorUid: string): Pro
  * no lo repite. Persiste el resultado en el propio lead.
  */
 export async function syncLeadToSmartHome(lead: Lead): Promise<SyncResult> {
+  // REGLA FUNDAMENTAL: Solo los leads que ingresan por la línea oficial 317
+  // (fuente "WHATSAPP IA" en SmartHome) se sincronizan. Los leads que entran directo
+  // al WhatsApp personal de un asesor pertenecen exclusivamente a él, NO se envían
+  // a SmartHome, ni se etiquetan como WhatsApp IA, ni entran en reparto.
+  if (isDirectAdvisorLead(lead) || !countsAs317LineLead(lead)) {
+    logger.info('[smartHome] Lead omitido de sincronización (no pertenece a la Línea 317)', {
+      leadId: lead.id,
+      source: lead.source,
+      inbox: lead.inbox,
+    });
+    return { ok: false, reason: 'lead-directo-asesor-no-elegible-smarthome' };
+  }
+
   if (!(await smartHomeEnabledForCompany(lead.companyId))) {
     return { ok: false, reason: 'smarthome-no-habilitado-para-empresa' };
   }

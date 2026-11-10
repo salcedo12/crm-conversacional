@@ -75,7 +75,7 @@ export function BookAppointmentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 p-4 pt-[calc(env(safe-area-inset-top,0px)+1rem)] pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]" onClick={onClose}>
       <div className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
@@ -95,11 +95,11 @@ export function BookAppointmentModal({
           <div className="grid grid-cols-2 gap-3">
             <label className="block text-xs text-zinc-400">
               Fecha
-              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none focus:border-violet-500/60" />
+              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} style={{ colorScheme: 'dark' }} className="mt-1.5 h-10 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none focus:border-violet-500/60" />
             </label>
             <label className="block text-xs text-zinc-400">
               Hora
-              <input type="time" value={time} onChange={(event) => setTime(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none focus:border-violet-500/60" />
+              <input type="time" value={time} onChange={(event) => setTime(event.target.value)} style={{ colorScheme: 'dark' }} className="mt-1.5 h-10 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none focus:border-violet-500/60" />
             </label>
           </div>
           <label className="block text-xs text-zinc-400">

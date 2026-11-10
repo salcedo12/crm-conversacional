@@ -9,6 +9,34 @@ import type { Lead } from './leads.types';
 /** Solo los asesores reciben leads por asignacion automatica. */
 const ASSIGNABLE_ROLES = ['advisor'];
 
+const TEST_USER_IDS = new Set(['H69G8PsEzReNuU1yowJNnlCHgie2']);
+const TEST_USER_EMAILS = new Set(['servidor.meraki@gmail.com']);
+const TEST_USER_NAMES = new Set(['pruebas', 'prueba']);
+
+/**
+ * Determina si un usuario es de pruebas o tiene deshabilitada la recepción
+ * automática de leads de pauta / línea 317.
+ */
+export function isExcludedFromLeadAssignment(
+  userId: string,
+  u: FirebaseFirestore.DocumentData | undefined
+): boolean {
+  if (!u) return true;
+  if (
+    u.excludeFromLeadAssignment === true ||
+    u.receiveLeads === false ||
+    u.isTestUser === true
+  ) {
+    return true;
+  }
+  if (TEST_USER_IDS.has(userId)) return true;
+  const email = String(u.email || '').trim().toLowerCase();
+  if (TEST_USER_EMAILS.has(email)) return true;
+  const name = String(u.displayName || u.name || '').trim().toLowerCase();
+  if (TEST_USER_NAMES.has(name)) return true;
+  return false;
+}
+
 const leadsCol = (companyId: string) =>
   db.collection('companies').doc(companyId).collection('leads');
 
@@ -24,7 +52,13 @@ async function getAssignableAdvisorPool(
   const candidates = usersSnap.docs
     .filter((d) => {
       const u = d.data();
-      return ASSIGNABLE_ROLES.includes(u.role) && u.active !== false && !excluded.has(d.id);
+      return (
+        ASSIGNABLE_ROLES.includes(u.role) &&
+        u.active !== false &&
+        u.isBlockedForLeads !== true && // <-- Bloqueo disciplinario activo por SLA
+        !isExcludedFromLeadAssignment(d.id, u) &&
+        !excluded.has(d.id)
+      );
     })
     .map((d) => d.id);
 
@@ -51,39 +85,89 @@ async function getAssignableAdvisorPool(
  * Cuenta solo la carga de leads de la linea 317 para no mezclar datos propios
  * del WhatsApp del asesor ni otros canales manuales/organicos.
  */
-async function countAssigned317Load(companyId: string, advisorId: string): Promise<number> {
+export async function countAssigned317Load(companyId: string, advisorId: string): Promise<number> {
   const snap = await leadsCol(companyId)
     .where('assignedTo', '==', advisorId)
     .where('source', 'in', Array.from(LINE_317_SOURCES))
     .get();
 
-  return snap.docs.filter((doc) => countsAs317LineLead(doc.data() as Pick<Lead, 'source' | 'metadata'>)).length;
-}
-
-async function pickLeastLoadedAdvisor(companyId: string, pool: string[]): Promise<string> {
-  const loads = await Promise.all(
-    pool.map(async (uid) => ({ uid, count: await countAssigned317Load(companyId, uid) }))
-  );
-
-  const minCount = Math.min(...loads.map((l) => l.count));
-  const leastLoaded = loads.filter((l) => l.count === minCount);
-  const chosen = leastLoaded[Math.floor(Math.random() * leastLoaded.length)];
-
-  logger.info('[LeadAssignment] Carga 317 para asignacion', {
-    companyId,
-    loads,
-    chosenAdvisorId: chosen.uid,
-  });
-
-  return chosen.uid;
+  return snap.docs.filter((doc) => countsAs317LineLead(doc.data() as Pick<Lead, 'source' | 'metadata' | 'inbox'>)).length;
 }
 
 /**
- * Elige un asesor para un lead nuevo mediante round-robin por menor carga 317.
+ * Elige un asesor del pool elegible mediante Round-Robin por Turno de Espera.
  *
- * Reparte entre todos los usuarios activos con rol asignable. La carga se mide
- * solo con leads de la linea 317 (whatsapp/web/meta_ads) y excluye los espejos
- * del WhatsApp personal del asesor.
+ * En lugar de contar el acumulado de meses pasados, selecciona al asesor activo que
+ * lleve más tiempo sin recibir un lead (menor `lastLeadAssignedAt` o sin asignación previa).
+ * Esto garantiza que cada lead nuevo se reparta estrictamente 1 a 1 entre todos los asesores.
+ * Si varios asesores empatan (ej: todos al inicio del turno), se elige aleatoriamente entre ellos.
+ */
+async function pickAdvisorByWaitTurn(companyId: string, pool: string[]): Promise<string> {
+  if (pool.length === 1) return pool[0];
+
+  const userSnaps = await Promise.all(
+    pool.map(async (uid) => {
+      try {
+        const snap = await usersCol(companyId).doc(uid).get();
+        return { uid, data: snap.data() };
+      } catch {
+        return { uid, data: undefined };
+      }
+    })
+  );
+
+  const candidates = userSnaps.map((u) => {
+    const lastMillis = u.data?.lastLeadAssignedAt?.toMillis?.() ?? 0;
+    return {
+      uid: u.uid,
+      lastMillis,
+    };
+  });
+
+  // Ordenar de MENOR a MAYOR tiempo (los que tienen 0 o fecha más antigua van primero)
+  candidates.sort((a, b) => {
+    if (a.lastMillis !== b.lastMillis) {
+      return a.lastMillis - b.lastMillis;
+    }
+    return Math.random() - 0.5;
+  });
+
+  const chosen = candidates[0].uid;
+
+  logger.info('[LeadAssignment] Asesor elegido por turno de espera (Round-Robin)', {
+    companyId,
+    chosen,
+    queue: candidates.map((c) => ({
+      uid: c.uid,
+      lastAssigned: c.lastMillis === 0 ? 'Sin asignación previa' : new Date(c.lastMillis).toISOString(),
+    })),
+  });
+
+  return chosen;
+}
+
+/**
+ * Actualiza el turno del asesor en su ficha de usuario para mandarlo al final de la cola.
+ */
+export async function markAdvisorTurnUsed(companyId: string, advisorId: string): Promise<void> {
+  try {
+    await usersCol(companyId).doc(advisorId).update({
+      lastLeadAssignedAt: Timestamp.now(),
+    });
+  } catch (err) {
+    logger.warn('[LeadAssignment] No se pudo actualizar lastLeadAssignedAt del asesor', {
+      companyId,
+      advisorId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Elige un asesor para un lead nuevo mediante round-robin por turno de espera.
+ *
+ * Reparte de forma equitativa 1 a 1 entre todos los usuarios activos con rol asignable
+ * que no tengan bloqueo disciplinario por SLA.
  *
  * @returns uid del asesor elegido, o null si la empresa no tiene usuarios asignables.
  */
@@ -98,11 +182,7 @@ export async function pickAdvisorForLead(
     return null;
   }
 
-  // Siempre se asigna al que MENOS leads tenga (así todos llegan a 1 antes de que
-  // alguien tenga 2, a 2 antes de que alguien tenga 3, etc.). Cuando varios están
-  // empatados en la menor carga, se elige al azar entre ellos: si no, el orden fijo
-  // haría que el primero acaparara todos los leads que entran mientras hay empate.
-  return pickLeastLoadedAdvisor(companyId, pool);
+  return pickAdvisorByWaitTurn(companyId, pool);
 }
 
 async function getFirstContactTimeoutAdvisorIds(companyId: string, leadId: string): Promise<string[]> {
@@ -159,7 +239,7 @@ export async function pickAdvisorForFirstContactReassignment(
     return null;
   }
 
-  const chosen = await pickLeastLoadedAdvisor(companyId, pool);
+  const chosen = await pickAdvisorByWaitTurn(companyId, pool);
   logger.info('[LeadAssignment] Asesor elegido para reasignacion por falta de contacto', {
     companyId,
     leadId,
@@ -172,9 +252,9 @@ export async function pickAdvisorForFirstContactReassignment(
 }
 
 /**
- * Asigna un asesor a un lead (round-robin) y lo persiste. Se llama al crear un
- * lead desde los webhooks de entrada y, de forma perezosa, al agendar una cita
- * de un lead que aún no tuviera asesor.
+ * Asigna un asesor a un lead (round-robin por turno de espera) y lo persiste.
+ * Se llama al crear un lead desde los webhooks de entrada y, de forma perezosa,
+ * al agendar una cita de un lead que aún no tuviera asesor.
  *
  * No lanza: si algo falla, el lead queda sin asignar y se registra el error.
  *
@@ -184,12 +264,15 @@ export async function assignLead(companyId: string, leadId: string): Promise<str
   try {
     const advisorId = await pickAdvisorForLead(companyId);
     if (!advisorId) return null;
+    const now = Timestamp.now();
     await leadsRepository.update(companyId, leadId, {
       assignedTo: advisorId,
-      advisorAssignedAt: Timestamp.now(),
+      advisorAssignedAt: now,
       pendingFirstContact: true,
     });
-    logger.info('[LeadAssignment] Lead asignado', { companyId, leadId, advisorId });
+    // Desplaza al asesor elegido al final de la fila de espera
+    await markAdvisorTurnUsed(companyId, advisorId);
+    logger.info('[LeadAssignment] Lead asignado por turno de espera', { companyId, leadId, advisorId });
     return advisorId;
   } catch (err) {
     logger.error('[LeadAssignment] Error asignando lead', {

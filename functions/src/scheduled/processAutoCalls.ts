@@ -16,7 +16,7 @@ export const processAutoCalls = onSchedule(
     schedule:       'every 10 minutes',
     region:         'us-central1',
     timeoutSeconds: 300,
-    memory:         '256MiB',
+    memory:         '512MiB',
     timeZone:       'America/Bogota',
   },
   async () => {

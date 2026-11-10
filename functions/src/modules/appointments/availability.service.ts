@@ -1,5 +1,6 @@
 import { env } from '../../config/env';
 import { listEvents } from '../../integrations/google/google.client';
+import { logger } from '../../utils/logger';
 import { appointmentsRepository } from './appointments.repository';
 import { getSchedulingConfig, type SchedulingConfig } from './schedulingConfig';
 import { colombianHolidayKey } from './colombianHolidays';
@@ -96,7 +97,15 @@ async function listBusySlots(
 
   const [crmAppointments, googleEvents] = await Promise.all([
     appointmentsRepository.listOverlapping(input.companyId, windowStart, windowEnd, input.advisorId),
-    input.refreshToken ? listEvents(input.refreshToken, windowStart, windowEnd) : Promise.resolve([]),
+    input.refreshToken
+      ? listEvents(input.refreshToken, windowStart, windowEnd).catch((err) => {
+          logger.warn('[Availability] Error al consultar Google Calendar del asesor; continuando con citas de CRM', {
+            advisorId: input.advisorId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return [];
+        })
+      : Promise.resolve([]),
   ]);
 
   return [

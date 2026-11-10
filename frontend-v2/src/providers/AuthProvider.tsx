@@ -7,7 +7,8 @@ import {
   type ReactNode,
 } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { auth } from '@/config/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '@/config/firebase';
 import {
   signIn as authSignIn,
   signOut as authSignOut,
@@ -48,15 +49,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
-  const [activeCompanyId, setActiveCompanyIdState] = useState<string | null>(() =>
-    localStorage.getItem(ACTIVE_COMPANY_KEY)
-  );
+  const [activeCompanyId, setActiveCompanyIdState] = useState<string | null>(() => {
+    return localStorage.getItem(ACTIVE_COMPANY_KEY);
+  });
+
+  const isTester = user?.email?.toLowerCase().includes('google.tester');
+  const platformAdmin = isPlatformAdmin(profile);
+  const canAccessDemo = isTester || platformAdmin;
+
+  // Asegurar que empresa_demo nunca permanezca almacenada para un usuario no autorizado (asesor)
+  useEffect(() => {
+    if (!loading && profile && !canAccessDemo && localStorage.getItem(ACTIVE_COMPANY_KEY) === 'empresa_demo') {
+      localStorage.removeItem(ACTIVE_COMPANY_KEY);
+      setActiveCompanyIdState(null);
+    }
+  }, [loading, profile, canAccessDemo]);
 
   const setActiveCompanyId = useCallback((companyId: string) => {
-    setActiveCompanyIdState(companyId);
-    localStorage.setItem(ACTIVE_COMPANY_KEY, companyId);
+    const targetId = (!canAccessDemo && companyId === 'empresa_demo') ? 'grupo_meraki_real' : companyId;
+    setActiveCompanyIdState(targetId);
+    localStorage.setItem(ACTIVE_COMPANY_KEY, targetId);
     window.location.assign('/dashboard/inbox');
-  }, []);
+  }, [canAccessDemo]);
 
   // Escuchar cambios de estado de auth de Firebase
   useEffect(() => {
@@ -67,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (firebaseUser) {
           const prof = await loadOrCreateUserProfile(firebaseUser);
 
-          if (!prof.active) {
+          if (prof.active === false) {
             // Usuario desactivado → forzar logout
             await authSignOut();
             setError('Tu cuenta está desactivada. Contacta al administrador.');
@@ -103,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const firebaseUser = await authSignIn(email, password);
       const prof = await loadOrCreateUserProfile(firebaseUser);
 
-      if (!prof.active) {
+      if (prof.active === false) {
         await authSignOut();
         setError('Tu cuenta está desactivada. Contacta al administrador.');
         setUser(null);
@@ -137,10 +151,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const platformAdmin = isPlatformAdmin(profile);
-  const effectiveCompanyId = platformAdmin
-    ? (activeCompanyId || profile?.companyId || null)
+  const sanitizedActiveId = (!canAccessDemo && activeCompanyId === 'empresa_demo') ? null : activeCompanyId;
+  const rawCompanyId = (!canAccessDemo && profile?.companyId === 'empresa_demo')
+    ? 'grupo_meraki_real'
     : (profile?.companyId ?? null);
+
+  const effectiveCompanyId = platformAdmin
+    ? (sanitizedActiveId || rawCompanyId || 'grupo_meraki_real')
+    : (rawCompanyId || 'grupo_meraki_real');
+
+  // Escuchar cambios en tiempo real del documento del usuario (bloqueos SLA, desbloqueos automáticos, etc.)
+  useEffect(() => {
+    if (!user?.uid || !effectiveCompanyId) return;
+    const userRef = doc(db, 'companies', effectiveCompanyId, 'users', user.uid);
+    const unsub = onSnapshot(
+      userRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                isBlockedForLeads: d.isBlockedForLeads === true,
+                blockedReason: d.blockedReason ?? null,
+                unresolvedAppointmentId: d.unresolvedAppointmentId ?? null,
+                unresolvedLeadId: d.unresolvedLeadId ?? null,
+                unresolvedLeadName: d.unresolvedLeadName ?? null,
+                receiveLeads: d.receiveLeads !== false && d.excludeFromLeadAssignment !== true,
+              }
+            : prev
+        );
+      },
+      () => {
+        // Silencioso en caso de permisos temporales
+      }
+    );
+    return () => unsub();
+  }, [user?.uid, effectiveCompanyId]);
 
   const value: AuthContextValue = {
     user,

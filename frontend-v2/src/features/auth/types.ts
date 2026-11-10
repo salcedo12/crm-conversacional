@@ -17,7 +17,13 @@ export interface UserProfile {
   displayName: string;
   role:        UserRole;
   active:      boolean;
+  receiveLeads?: boolean;
   platformAdmin?: boolean | string;
+  isBlockedForLeads?: boolean;
+  blockedReason?: string | null;
+  unresolvedAppointmentId?: string | null;
+  unresolvedLeadId?: string | null;
+  unresolvedLeadName?: string | null;
   createdAt:   Timestamp;
   updatedAt:   Timestamp;
 }

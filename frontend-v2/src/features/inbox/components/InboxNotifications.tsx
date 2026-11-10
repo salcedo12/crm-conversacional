@@ -9,14 +9,14 @@ import {
   getPushNotificationStatus,
   isExpiredPushTokenError,
   registerInboxPushToken,
-  sendTestPushNotification,
-  sendTestPushToDevice,
   type PushNotificationStatus,
 } from '../services/notifications.service';
 import { useLeads } from '../hooks/useLeads';
 import { useLocalReadReceipts } from '../hooks/useLocalReadReceipts';
 import type { Lead } from '../types';
 import { countUnreadLeads } from '../utils/readState';
+
+const DISMISS_KEY = 'meraki:dismiss-push-setup';
 
 interface InboxEvent {
   id:        string;
@@ -65,36 +65,9 @@ function isIos(): boolean {
   return /iPad|iPhone|iPod/i.test(navigator.userAgent);
 }
 
-function isAndroid(): boolean {
-  return /Android/i.test(navigator.userAgent);
-}
-
 function isStandaloneWebApp(): boolean {
   const nav = navigator as Navigator & { standalone?: boolean };
   return window.matchMedia('(display-mode: standalone)').matches || nav.standalone === true;
-}
-
-function notificationStatusText(
-  permission: NotificationPermission,
-  status: PushNotificationStatus | null,
-  currentDeviceRegistered: boolean
-): string {
-  if (isIos() && !isStandaloneWebApp()) {
-    return 'En iPhone instala el CRM en pantalla de inicio para activar notificaciones web.';
-  }
-
-  if (permission === 'granted') {
-    if (currentDeviceRegistered) return 'Este dispositivo ya recibe notificaciones.';
-    return status?.tokenCount
-      ? `${status.tokenCount} dispositivo(s) registrado(s), pero falta este dispositivo.`
-      : 'Permiso activo, falta registrar este navegador.';
-  }
-
-  if (permission === 'denied') {
-    return 'El navegador tiene las notificaciones bloqueadas. Activalas desde permisos del sitio.';
-  }
-
-  return 'Activa los avisos para recibir mensajes fuera del CRM.';
 }
 
 function showNativeNotification(event: InboxEvent) {
@@ -122,16 +95,29 @@ export function InboxNotifications() {
   const [permission, setPermission] = useState<NotificationPermission>(
     'Notification' in window ? Notification.permission : 'denied'
   );
-  const [registrationError, setRegistrationError] = useState<string | null>(null);
   const [pushStatus, setPushStatus] = useState<PushNotificationStatus | null>(null);
-  const [testingPush, setTestingPush] = useState(false);
-  const [repairingPush, setRepairingPush] = useState(false);
-  const [testSent, setTestSent] = useState(false);
   const [currentTokenId, setCurrentTokenId] = useState<string | null>(() => getCurrentPushTokenId());
   const knownRef = useRef<Map<string, number>>(new Map());
   const initializedRef = useRef(false);
   const hideTimerRef = useRef<number | null>(null);
   const originalTitleRef = useRef(document.title);
+
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(DISMISS_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(DISMISS_KEY, 'true');
+    } catch {
+      // localStorage can be disabled in private mode
+    }
+  };
 
   const visibleLeads = useMemo(() => {
     if (!user?.uid) return leads;
@@ -169,10 +155,7 @@ export function InboxNotifications() {
         setCurrentTokenId(getCurrentPushTokenId());
         setPushStatus(nextStatus);
       })
-      .then(() => setRegistrationError(null))
       .catch((err) => {
-        const message = err instanceof Error ? err.message : 'No se pudo registrar este navegador.';
-        setRegistrationError(message);
         console.warn('[Notifications] No se pudo registrar push token:', err);
       });
   }, [companyId, permission]);
@@ -238,85 +221,15 @@ export function InboxNotifications() {
     const nextPermission = await Notification.requestPermission();
     setPermission(nextPermission);
     if (nextPermission === 'granted' && companyId) {
-      await registerInboxPushToken(companyId)
+      registerInboxPushToken(companyId)
         .then(() => getPushNotificationStatus(companyId))
         .then((nextStatus) => {
           setCurrentTokenId(getCurrentPushTokenId());
           setPushStatus(nextStatus);
         })
-        .then(() => setRegistrationError(null))
         .catch((err) => {
-          const message = err instanceof Error ? err.message : 'No se pudo registrar este navegador.';
-          setRegistrationError(message);
           console.warn('[Notifications] No se pudo registrar push token:', err);
         });
-    }
-  };
-
-  const refreshPushStatus = async () => {
-    if (!companyId) return;
-    const nextStatus = await getPushNotificationStatus(companyId);
-    setCurrentTokenId(getCurrentPushTokenId());
-    setPushStatus(nextStatus);
-  };
-
-  const repairPushRegistration = async () => {
-    if (!companyId) return;
-    setRepairingPush(true);
-    setTestSent(false);
-    try {
-      await registerInboxPushToken(companyId, { forceRefresh: true });
-      await refreshPushStatus();
-      setRegistrationError(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'No se pudo reparar este dispositivo.';
-      setRegistrationError(message);
-    } finally {
-      setRepairingPush(false);
-    }
-  };
-
-  const testPush = async () => {
-    if (!companyId) return;
-    setTestingPush(true);
-    setTestSent(false);
-    try {
-      if (currentTokenId) {
-        try {
-          await sendTestPushToDevice(companyId, currentTokenId);
-        } catch (err) {
-          const missingToken = err instanceof Error && err.message.toLowerCase().includes('no tiene token registrado');
-          if (!isExpiredPushTokenError(err) && !missingToken) throw err;
-
-          setRegistrationError(null);
-          await registerInboxPushToken(companyId, { forceRefresh: true });
-          const renewedTokenId = getCurrentPushTokenId();
-          if (!renewedTokenId) {
-            throw new Error('No se pudo generar un token nuevo para este dispositivo.');
-          }
-
-          setCurrentTokenId(renewedTokenId);
-          await sendTestPushToDevice(companyId, renewedTokenId);
-        }
-      } else {
-        await registerInboxPushToken(companyId, { forceRefresh: true });
-        const renewedTokenId = getCurrentPushTokenId();
-        if (renewedTokenId) {
-          setCurrentTokenId(renewedTokenId);
-          await sendTestPushToDevice(companyId, renewedTokenId);
-        } else {
-          await sendTestPushNotification(companyId);
-        }
-      }
-      setTestSent(true);
-      await refreshPushStatus();
-      setRegistrationError(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'No se pudo enviar la prueba a este dispositivo.';
-      setRegistrationError(message);
-      await refreshPushStatus().catch(() => {});
-    } finally {
-      setTestingPush(false);
     }
   };
 
@@ -325,14 +238,9 @@ export function InboxNotifications() {
     ? pushStatus?.devices.find((device) => device.id === currentTokenId)
     : undefined;
   const showSetupPanel =
-    (!isIos() || isStandaloneWebApp()) && (
-      permission !== 'granted' ||
-      !!registrationError ||
-      !!currentDevice?.lastPushErrorCode ||
-      (permission === 'granted' && pushStatus !== null && !currentDeviceRegistered)
-    );
-  const canUseWebPushHere = !isIos() || isStandaloneWebApp();
-  const showAndroidRegisteredPanel = isAndroid() && permission === 'granted' && currentDeviceRegistered;
+    !dismissed &&
+    (!isIos() || isStandaloneWebApp()) &&
+    permission === 'default';
 
   const lead = event ? leadsById.get(event.leadId) : undefined;
 
@@ -346,11 +254,9 @@ export function InboxNotifications() {
       .then((nextStatus) => {
         setCurrentTokenId(getCurrentPushTokenId());
         setPushStatus(nextStatus);
-        setRegistrationError(null);
       })
       .catch((err) => {
-        const message = err instanceof Error ? err.message : 'No se pudo renovar este dispositivo.';
-        setRegistrationError(message);
+        console.warn('[Notifications] No se pudo renovar este dispositivo:', err);
       });
   }, [companyId, currentDevice?.lastPushErrorCode, currentDevice?.lastPushErrorMessage, permission]);
 
@@ -363,82 +269,49 @@ export function InboxNotifications() {
       .then((nextStatus) => {
         setCurrentTokenId(getCurrentPushTokenId());
         setPushStatus(nextStatus);
-        setRegistrationError(null);
       })
       .catch((err) => {
-        const message = err instanceof Error ? err.message : 'No se pudo renovar este dispositivo.';
-        setRegistrationError(message);
+        console.warn('[Notifications] No se pudo renovar este dispositivo:', err);
       });
   }, [companyId, currentDeviceRegistered, currentTokenId, permission, pushStatus]);
 
   return (
     <>
-      {(showSetupPanel || showAndroidRegisteredPanel) && (
+      {showSetupPanel && (
         <div className="fixed bottom-16 right-3 z-[90] w-[min(360px,calc(100vw-1.5rem))] md:bottom-4">
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/95 p-3 text-xs shadow-2xl shadow-black/40 backdrop-blur">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="font-semibold text-zinc-100">Notificaciones</p>
-                <p className="mt-0.5 text-zinc-500">
-                  {notificationStatusText(permission, pushStatus, currentDeviceRegistered)}
+                <p className="font-semibold text-zinc-100">Activar Notificaciones</p>
+                <p className="mt-0.5 text-zinc-400">
+                  Recibe alertas instantáneas en tu pantalla cuando un cliente envíe un nuevo mensaje.
                 </p>
-                {registrationError && <p className="mt-1 text-red-300">{registrationError}</p>}
-                {!registrationError && currentDevice?.lastPushErrorCode && (
-                  <p className="mt-1 text-red-300">
-                    Ultimo error: {currentDevice.lastPushErrorCode}
-                  </p>
-                )}
-                {testSent && <p className="mt-1 text-emerald-300">Prueba enviada. Debe aparecer como aviso del navegador.</p>}
               </div>
-              {showAndroidRegisteredPanel && (
-                <button
-                  type="button"
-                  onClick={() => setPushStatus(null)}
-                  className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-                  aria-label="Ocultar estado de notificaciones"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleDismiss}
+                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+                aria-label="Cerrar y no volver a mostrar"
+                title="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {canUseWebPushHere && permission === 'default' && (
-                <button
-                  type="button"
-                  onClick={requestPermission}
-                  className="rounded-md bg-violet-500 px-3 py-1.5 font-medium text-white hover:bg-violet-400"
-                >
-                  Permitir
-                </button>
-              )}
-              {canUseWebPushHere && permission === 'granted' && (
-                <>
-                  <button
-                    type="button"
-                    onClick={refreshPushStatus}
-                    disabled={repairingPush || testingPush}
-                    className="rounded-md border border-zinc-700 px-3 py-1.5 font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
-                  >
-                    Revisar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={repairPushRegistration}
-                    disabled={repairingPush || testingPush}
-                    className="rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-60"
-                  >
-                    {repairingPush ? 'Reparando...' : 'Reparar'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={testPush}
-                    disabled={testingPush || repairingPush}
-                    className="rounded-md bg-emerald-500 px-3 py-1.5 font-medium text-zinc-950 hover:bg-emerald-400 disabled:opacity-60"
-                  >
-                    {testingPush ? 'Enviando...' : 'Probar'}
-                  </button>
-                </>
-              )}
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={requestPermission}
+                className="rounded-md bg-emerald-500 px-3 py-1.5 font-medium text-zinc-950 hover:bg-emerald-400 transition-colors"
+              >
+                Activar notificaciones
+              </button>
+              <button
+                type="button"
+                onClick={handleDismiss}
+                className="rounded-md border border-zinc-800 px-3 py-1.5 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition-colors"
+              >
+                Ahora no
+              </button>
             </div>
           </div>
         </div>

@@ -8,6 +8,7 @@ import { uploadMediaBuffer, mimeToExt } from '../utils/storageUpload';
 import { normalizePhone, toNormalizedPhone } from '../utils/phone';
 import { advisorWhatsappBridgeClient, type AdvisorWhatsappBridgeStatus } from '../integrations/advisorWhatsapp/advisorWhatsappBridge.client';
 import { leadsRepository } from '../modules/leads/leads.repository';
+import type { Lead } from '../modules/leads/leads.types';
 import { ADVISOR_WHATSAPP_SOURCE } from '../modules/leads/leadClassification';
 import { messagesRepository } from '../modules/messages/messages.repository';
 import { sendAdvisorPush } from '../modules/messages/pushNotifications.service';
@@ -96,6 +97,46 @@ function safeStorageSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
 }
 
+const FORBIDDEN_PLACEHOLDER_NAMES = [
+  'ai luis carlos',
+  'luis carlos machado',
+  'luisa zuluaga',
+  'juana avila',
+  'alexander zuluaga',
+  'claudia bolaños',
+  'claudia bolanos',
+  'angelica acevedo',
+  'adriana montaña',
+  'adriana montana',
+  'adriana garzon',
+  'adriana garzón',
+  'laura torres',
+  'oscar narvaez',
+  'stiven aviles',
+  'edwin ramirez',
+  'encuentra tu refugio',
+  'grupo constructor meraki',
+  'constructor meraki',
+  'sala de ventas',
+  'asesor',
+];
+
+function sanitizeCustomerName(name: string | null | undefined, fallback: string): string {
+  if (!name) return fallback;
+  const clean = name.trim();
+  const lower = clean.toLowerCase();
+  if (
+    FORBIDDEN_PLACEHOLDER_NAMES.some((f) => lower.includes(f)) ||
+    lower.startsWith('ai ') ||
+    clean === '.' ||
+    clean === '-' ||
+    lower === 'no dio nombre'
+  ) {
+    return fallback;
+  }
+  return clean;
+}
+
 async function refreshConnectionFromBridge(
   companyId: string,
   advisorId: string,
@@ -161,6 +202,9 @@ async function adminIds(companyId: string): Promise<string[]> {
     .get();
   return snap.docs.map((doc) => doc.id);
 }
+
+import { isCompanyTeamPhone } from '../modules/companies/teamPhones';
+export { isCompanyTeamPhone };
 
 async function notifyAdvisorWhatsappDisconnected(input: {
   companyId: string;
@@ -323,6 +367,66 @@ export const getMyMessagingLine = onCall(
   }
 );
 
+/**
+ * Busca de forma exhaustiva si el contacto ya existe como lead en la empresa,
+ * para asegurar que BAJO NINGUNA CIRCUNSTANCIA se cree un lead duplicado.
+ * Busca por:
+ * 1. Teléfono exacto (+14846305709, etc.)
+ * 2. Teléfono normalizado (+14846305709, +57...)
+ * 3. Dígitos limpios sin signos
+ * 4. Cola universal de 10 dígitos (nacional o móvil internacional, sin importar país)
+ * 5. Fallback histórico con prefijo +57 si fue guardado erróneamente en el pasado
+ * 6. Cola de 9 dígitos
+ */
+async function findExistingLeadForAdvisorWebhook(
+  companyId: string,
+  rawPhone: string
+): Promise<Lead | null> {
+  const phone = normalizePhone(rawPhone);
+  const normalizedPhone = toNormalizedPhone(phone);
+  const digits = phone.replace(/\D/g, '');
+
+  // 1. Coincidencia exacta por phone
+  let lead = await leadsRepository.findByPhone(companyId, phone);
+  if (lead) return lead;
+
+  // 2. Coincidencia exacta por normalizedPhone
+  lead = await leadsRepository.findByNormalizedPhone(companyId, normalizedPhone);
+  if (lead) return lead;
+
+  // 3. Coincidencia por phone con dígitos limpios o con prefijo '+'
+  if (digits && digits !== phone) {
+    lead = await leadsRepository.findByPhone(companyId, digits);
+    if (lead) return lead;
+  }
+  if (digits && !phone.startsWith('+')) {
+    lead = await leadsRepository.findByPhone(companyId, `+${digits}`);
+    if (lead) return lead;
+  }
+
+  // 4. Coincidencia por cola de 10 dígitos (universal)
+  if (digits.length >= 10) {
+    const tail10 = digits.slice(-10);
+    lead = await leadsRepository.findByPhoneTail(companyId, tail10);
+    if (lead) return lead;
+
+    // Fallback: leads heredados donde se antepuso +57 por error
+    lead = await leadsRepository.findByNormalizedPhone(companyId, `+57${tail10}`);
+    if (lead) return lead;
+    lead = await leadsRepository.findByPhone(companyId, `+57${tail10}`);
+    if (lead) return lead;
+  }
+
+  // 5. Coincidencia por cola de 9 dígitos
+  if (digits.length >= 9) {
+    const tail9 = digits.slice(-9);
+    lead = await leadsRepository.findByPhoneTail(companyId, tail9);
+    if (lead) return lead;
+  }
+
+  return null;
+}
+
 export const advisorWhatsappWebhook = onRequest(
   // 1GiB: reflejar media (imagenes/videos/documentos) del WhatsApp del asesor
   // decodifica el base64 a Buffer y lo re-sube a Storage. Con los 256MiB por
@@ -411,20 +515,57 @@ export const advisorWhatsappWebhook = onRequest(
       updatedAt: Timestamp.now(),
     }, { merge: true });
 
-    let lead = await leadsRepository.findByNormalizedPhone(data.companyId, normalizedPhone);
+    // ── FILTRO B: NÚMEROS INTERNOS DEL EQUIPO (ASESORES / EMPRESA) ──────────
+    // Evita que conversaciones entre compañeros (o llamadas/mensajes entre asesores)
+    // se creen como leads o contaminen el CRM.
+    if (await isCompanyTeamPhone(data.companyId, phone)) {
+      logger.info('[AdvisorWhatsapp] Mensaje interno entre miembros del equipo omitido', {
+        companyId: data.companyId,
+        advisorId: data.advisorId,
+        phone,
+        direction: data.direction,
+      });
+      response.json({ ok: true, ignored: true, reason: 'internal_team_phone' });
+      return;
+    }
+
+    // En mensajes salientes (outbound), el customerName enviado por el puente Baileys
+    // corresponde al pushName del PROPIO ASESOR (remitente), NO al cliente.
+    // Solo usamos el customerName si el mensaje proviene del cliente (inbound).
+    const cleanCustomerName = data.direction === 'inbound'
+      ? sanitizeCustomerName(data.customerName, '')
+      : '';
+
+    let lead = await findExistingLeadForAdvisorWebhook(data.companyId, phone);
+
+    // Auto-sanación: si el lead ya existía con un normalizedPhone distorsionado
+    // (ej. '+57' antepuesto por error histórico en un número internacional), corregirlo al formato correcto.
+    if (lead && lead.normalizedPhone !== normalizedPhone && phone.startsWith('+1')) {
+      await leadsRepository.update(data.companyId, lead.id, { normalizedPhone });
+      lead.normalizedPhone = normalizedPhone;
+    }
+
+    const digitsOnly = phone.replace(/\D/g, '');
+    let isNewLead = false;
     if (!lead) {
+      isNewLead = true;
       lead = await leadsRepository.create(data.companyId, {
         companyId: data.companyId,
         phone,
         normalizedPhone,
-        name: data.customerName || phone,
+        phoneTail: digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly,
+        name: cleanCustomerName || phone,
         status: 'active',
         // Fuente propia: entró DIRECTO al WhatsApp del asesor, no por el 317.
-        // Se excluye de estadísticas y del reparto de datos (ver leadClassification).
+        // Se excluye de estadísticas, SmartHome y reparto/reasignación (ver leadClassification).
         source: ADVISOR_WHATSAPP_SOURCE,
+        inbox: 'advisor_direct',
         channel: 'whatsapp',
         inboxProvider: 'ycloud',
         assignedTo: data.advisorId,
+        advisorAssignedAt: createdAt,
+        assignmentLocked: true,
+        pendingFirstContact: false,
         aiEnabled: false,
         lastInboundAt: data.direction === 'inbound' ? createdAt : undefined,
         lastAdvisorMessageAt: data.direction === 'outbound' ? createdAt : undefined,
@@ -435,6 +576,38 @@ export const advisorWhatsappWebhook = onRequest(
         tags: [],
         metadata: { advisorWhatsappMirror: 'true' },
       });
+    } else {
+      const existingUpdates: Record<string, unknown> = {};
+      const neverEnteredCentral317 = !lead.inboxId && (
+        lead.id.startsWith('sm_') ||
+        lead.tags?.includes('smarthome_migracion') ||
+        Boolean(lead.metadata?.migratedFrom) ||
+        lead.source === 'manual'
+      );
+      if (neverEnteredCentral317) {
+        existingUpdates.inbox = 'advisor_direct';
+        existingUpdates.source = ADVISOR_WHATSAPP_SOURCE;
+        existingUpdates['metadata.advisorWhatsappMirror'] = 'true';
+        existingUpdates.pendingFirstContact = false;
+        existingUpdates.assignmentLocked = true;
+      } else {
+        if (!lead.inbox && (lead.source === ADVISOR_WHATSAPP_SOURCE || lead.metadata?.advisorWhatsappMirror)) {
+          existingUpdates.inbox = 'advisor_direct';
+        }
+        if (lead.source === ADVISOR_WHATSAPP_SOURCE || lead.metadata?.advisorWhatsappMirror) {
+          existingUpdates.pendingFirstContact = false;
+          existingUpdates.assignmentLocked = true;
+        }
+      }
+      // Si el lead ya existía con nombre de asesor/empresa y ahora llega un nombre válido de cliente
+      const currentNameLower = (lead.name || '').toLowerCase();
+      const hasPlaceholder = FORBIDDEN_PLACEHOLDER_NAMES.some((f) => currentNameLower.includes(f));
+      if (hasPlaceholder && cleanCustomerName) {
+        existingUpdates.name = cleanCustomerName;
+      }
+      if (Object.keys(existingUpdates).length > 0) {
+        await leadsRepository.update(data.companyId, lead.id, existingUpdates);
+      }
     }
 
     const exists = await messagesRepository.findByTwilioSid(data.companyId, lead.id, data.externalMessageId);
@@ -471,12 +644,14 @@ export const advisorWhatsappWebhook = onRequest(
         }
       }
 
+      const effectiveContent = data.content?.trim() || (!mediaUrl && !data.mediaType ? '[Reacción o mensaje no compatible]' : '');
+
       await messagesRepository.create({
         companyId: data.companyId,
         leadId: lead.id,
         direction: data.direction,
         senderType: data.direction === 'outbound' ? 'advisor' : 'lead',
-        content: data.content,
+        content: effectiveContent,
         channel: 'whatsapp',
         status: 'sent',
         twilioMessageSid: data.externalMessageId,
@@ -496,16 +671,54 @@ export const advisorWhatsappWebhook = onRequest(
       });
     }
 
+    const hasDifferentAdvisor = Boolean(lead.assignedTo && lead.assignedTo !== data.advisorId);
+
     const leadUpdate: Record<string, unknown> = {
       lastMessageAt: createdAt,
-      lastMessageText: data.content || (data.mediaType ? 'Archivo' : ''),
+      lastMessageText: data.content?.trim() || (data.mediaType ? 'Archivo' : '[Reacción o mensaje no compatible]'),
       aiEnabled: false,
     };
-    if (data.direction === 'inbound') leadUpdate.lastInboundAt = createdAt;
+    if (data.direction === 'inbound') {
+      leadUpdate.lastInboundAt = createdAt;
+    }
     if (data.direction === 'outbound') {
       leadUpdate.lastAdvisorMessageAt = createdAt;
-      leadUpdate.assignedTo = data.advisorId;
-      leadUpdate.pendingFirstContact = false;
+
+      if (!isNewLead && hasDifferentAdvisor) {
+        // ── FILTRO A: PROTECCIÓN DE EXCLUSIVIDAD Y PRIVACIDAD COMERCIAL ──────
+        // El lead YA PERTENECE a otro asesor. NO se reasigna a quien le escribió.
+        // Se mantiene el assignedTo original. Se alerta por push al asesor.
+        logger.warn('[AdvisorWhatsapp] Intento de contacto a lead asignado a otro asesor', {
+          companyId: data.companyId,
+          leadId: lead.id,
+          phone,
+          currentOwner: lead.assignedTo,
+          contactingAdvisor: data.advisorId,
+        });
+
+        // Notificar por push al asesor que intentó escribirle
+        advisorDisplayName(data.companyId, lead.assignedTo!)
+          .then((ownerName) =>
+            sendAdvisorPush(data.companyId, data.advisorId, {
+              title: '⚠️ Prospecto asignado a otro asesor',
+              body: `El prospecto ${lead.name || phone} pertenece a ${ownerName}. Por exclusividad comercial, no ha sido transferido a tu cuenta. Para gestionarlo debes solicitar el traslado desde el CRM.`,
+              url: `/dashboard/inbox?search=${encodeURIComponent(phone)}`,
+              type: 'unauthorized_transfer_attempt',
+              leadId: lead.id,
+            })
+          )
+          .catch((err) => {
+            logger.warn('[AdvisorWhatsapp] Error enviando push de exclusividad', { err });
+          });
+      } else {
+        // Lead libre (sin asesor) o lead que ya era propio:
+        if (!lead.assignedTo) {
+          leadUpdate.assignedTo = data.advisorId;
+          leadUpdate.advisorAssignedAt = createdAt;
+        }
+        leadUpdate.pendingFirstContact = false;
+        leadUpdate.assignmentLocked = true;
+      }
     }
     await leadsRepository.update(data.companyId, lead.id, leadUpdate);
 

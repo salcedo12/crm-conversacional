@@ -44,7 +44,14 @@ export interface Insight {
   adKey?: string;
 }
 
-export type MarketingRange = 'all' | '7d' | '30d' | '90d';
+export type MarketingRange = 'all' | '7d' | '30d' | '90d' | 'custom';
+
+/** Ventana temporal: un preset, o 'custom' con días YYYY-MM-DD (inclusivos, hora Colombia). */
+export interface MarketingWindow {
+  range: MarketingRange;
+  from?: string;
+  to?:   string;
+}
 
 export interface SourceRow {
   source:       string;
@@ -75,6 +82,8 @@ export interface FormRow {
 
 export interface MarketingMetrics {
   range:           MarketingRange;
+  from?:           string | null;
+  to?:             string | null;
   totalLeads:      number;
   totalMetaLeads:  number;
   metaLeadsWithAdId:   number;
@@ -92,9 +101,41 @@ export interface MarketingMetrics {
   generatedAt:     number;
 }
 
-const _get = httpsCallable<{ companyId: string; range: MarketingRange }, MarketingMetrics>(functions, 'getMarketingMetrics');
+/** Contacto que entró por un anuncio (listado "Ver contactos"). */
+export interface AdContact {
+  id:            string;
+  adKey:         string;
+  name:          string | null;
+  phone:         string | null;
+  email:         string | null;
+  channel:       string;
+  status:        string;
+  score:         number | null;
+  temperature:   string | null;
+  lossCategory:  string | null;
+  advisorName:   string | null;
+  adName:        string | null;
+  campaignName:  string | null;
+  formName:      string | null;
+  createdAt:     number | null;
+  lastMessageAt: number | null;
+}
 
-export async function getMarketingMetrics(companyId: string, range: MarketingRange = 'all'): Promise<MarketingMetrics> {
-  const r = await _get({ companyId, range });
+const _get = httpsCallable<{ companyId: string } & MarketingWindow, MarketingMetrics>(functions, 'getMarketingMetrics');
+const _getAdLeads = httpsCallable<{ companyId: string; adKeys: string[] } & MarketingWindow, { contacts: AdContact[] }>(functions, 'getMarketingAdLeads');
+
+/** Solo manda from/to cuando el rango es personalizado. */
+function windowParams(w: MarketingWindow): MarketingWindow {
+  return w.range === 'custom' ? { range: 'custom', from: w.from, to: w.to } : { range: w.range };
+}
+
+export async function getMarketingMetrics(companyId: string, win: MarketingWindow = { range: 'all' }): Promise<MarketingMetrics> {
+  const r = await _get({ companyId, ...windowParams(win) });
   return r.data;
+}
+
+/** Contactos de uno o varios anuncios (por `AdRow.key`) en la misma ventana temporal. */
+export async function getMarketingAdLeads(companyId: string, win: MarketingWindow, adKeys: string[]): Promise<AdContact[]> {
+  const r = await _getAdLeads({ companyId, adKeys, ...windowParams(win) });
+  return r.data.contacts;
 }

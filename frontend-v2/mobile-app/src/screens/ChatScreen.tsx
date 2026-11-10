@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, memo, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   BackHandler,
   FlatList,
@@ -10,6 +11,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -20,7 +22,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Clipboard from 'expo-clipboard';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import {
@@ -32,33 +33,47 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
+import firestore from '@react-native-firebase/firestore';
+import { getFunctions, httpsCallable } from '@react-native-firebase/functions';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+
 import { useAuth } from '../providers/AuthProvider';
-import { useLeadCalls, useLeadDoc, useLeadNotes } from '../hooks/useLeadDetails';
+import { useTheme } from '../providers/ThemeProvider';
 import { useLibrary } from '../hooks/useLibrary';
-import { useMessages } from '../hooks/useMessages';
-import { colors } from '../theme/colors';
-import type { Appointment, ContactField, Lead, LeadAnalysis, LeadNote, LibraryItem, Message, RecentCall, RootStackParams, WhatsAppTemplate } from '../types';
-import { initials, shortTime, timestampMs } from '../utils/format';
-import { isWindowOpen, windowClosedAgo, windowTimeLeft } from '../utils/conversationWindow';
+import type { MerakiThemePalette } from '../theme/colors';
 import {
-  addLeadNote,
-  analyzeLead,
-  deleteLeadNote,
-  listContactFields,
-  listLeadAppointments,
+  isAdminRole,
+  type Lead,
+  type LeadSourceMeta,
+  type LibraryItem,
+  type Message,
+  type RootStackParams,
+  type WhatsAppTemplate,
+} from '../types';
+import { isWindowOpen, windowClosedAgo, windowTimeLeft } from '../utils/conversationWindow';
+import { formatPhone } from '../utils/formatPhone';
+import {
+  listTemplates,
   markLeadRead,
   sendMessage,
-  sendTemplateMessage,
   setLeadAi,
-  setReminderDone,
-  startAiCall,
-  listTemplates,
-  updateLead,
   uploadMedia,
   type LocalFile,
   type UploadedMedia,
 } from '../services/crm';
-import { cancelLeadReminderNotification, scheduleLeadReminderNotification } from '../services/notifications';
+import {
+  getMyMessagingLine,
+  listAdvisors,
+  listMessagingLines,
+  reactToMessage,
+  sendTemplateMessageWithLine,
+  type Advisor,
+  type MessagingLine,
+} from '../services/enterprise';
+import {
+  listAdvisorWhatsappConnections,
+  type AdvisorWhatsappStatus,
+} from '../services/advisorWhatsapp';
 import {
   fetchPlanosIndex,
   isPlanoItem,
@@ -68,231 +83,2043 @@ import {
   timeAgo,
   type PlanoIndexItem,
 } from '../services/planos';
-import { SmartHomeBitacoraPanel } from '../components/SmartHomeBitacoraPanel';
+import { LeadScoreBadge, LeadStatusBadge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { FichaTecnicaModal } from '../components/FichaTecnicaModal';
+import { Icon } from '../components/Icon';
+import { LeadDrawerModal } from '../components/LeadDrawerModal';
+import { StandaloneBottomNavBar } from '../components/StandaloneBottomNavBar';
+
 type Props = NativeStackScreenProps<RootStackParams, 'Chat'>;
-const reminderTimeOptions = Array.from({ length: 29 }, (_, index) => {
-  const totalMinutes = 7 * 60 + index * 30;
-  return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
-});
+type DeliveryChannel = 'company_whatsapp' | 'advisor_whatsapp';
+type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+const MESSAGES_PAGE_SIZE = 50;
+const LONG_MESSAGE_THRESHOLD = 600;
+const WAVEFORM_BARS = 30;
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const;
+const UNSUPPORTED_LABEL =
+  '⚠️ El cliente envió un mensaje no compatible. Pídele que lo reenvíe como texto o archivo.';
+
+const INBOX_NAMES: Record<string, string> = {
+  '+573148209662': 'sistemas meraki',
+  '+573176820728': 'Ventas 317',
+  '+573232094057': 'WhatsApp Angelica',
+};
+
+const CANONICAL_PROJECT_ORDER = [
+  'Laguna Mar',
+  'Río Claro',
+  'Sobre Montañas',
+  'Sobre Montañas (Alvarado)',
+  'Cañón de Arizona',
+  'Llano Grande',
+  'Proyectos de Ibagué',
+];
+
+const NO_PROJECT = 'Otros documentos';
+
+const functionsInstance = getFunctions(undefined, 'us-central1');
+
+interface MetaAdCreative {
+  adId: string;
+  name?: string;
+  headline?: string;
+  body?: string;
+  mediaType: 'video' | 'image' | 'unknown';
+  videoUrl?: string;
+  imageUrl?: string;
+  sourceUrl?: string;
+}
+
+type EnrichedMessage = Message & {
+  twilioMessageSid?: string;
+  wamid?: string;
+  failureCode?: string | number;
+  failureReason?: string;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers puros (fechas, teléfonos, banderas, SLA, ventana, errores Meta)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function snapExists(snap: { exists: boolean | (() => boolean) }): boolean {
+  return typeof snap.exists === 'function' ? snap.exists() : Boolean(snap.exists);
+}
+
+function toMillisSafe(ts: unknown): number {
+  if (!ts) return 0;
+  if (typeof ts === 'number') return Number.isFinite(ts) ? ts : 0;
+  if (typeof ts === 'string') {
+    const parsed = new Date(ts.trim().replace(' ', 'T')).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof ts === 'object') {
+    const obj = ts as {
+      toMillis?: () => number;
+      toDate?: () => Date;
+      seconds?: number;
+      _seconds?: number;
+    };
+    if (typeof obj.toMillis === 'function') return obj.toMillis();
+    if (typeof obj.toDate === 'function') return obj.toDate().getTime();
+    const sec = obj.seconds ?? obj._seconds;
+    if (typeof sec === 'number') return sec * 1000;
+  }
+  return 0;
+}
+
+function digitsOnly(value?: string | null): string {
+  return (value ?? '').replace(/\D/g, '');
+}
+
+function formatDisplayPhone(phone?: string | null): string {
+  if (!phone) return '';
+  const formatted = formatPhone(phone);
+  const m = formatted.match(/^\+57(\d{3})(\d{3})(\d{4})$/);
+  if (m) return `+57 ${m[1]} ${m[2]} ${m[3]}`;
+  return formatted;
+}
+
+function getCountryFlag(phone?: string | null): string {
+  if (!phone) return '💬';
+  const clean = phone.trim().replace(/\s+/g, '');
+  const d = clean.startsWith('+') ? clean.slice(1) : clean;
+  if (d.startsWith('57')) return '🇨🇴';
+  if (d.startsWith('52')) return '🇲🇽';
+  if (d.startsWith('56')) return '🇨🇱';
+  if (d.startsWith('54')) return '🇦🇷';
+  if (d.startsWith('51')) return '🇵🇪';
+  if (d.startsWith('593')) return '🇪🇨';
+  if (d.startsWith('507')) return '🇵🇦';
+  if (d.startsWith('506')) return '🇨🇷';
+  if (d.startsWith('58')) return '🇻🇪';
+  if (d.startsWith('34')) return '🇪🇸';
+  if (d.startsWith('1')) return '🇺🇸';
+  if (d.startsWith('44')) return '🇬🇧';
+  if (d.startsWith('33')) return '🇫🇷';
+  if (d.startsWith('49')) return '🇩🇪';
+  if (d.startsWith('39')) return '🇮🇹';
+  if (d.startsWith('55')) return '🇧🇷';
+  return '🌎';
+}
+
+function inboxLabel(inboxId?: string | null): string {
+  if (!inboxId) return 'Ventas 317';
+  const normalized = formatPhone(inboxId);
+  return INBOX_NAMES[normalized] ?? INBOX_NAMES[inboxId] ?? formatDisplayPhone(inboxId);
+}
+
+function channelBadgeInfo(channel?: Lead['channel']): { icon: string; label: string } | null {
+  if (channel === 'messenger') return { icon: '💬', label: 'Messenger' };
+  if (channel === 'instagram') return { icon: '📷', label: 'Instagram' };
+  return null;
+}
+
+function formatChatTimestamp(ts: unknown): string {
+  const ms = toMillisSafe(ts);
+  if (!ms) return '';
+  const date = new Date(ms);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  if (sameDay) {
+    return new Intl.DateTimeFormat('es-CO', {
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat('es-CO', {
+    day: '2-digit',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function formatDurationMMSS(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '00:00';
+  const secs = Math.floor(totalSeconds);
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function formatAudioClock(seconds?: number): string {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return '0:00';
+  const whole = Math.floor(seconds);
+  const mins = Math.floor(whole / 60);
+  const secs = whole % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+interface ManualTakeoverSlaInfo {
+  status: 'compliant' | 'pending' | 'overdue';
+  hoursLeft: number;
+  minsLeft: number;
+  label: string;
+}
+
+function getManualTakeoverSlaInfo(lead: Lead): ManualTakeoverSlaInfo | null {
+  if (lead.aiEnabled) return null;
+
+  const rawLead = lead as unknown as Record<string, unknown>;
+
+  // Si fue marcado explícitamente como compliant o exento en base de datos
+  if (lead.aiTakeoverSlaStatus === 'compliant' || (rawLead.aiTakeoverSlaStatus === 'exempt')) {
+    return {
+      status: 'compliant',
+      hoursLeft: 24,
+      minsLeft: 0,
+      label: '✅ Toma manual: Ficha / Seguimiento al día',
+    };
+  }
+
+  const disabledMillis =
+    toMillisSafe(rawLead.aiDisabledAt) ||
+    toMillisSafe(lead.aiPausedAt) ||
+    0;
+
+  const lastFollowUpMillis =
+    toMillisSafe(lead.lastFollowUpAt) ||
+    toMillisSafe(lead.lastFichaAt) ||
+    0;
+
+  // Requisito estricto: Debe existir seguimiento/ficha técnica previa registrada.
+  const hasFollowUp = lastFollowUpMillis > 0;
+  const isAfterDisabled = disabledMillis > 0 ? lastFollowUpMillis >= disabledMillis : hasFollowUp;
+
+  if (hasFollowUp && isAfterDisabled) {
+    return {
+      status: 'compliant',
+      hoursLeft: 24,
+      minsLeft: 0,
+      label: '✅ Toma manual: Ficha / Seguimiento al día',
+    };
+  }
+
+  // Exención de históricos anteriores a hoy:
+  const startOfTodayMs = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate(), 0, 0, 0, 0).getTime();
+  if (disabledMillis === 0 || disabledMillis < startOfTodayMs) {
+    return {
+      status: 'compliant',
+      hoursLeft: 24,
+      minsLeft: 0,
+      label: '● Modo manual',
+    };
+  }
+
+  const baseTime = disabledMillis;
+  const deadlineMillis = baseTime + 24 * 3600_000;
+  const diffMs = deadlineMillis - Date.now();
+
+  if (diffMs <= 0 || rawLead.aiTakeoverSlaStatus === 'overdue') {
+    return {
+      status: 'overdue',
+      hoursLeft: 0,
+      minsLeft: 0,
+      label: '🚨 SLA 24h vencido tras apagar IA — Llenar Ficha Técnica ahora',
+    };
+  }
+
+  const hoursLeft = Math.floor(diffMs / 3600_000);
+  const minsLeft = Math.floor((diffMs % 3600_000) / 60_000);
+
+  return {
+    status: 'pending',
+    hoursLeft,
+    minsLeft,
+    label: `⏳ Toma manual: ${hoursLeft}h ${minsLeft}m restantes para registrar Ficha o Cita`,
+  };
+}
+
+function friendlyFailureReason(code?: string | number, rawReason?: string): string | undefined {
+  const key = code !== undefined && code !== null ? String(code).trim() : '';
+  switch (key) {
+    case '131000':
+      return 'Error temporal de WhatsApp (Meta) al entregar a este contacto. Reintenta en unos minutos; si sigue fallando, el teléfono del cliente puede estar sin conexión o haber bloqueado el número.';
+    case '131016':
+      return 'El servicio de WhatsApp (Meta) no está disponible en este momento. Reintenta en unos minutos.';
+    case '131056':
+      return 'Se enviaron demasiados mensajes seguidos a este contacto. Espera un momento antes de reintentar.';
+    case '131049':
+      return 'Meta bloqueó el envío por su límite de mensajes de marketing a este contacto. Usa una plantilla de Utilidad o espera respuesta del cliente.';
+    case '131047':
+      return 'Pasaron más de 24 h sin respuesta del cliente. Solo se pueden enviar plantillas pre-aprobadas por Meta.';
+    case '131026':
+      return 'El mensaje no se pudo entregar (el número puede no tener WhatsApp activo o no acepta mensajes de empresas).';
+    case '132000':
+    case '132001':
+      return 'La plantilla no coincide con el formato aprobado por Meta (revisa variables o idioma).';
+    case '470':
+    case '131050':
+      return 'El contacto no permite recibir mensajes de marketing de esta empresa.';
+    case '131051':
+      return 'Tipo de mensaje o archivo multimedia no compatible con el canal del destinatario.';
+    case '131031':
+      return 'La cuenta comercial de WhatsApp tiene una restricción temporal en Meta.';
+    case '130472':
+      return 'El número del usuario forma parte de un experimento de Meta y no recibió el mensaje.';
+    default:
+      return rawReason?.trim() || undefined;
+  }
+}
+
+function isPlayableVideoUrl(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  if (
+    clean.includes('facebook.com/story.php') ||
+    clean.includes('facebook.com/watch') ||
+    clean.includes('facebook.com/posts') ||
+    clean.includes('fb.me/') ||
+    clean.includes('instagram.com/p/') ||
+    clean.includes('instagram.com/reel/')
+  ) {
+    return false;
+  }
+  return (
+    clean.includes('.mp4') ||
+    clean.includes('.webm') ||
+    clean.includes('.mov') ||
+    clean.includes('/m366/') ||
+    clean.includes('fbcdn.net')
+  );
+}
+
+function asNonEmptyString(val: unknown): string | undefined {
+  return typeof val === 'string' && val.trim() ? val.trim() : undefined;
+}
+
+function inferMediaTypeFromUrl(data: Record<string, unknown>, mediaUrl?: string): string | undefined {
+  const mediaKind = asNonEmptyString(data.mediaKind);
+  if (mediaKind === 'sticker') return 'image/webp';
+  if (mediaKind === 'image') return 'image/jpeg';
+  if (mediaKind === 'video') return 'video/mp4';
+  if (mediaKind === 'audio') return 'audio/mp4';
+  if (mediaKind === 'document') return 'application/pdf';
+
+  const pathname = mediaUrl ? decodeURIComponent(mediaUrl.split('?')[0]).toLowerCase() : '';
+  if (/\.(jpe?g|png|gif|webp)$/.test(pathname)) {
+    return pathname.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+  }
+  if (/\.(mp4|3gp|mov|m4v|webm)$/.test(pathname)) return 'video/mp4';
+  if (/\.(mp3|mpeg|ogg|oga|m4a|aac|wav|opus)$/.test(pathname)) return 'audio/mp4';
+  if (/\.pdf$/.test(pathname)) return 'application/pdf';
+  return undefined;
+}
+
+function normalizeFirestoreMessage(id: string, raw: Record<string, unknown>): EnrichedMessage {
+  const mediaUrl =
+    asNonEmptyString(raw.mediaUrl) ??
+    asNonEmptyString(raw.mediaURL) ??
+    asNonEmptyString(raw.media_url) ??
+    asNonEmptyString(raw.downloadUrl) ??
+    asNonEmptyString(raw.downloadURL) ??
+    asNonEmptyString(raw.url);
+
+  const mediaType =
+    asNonEmptyString(raw.mediaType) ??
+    asNonEmptyString(raw.mimeType) ??
+    asNonEmptyString(raw.mime_type) ??
+    asNonEmptyString(raw.contentType) ??
+    inferMediaTypeFromUrl(raw, mediaUrl);
+
+  const rawContent = raw.content === '[unsupported]' ? UNSUPPORTED_LABEL : raw.content;
+
+  return {
+    ...(raw as unknown as EnrichedMessage),
+    id,
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaType ? { mediaType } : {}),
+    content: typeof rawContent === 'string' ? rawContent : '',
+  };
+}
+
+function buildRouteLabel(
+  message: EnrichedMessage,
+  companyLineLabel: string,
+  companyLinePhone?: string | null,
+  advisorWhatsappPhone?: string | null
+): { isAdvisorWhatsapp: boolean; text: string } {
+  const meta = (message.metadata ?? {}) as Record<string, unknown>;
+  const deliveryChannel = asNonEmptyString(meta.deliveryChannel);
+  const origin = asNonEmptyString(meta.origin);
+  const businessPhone = asNonEmptyString(meta.businessPhone) ?? companyLinePhone ?? undefined;
+  const advisorPhone = asNonEmptyString(meta.advisorPhone) ?? advisorWhatsappPhone ?? undefined;
+  const isAdvisorWhatsapp =
+    deliveryChannel === 'advisor_whatsapp' || Boolean(origin?.startsWith('advisor_whatsapp'));
+
+  if (isAdvisorWhatsapp) {
+    const suffix = advisorPhone ? ` ${formatDisplayPhone(advisorPhone)}` : '';
+    return {
+      isAdvisorWhatsapp: true,
+      text:
+        message.direction === 'outbound'
+          ? `📱 Enviado desde: Mi WhatsApp${suffix}`
+          : `📱 Recibido en: Mi WhatsApp${suffix}`,
+    };
+  }
+
+  const phoneFmt = businessPhone ? formatDisplayPhone(businessPhone) : '';
+  const named = businessPhone ? inboxLabel(businessPhone) : companyLineLabel;
+  const isNamed = Boolean(named && named !== 'Sin número' && named !== phoneFmt);
+  const lineTitle = isNamed ? named : 'Ventas 317';
+  const suffix = phoneFmt ? ` ${phoneFmt}` : '';
+  return {
+    isAdvisorWhatsapp: false,
+    text:
+      message.direction === 'outbound'
+        ? `🏢 Enviado desde: ${lineTitle}${suffix}`
+        : `🏢 Recibido en: ${lineTitle}${suffix}`,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hooks locales para Lead en vivo y Mensajes paginados
+// ─────────────────────────────────────────────────────────────────────────────
+
+function useLiveLeadState(
+  companyId: string | null,
+  leadId: string,
+  initialLead?: Lead
+): { lead: Lead | null; loading: boolean; notFound: boolean } {
+  const [lead, setLead] = useState<Lead | null>(initialLead ?? null);
+  const [loading, setLoading] = useState<boolean>(!initialLead && Boolean(leadId));
+  const [notFound, setNotFound] = useState<boolean>(!initialLead && !leadId);
+
+  useEffect(() => {
+    if (initialLead) {
+      setLead((prev) => (prev?.id === initialLead.id ? prev : initialLead));
+      setNotFound(false);
+    }
+  }, [initialLead]);
+
+  useEffect(() => {
+    if (!leadId) {
+      setLoading(false);
+      if (!initialLead) setNotFound(true);
+      return;
+    }
+    if (!companyId) return;
+
+    if (!lead) setLoading(true);
+    const unsub = firestore()
+      .collection('companies')
+      .doc(companyId)
+      .collection('leads')
+      .doc(leadId)
+      .onSnapshot(
+        (snap) => {
+          if (snapExists(snap)) {
+            setLead({ id: snap.id, ...(snap.data() as Omit<Lead, 'id'>) } as Lead);
+            setNotFound(false);
+          } else if (!initialLead) {
+            setNotFound(true);
+          }
+          setLoading(false);
+        },
+        (err) => {
+          console.warn('[ChatScreen] Error escuchando lead:', err);
+          setLoading(false);
+        }
+      );
+
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, leadId]);
+
+  return { lead, loading, notFound };
+}
+
+function usePaginatedMessages(companyId: string | null, leadId: string | null) {
+  const [messages, setMessages] = useState<EnrichedMessage[]>([]);
+  const [loading, setLoading] = useState<boolean>(Boolean(companyId && leadId));
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
+  const [hasMore, setHasMore] = useState<boolean>(false);
+  const [pageLimit, setPageLimit] = useState<number>(MESSAGES_PAGE_SIZE);
+  const prevLeadIdRef = useRef<string | null>(null);
+
+  const loadOlder = useCallback(() => {
+    setPageLimit((curr) => curr + MESSAGES_PAGE_SIZE);
+  }, []);
+
+  useEffect(() => {
+    if (!companyId || !leadId) {
+      setMessages([]);
+      setLoading(false);
+      setLoadingMore(false);
+      setHasMore(false);
+      prevLeadIdRef.current = leadId;
+      return;
+    }
+
+    const isNewLead = prevLeadIdRef.current !== leadId;
+    if (isNewLead && pageLimit !== MESSAGES_PAGE_SIZE) {
+      setPageLimit(MESSAGES_PAGE_SIZE);
+      return;
+    }
+
+    if (isNewLead) {
+      setMessages([]);
+      setHasMore(false);
+      prevLeadIdRef.current = leadId;
+    }
+
+    if (pageLimit === MESSAGES_PAGE_SIZE) setLoading(true);
+    else setLoadingMore(true);
+
+    const unsub = firestore()
+      .collection('companies')
+      .doc(companyId)
+      .collection('leads')
+      .doc(leadId)
+      .collection('messages')
+      .orderBy('createdAt', 'desc')
+      .limit(pageLimit)
+      .onSnapshot(
+        (snapshot) => {
+          const normalized = snapshot.docs
+            .map((d) => normalizeFirestoreMessage(d.id, (d.data() ?? {}) as Record<string, unknown>))
+            .reverse();
+          setMessages(normalized);
+          setHasMore(snapshot.docs.length >= pageLimit);
+          setLoading(false);
+          setLoadingMore(false);
+        },
+        (err) => {
+          console.warn('[ChatScreen] Error escuchando mensajes:', err);
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      );
+
+    return () => unsub();
+  }, [companyId, leadId, pageLimit]);
+
+  return { messages, loading, loadingMore, hasMore, loadOlder };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pantalla Principal: ChatScreen
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function ChatScreen({ route, navigation }: Props) {
-  const { lead } = route.params;
-  const { companyId } = useAuth();
-  const liveLead = useLeadDoc(companyId, lead.id, lead);
-  const { messages, loading } = useMessages(companyId, liveLead.id);
-  const [aiEnabled, setAiEnabled] = useState(liveLead.aiEnabled);
+  const { lead: paramLead, leadId: paramLeadId } = route.params ?? {};
+  const resolvedLeadId = paramLead?.id || paramLeadId || '';
+
+  const { companyId, user, profile, role, platformAdmin } = useAuth();
+  const { palette } = useTheme();
+  const isAdmin = platformAdmin || isAdminRole(role ?? profile?.role);
+
+  const { lead: liveLead, loading: leadLoading, notFound } = useLiveLeadState(
+    companyId,
+    resolvedLeadId,
+    paramLead
+  );
+
+  const isAssignedToOther = Boolean(
+    liveLead &&
+      !isAdmin &&
+      liveLead.assignedTo &&
+      user?.uid &&
+      liveLead.assignedTo !== user.uid
+  );
+
+  const activeThreadLeadId = liveLead && !isAssignedToOther ? liveLead.id : null;
+  const { messages, loading, loadingMore, hasMore, loadOlder } = usePaginatedMessages(
+    companyId,
+    activeThreadLeadId
+  );
+
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
-  const listRef = useRef<FlatList<Message>>(null);
-  const isWhatsapp = !liveLead.channel || liveLead.channel === 'whatsapp';
-  const windowOpen = !isWhatsapp || isWindowOpen(liveLead.lastInboundAt);
+  const [fichaOpen, setFichaOpen] = useState(false);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+  const [reactionTarget, setReactionTarget] = useState<EnrichedMessage | null>(null);
+  const [optimisticReactions, setOptimisticReactions] = useState<Record<string, string>>({});
 
+  // Reloj vivo cada 30s para refrescar el contador de Ventana 24h y SLA Toma Manual
+  const [, setClockTick] = useState(0);
   useEffect(() => {
-    if (companyId) markLeadRead(companyId, liveLead.id).catch(console.warn);
-  }, [companyId, liveLead.id, messages.length]);
+    const id = setInterval(() => setClockTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
-  useEffect(() => setAiEnabled(liveLead.aiEnabled), [liveLead.aiEnabled]);
+  // Estado de conexión de "Mi WhatsApp" (Coexistencia WABA + Puente Baileys)
+  const [advisorWhatsappAvailable, setAdvisorWhatsappAvailable] = useState(false);
+  const [advisorWhatsappPhone, setAdvisorWhatsappPhone] = useState<string | null>(null);
+  const [advisorWhatsappStatus, setAdvisorWhatsappStatus] = useState<AdvisorWhatsappStatus | null>(null);
 
+  const listRef = useRef<FlatList<EnrichedMessage>>(null);
+  const loadingOlderActionRef = useRef(false);
+  const markedReadKeyRef = useRef<string | null>(null);
+
+  // Reiniciar estados dependientes al cambiar de lead
+  useEffect(() => {
+    setOptimisticReactions({});
+  }, [resolvedLeadId]);
+
+  // Cargar asesores de la empresa (para nombres en burbujas, Ficha y LeadDrawerModal)
+  useEffect(() => {
+    if (!companyId) return;
+    let alive = true;
+    listAdvisors(companyId)
+      .then((rows) => {
+        if (alive) setAdvisors(rows);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [companyId]);
+
+  const advisorNamesMap = useMemo(() => {
+    const m = new Map<string, string>();
+    advisors.forEach((a) => {
+      if (a.id && a.displayName) m.set(a.id, a.displayName);
+    });
+    if (user?.uid && profile?.displayName && !m.has(user.uid)) {
+      m.set(user.uid, profile.displayName);
+    }
+    return m;
+  }, [advisors, user?.uid, profile?.displayName]);
+
+  // Verificar AMBOS: Puente Baileys (listAdvisorWhatsappConnections) y Coexistencia WABA (getMyMessagingLine)
+  useEffect(() => {
+    if (!companyId || !user?.uid) {
+      setAdvisorWhatsappAvailable(false);
+      setAdvisorWhatsappPhone(null);
+      setAdvisorWhatsappStatus(null);
+      return;
+    }
+
+    let cancelled = false;
+    const refreshAdvisorChannels = () => {
+      Promise.all([
+        listAdvisorWhatsappConnections(companyId, user.uid).catch(() => []),
+        getMyMessagingLine(companyId).catch(() => null),
+      ])
+        .then(([connections, lineResponse]) => {
+          if (cancelled) return;
+          const connection = connections[0];
+          const baileysConnected = connection?.status === 'connected';
+          const coexistenceLine =
+            lineResponse && typeof lineResponse === 'object' && 'line' in lineResponse
+              ? lineResponse.line
+              : null;
+
+          setAdvisorWhatsappAvailable(Boolean(coexistenceLine) || baileysConnected);
+          setAdvisorWhatsappStatus(
+            coexistenceLine ? 'connected' : connection?.status ?? 'disconnected'
+          );
+          setAdvisorWhatsappPhone(
+            coexistenceLine?.number ?? (baileysConnected ? connection?.phone ?? null : null)
+          );
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setAdvisorWhatsappAvailable(false);
+            setAdvisorWhatsappPhone(null);
+            setAdvisorWhatsappStatus('error');
+          }
+        });
+    };
+
+    refreshAdvisorChannels();
+    const interval = setInterval(refreshAdvisorChannels, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [companyId, user?.uid]);
+
+  // Marcar conversación como leída al abrir o recibir nuevos mensajes entrantes
+  useEffect(() => {
+    if (!companyId || !liveLead || isAssignedToOther) return;
+    const inboundMs = toMillisSafe(liveLead.lastInboundAt);
+    const key = `${companyId}:${liveLead.id}:${inboundMs}:${messages.length}`;
+    if (markedReadKeyRef.current === key) return;
+    markedReadKeyRef.current = key;
+    markLeadRead(companyId, liveLead.id).catch(() => {});
+  }, [companyId, liveLead, isAssignedToOther, messages.length]);
+
+  // Manejo del botón físico Atrás en Android
   useEffect(() => {
     if (Platform.OS !== 'android') return undefined;
-
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (lightboxImageUrl) {
+        setLightboxImageUrl(null);
+        return true;
+      }
+      if (reactionTarget) {
+        setReactionTarget(null);
+        return true;
+      }
       if (templatesOpen) {
         setTemplatesOpen(false);
         return true;
       }
-
+      if (fichaOpen) {
+        setFichaOpen(false);
+        return true;
+      }
       if (detailsOpen) {
         setDetailsOpen(false);
         return true;
       }
-
       navigation.goBack();
       return true;
     });
+    return () => sub.remove();
+  }, [detailsOpen, fichaOpen, lightboxImageUrl, navigation, reactionTarget, templatesOpen]);
 
-    return () => subscription.remove();
-  }, [detailsOpen, navigation, templatesOpen]);
-
+  // Auto-scroll suave al abrir el teclado
   useEffect(() => {
-    const eventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const subscription = Keyboard.addListener(eventName, () => {
+    const evt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const sub = Keyboard.addListener(evt, () => {
       requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
     });
-
-    return () => subscription.remove();
+    return () => sub.remove();
   }, []);
 
-  const toggleAi = async () => {
-    if (!companyId) return;
-    const next = !aiEnabled;
-    setAiEnabled(next);
-    try { await setLeadAi(companyId, liveLead.id, next); }
-    catch { setAiEnabled(!next); }
-  };
+  // Muro de Privacidad post-reasignación (advisorAssignedAt) para asesores no administradores
+  const assignedCutoffMs = useMemo(() => {
+    if (!liveLead || isAdmin || !liveLead.advisorAssignedAt) return 0;
+    return toMillisSafe(liveLead.advisorAssignedAt);
+  }, [liveLead, isAdmin]);
+
+  const { priorMessages, recentMessages } = useMemo(() => {
+    if (!assignedCutoffMs) {
+      return { priorMessages: [] as EnrichedMessage[], recentMessages: messages };
+    }
+    const prior: EnrichedMessage[] = [];
+    const recent: EnrichedMessage[] = [];
+    for (const msg of messages) {
+      const ms = toMillisSafe(msg.createdAt) || toMillisSafe(msg.timestamp);
+      if (ms > 0 && ms < assignedCutoffMs) {
+        prior.push(msg);
+      } else {
+        recent.push(msg);
+      }
+    }
+    return { priorMessages: prior, recentMessages: recent };
+  }, [messages, assignedCutoffMs]);
+
+  // Muro estricto de privacidad para asesores no administradores:
+  // Los mensajes previos a su asignación están COMPLETAMENTE BLOQUEADOS.
+  // Un asesor reasignado NUNCA puede ver la conversación previa de otro asesor.
+  // Solo los administradores tienen acceso al historial completo.
+  const displayedMessages = useMemo(() => {
+    if (isAdmin) return messages;
+    return recentMessages;
+  }, [isAdmin, messages, recentMessages]);
+
+  // Detectar si algún mensaje visible ya incluye la tarjeta de anuncio Meta (metadata.referral)
+  const anyBubbleHasReferral = useMemo(
+    () => displayedMessages.some((m) => m.direction === 'inbound' && Boolean(m.metadata?.referral)),
+    [displayedMessages]
+  );
+
+  const showTopAdReferral = Boolean(
+    liveLead?.sourceMeta &&
+      (liveLead.sourceMeta.adId ||
+        liveLead.sourceMeta.headline ||
+        liveLead.sourceMeta.imageUrl ||
+        liveLead.sourceMeta.videoUrl ||
+        liveLead.sourceMeta.sourceUrl) &&
+      !anyBubbleHasReferral
+  );
+
+  const handleLoadOlder = useCallback(() => {
+    loadingOlderActionRef.current = true;
+    loadOlder();
+  }, [loadOlder]);
+
+  const handleReactMessage = useCallback(
+    async (msg: EnrichedMessage, emoji: string) => {
+      if (!companyId || !liveLead) return;
+      const currentReaction =
+        optimisticReactions[msg.id] !== undefined ? optimisticReactions[msg.id] : msg.reaction ?? '';
+      const nextEmoji = currentReaction === emoji ? '' : emoji;
+
+      setReactionTarget(null);
+      setOptimisticReactions((prev) => ({ ...prev, [msg.id]: nextEmoji }));
+
+      try {
+        await reactToMessage(companyId, liveLead.id, msg.id, nextEmoji);
+      } catch (err) {
+        setOptimisticReactions((prev) => {
+          const copy = { ...prev };
+          delete copy[msg.id];
+          return copy;
+        });
+        const detail = (err as { message?: string })?.message;
+        Alert.alert(
+          'No se pudo reaccionar',
+          detail && detail.length < 200
+            ? detail
+            : 'Solo se puede reaccionar a mensajes entrantes recientes de WhatsApp.'
+        );
+      }
+    },
+    [companyId, liveLead, optimisticReactions]
+  );
+
+  // ── 1. Estado de carga inicial cuando sólo se recibe { leadId } ─────────────
+  if (leadLoading && !liveLead) {
+    return (
+      <SafeAreaView edges={['top', 'bottom']} style={[styles.screen, { backgroundColor: palette.bgCanvas }]}>
+        <View style={[styles.simpleTopBar, { borderBottomColor: palette.border, backgroundColor: palette.bgCanvas }]}>
+          <Pressable
+            onPress={navigation.goBack}
+            hitSlop={10}
+            style={[styles.iconBoxBtn, { backgroundColor: palette.bgCard, borderColor: palette.border }]}
+          >
+            <Icon name="ArrowLeft" size={18} color={palette.textPrimary} />
+          </Pressable>
+          <Text style={[styles.headerLeadName, { color: palette.textPrimary }]}>Cargando conversación…</Text>
+        </View>
+        <View style={styles.centerGuardWrap}>
+          <ActivityIndicator size="large" color={palette.brand} />
+          <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 12 }}>
+            Abriendo expediente del prospecto…
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── 2. Estado de prospecto inexistente ──────────────────────────────────────
+  if (notFound || !liveLead) {
+    return (
+      <SafeAreaView edges={['top', 'bottom']} style={[styles.screen, { backgroundColor: palette.bgCanvas }]}>
+        <View style={[styles.simpleTopBar, { borderBottomColor: palette.border, backgroundColor: palette.bgCanvas }]}>
+          <Pressable
+            onPress={navigation.goBack}
+            hitSlop={10}
+            style={[styles.iconBoxBtn, { backgroundColor: palette.bgCard, borderColor: palette.border }]}
+          >
+            <Icon name="ArrowLeft" size={18} color={palette.textPrimary} />
+          </Pressable>
+          <Text style={[styles.headerLeadName, { color: palette.textPrimary }]}>Conversación</Text>
+        </View>
+        <View style={styles.centerGuardWrap}>
+          <View style={[styles.guardCircle, { backgroundColor: palette.amberBg, borderColor: palette.amberBorder }]}>
+            <Icon name="AlertTriangle" size={28} color={palette.amber} />
+          </View>
+          <Text style={[styles.guardTitle, { color: palette.textPrimary }]}>Prospecto no encontrado</Text>
+          <Text style={[styles.guardDesc, { color: palette.textMuted }]}>
+            No pudimos localizar este contacto o ya no se encuentra disponible en la empresa activa.
+          </Text>
+          <Button onPress={navigation.goBack} icon={<Icon name="ArrowLeft" size={15} color="#ffffff" />}>
+            Volver a mi bandeja
+          </Button>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── 3. Guard de bloqueo si el lead pertenece a otro asesor ──────────────────
+  if (isAssignedToOther) {
+    const isTimeout =
+      (liveLead.advisorReassignmentCount ?? 0) > 0 || Boolean(liveLead.lastAutoReassignedAt);
+    return (
+      <SafeAreaView edges={['top', 'bottom']} style={[styles.screen, { backgroundColor: palette.bgCanvas }]}>
+        <View style={[styles.simpleTopBar, { borderBottomColor: palette.border, backgroundColor: palette.bgCanvas }]}>
+          <Pressable
+            onPress={navigation.goBack}
+            hitSlop={10}
+            style={[styles.iconBoxBtn, { backgroundColor: palette.bgCard, borderColor: palette.border }]}
+          >
+            <Icon name="ArrowLeft" size={18} color={palette.textPrimary} />
+          </Pressable>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={[styles.headerLeadName, { color: palette.textPrimary }]}>
+              {liveLead.name || formatDisplayPhone(liveLead.phone) || 'Prospecto'}
+            </Text>
+            <Text numberOfLines={1} style={{ fontSize: 11, fontWeight: '600', color: palette.amber }}>
+              Reasignado a otro asesor
+            </Text>
+          </View>
+        </View>
+
+        <View style={[styles.centerGuardWrap, { backgroundColor: palette.bgBody }]}>
+          <View style={[styles.guardCircle, { backgroundColor: palette.amberBg, borderColor: palette.amberBorder }]}>
+            <Icon name="Clock" size={30} color={palette.amber} />
+          </View>
+          <Text style={[styles.guardTitle, { color: palette.textPrimary }]}>
+            {isTimeout ? 'Prospecto reasignado por tiempo' : 'Prospecto no disponible'}
+          </Text>
+          <Text style={[styles.guardDesc, { color: palette.textMuted }]}>
+            {isTimeout
+              ? 'Este dato fue reasignado automáticamente porque no se realizó el primer contacto dentro de los 5 minutos reglamentarios.\n\nPor privacidad comercial entre asesores, la conversación ya no se encuentra accesible.'
+              : 'Este prospecto ya no está asignado a tu cuenta. Solo puedes acceder a las conversaciones de tus propios prospectos.'}
+          </Text>
+          <Button onPress={navigation.goBack} icon={<Icon name="ArrowLeft" size={15} color="#ffffff" />}>
+            Volver a mi bandeja
+          </Button>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Variables derivadas de canal, ventana de 24h y entregas ─────────────────
+  const isWhatsapp = !liveLead.channel || liveLead.channel === 'whatsapp';
+  const windowOpen = isWindowOpen(liveLead.lastInboundAt ?? null);
+  const companyLineBlocked = isWhatsapp && !windowOpen;
+  const leadHasPhone = Boolean(liveLead.phone && digitsOnly(liveLead.phone).length >= 7);
+  const advisorAvailableForLead = advisorWhatsappAvailable && leadHasPhone;
+  const canUseComposer = !isWhatsapp || windowOpen || advisorAvailableForLead;
+  const defaultDeliveryChannel: DeliveryChannel =
+    companyLineBlocked && advisorAvailableForLead ? 'advisor_whatsapp' : 'company_whatsapp';
+  const companyLineLabel = inboxLabel(liveLead.inboxId);
+
+  const advisorWhatsappNotice = (() => {
+    if (advisorWhatsappAvailable) return null;
+    if (advisorWhatsappStatus === 'stale') {
+      return 'Tu WhatsApp personal perdió conexión. Puedes seguir respondiendo por Ventas 317 o reconectarlo en Configuración.';
+    }
+    if (advisorWhatsappStatus === 'qr_pending') {
+      return 'Tu WhatsApp personal tiene un QR pendiente por escanear. Mientras tanto se enviará por Ventas 317.';
+    }
+    if (advisorWhatsappStatus === 'configuration_required') {
+      return 'El puente de WhatsApp personal aún no está configurado en el servidor.';
+    }
+    if (advisorWhatsappStatus === 'error') {
+      return 'No se pudo validar tu WhatsApp personal. Puedes responder por Ventas 317 y revisar Configuracion.';
+    }
+    return 'Tu WhatsApp personal no esta conectado. Puedes responder por Ventas 317 o conectarlo en Configuracion.';
+  })();
+
+  const resolvedAdvisorName = liveLead.assignedTo
+    ? advisorNamesMap.get(liveLead.assignedTo) ?? liveLead.assignedAdvisorName
+    : liveLead.assignedAdvisorName;
+
+  const resolvedProject =
+    liveLead.projectInterest?.[0] ||
+    liveLead.project ||
+    liveLead.firstTouch?.project ||
+    liveLead.metadata?.project ||
+    undefined;
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-zinc-950">
-      <View className="flex-row items-center border-b border-zinc-800 bg-zinc-950 px-3 py-2.5 gap-2">
-        <Pressable onPress={navigation.goBack} hitSlop={10} className="w-10 h-10 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 active:bg-zinc-800">
-          <Ionicons name="arrow-back" size={18} color="#e4e4e7" />
-        </Pressable>
-        <Pressable onPress={() => setDetailsOpen(true)} className="flex-1 min-w-0">
-          <View className="flex-row items-center gap-2">
-            <Text numberOfLines={1} className="text-sm font-semibold text-zinc-100">{liveLead.name || 'Sin nombre'}</Text>
-          </View>
-          <Text numberOfLines={1} className="text-xs text-zinc-500">{liveLead.phone}</Text>
-        </Pressable>
-        
-        <View className="flex-row items-center gap-1.5">
-          <Pressable onPress={() => setDetailsOpen(true)} className="h-9 w-9 items-center justify-center rounded-md border border-zinc-700 bg-zinc-800/70 active:bg-zinc-700">
-            <Ionicons name="person" size={14} color="#d4d4d8" />
-          </Pressable>
-          {isWhatsapp && (
-            <Pressable onPress={() => setTemplatesOpen(true)} className="h-9 w-9 items-center justify-center rounded-md border border-zinc-700 bg-zinc-800/60 active:bg-zinc-700">
-              <Ionicons name="clipboard-outline" size={14} color="#d4d4d8" />
-            </Pressable>
-          )}
-          <Pressable onPress={toggleAi} className={`h-9 px-3 flex-row items-center justify-center gap-1.5 rounded-full border ${aiEnabled ? 'border-amber-500/30 bg-amber-500/10 active:bg-amber-500/20' : 'border-zinc-700 bg-zinc-800 active:bg-zinc-700'}`}>
-            <View className={`w-1.5 h-1.5 rounded-full ${aiEnabled ? 'bg-amber-500' : 'bg-zinc-500'}`} />
-            <Text className={`text-xs font-medium ${aiEnabled ? 'text-amber-500' : 'text-zinc-400'}`}>
-              {aiEnabled ? 'IA activa' : 'IA pausada'}
-            </Text>
-          </Pressable>
-        </View>
-      </View>
+    <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: palette.bgCanvas }]}>
+      {/* Encabezado 2 filas + Barra SLA Toma Manual + Barra Meraki Gold Ventana 24h */}
+      <ConversationHeaderBar
+        lead={liveLead}
+        companyId={companyId}
+        palette={palette}
+        windowOpen={windowOpen}
+        onBack={navigation.goBack}
+        onOpenDetails={() => setDetailsOpen(true)}
+        onOpenTemplates={() => setTemplatesOpen(true)}
+        onOpenFicha={() => setFichaOpen(true)}
+      />
 
-      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={0} className="flex-1 bg-[#0d0d0f]">
-        {isWhatsapp ? (
-          <View className={`flex-row items-center justify-between gap-3 px-3 py-1.5 border-t ${windowOpen ? 'border-green-500/10 bg-green-500/5' : 'border-amber-500/10 bg-amber-500/5'}`}>
-            <View className="flex-row flex-1 min-w-0 items-center gap-1.5">
-              <View className={`w-1.5 h-1.5 rounded-full ${windowOpen ? 'bg-green-400' : 'bg-amber-400'}`} />
-              <Text numberOfLines={1} className={`text-[11px] ${windowOpen ? 'text-green-400' : 'text-amber-400'}`}>
-                {windowOpen ? `Ventana abierta - ${windowTimeLeft(liveLead.lastInboundAt)}` : `Ventana cerrada - ${windowClosedAgo(liveLead.lastInboundAt)}`}
-              </Text>
-            </View>
-            {!windowOpen ? <Pressable onPress={() => setTemplatesOpen(true)}><Text className="text-[11px] text-amber-400 underline">Usar plantilla</Text></Pressable> : null}
-          </View>
-        ) : null}
+      {/* Área de Conversación + Compositor */}
+      <KeyboardAvoidingView
+        style={[styles.chatArea, { backgroundColor: palette.bgBody }]}
+        behavior="padding"
+        keyboardVerticalOffset={0}
+      >
         <FlatList
           ref={listRef}
-          data={messages}
-          keyExtractor={(message) => message.id}
-          renderItem={({ item }) => <MessageBubble message={item} />}
-          contentContainerStyle={{ paddingVertical: 16, paddingHorizontal: 12, gap: 12 }}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: !loading })}
-          ListEmptyComponent={!loading ? <Text className="text-zinc-500 text-xs text-center mt-6">Todavía no hay mensajes en esta conversación.</Text> : null}
+          data={displayedMessages}
+          keyExtractor={(item) => item.id}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          contentContainerStyle={[
+            styles.messageListContent,
+            displayedMessages.length === 0 && !loading ? { flexGrow: 1 } : null,
+          ]}
+          onContentSizeChange={() => {
+            if (loadingOlderActionRef.current) {
+              loadingOlderActionRef.current = false;
+              return;
+            }
+            if (!loading) {
+              listRef.current?.scrollToEnd({ animated: true });
+            }
+          }}
+          ListHeaderComponent={
+            <View style={{ gap: 10 }}>
+              {loading && (
+                <View style={styles.centerSpinner}>
+                  <ActivityIndicator size="small" color={palette.brand} />
+                </View>
+              )}
+
+              {!loading && hasMore && (
+                <View style={{ alignItems: 'center', paddingBottom: 4 }}>
+                  <Pressable
+                    onPress={handleLoadOlder}
+                    disabled={loadingMore}
+                    style={[
+                      styles.loadOlderBtn,
+                      {
+                        backgroundColor: palette.bgCard,
+                        borderColor: palette.borderStrong,
+                        opacity: loadingMore ? 0.6 : 1,
+                      },
+                    ]}
+                  >
+                    {loadingMore ? (
+                      <ActivityIndicator size="small" color={palette.brand} />
+                    ) : (
+                      <Icon name="Clock" size={12} color={palette.textSecondary} />
+                    )}
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: palette.textSecondary }}>
+                      {loadingMore ? 'Cargando mensajes…' : 'Cargar mensajes anteriores'}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {priorMessages.length > 0 && !isAdmin && (
+                <PrivacyWallBanner
+                  hiddenCount={priorMessages.length}
+                  palette={palette}
+                  onOpenFicha={() => setFichaOpen(true)}
+                />
+              )}
+
+              {showTopAdReferral && liveLead.sourceMeta && (
+                <AdReferralCard
+                  referral={liveLead.sourceMeta}
+                  companyId={companyId ?? undefined}
+                  leadId={liveLead.id}
+                  palette={palette}
+                />
+              )}
+            </View>
+          }
+          ListEmptyComponent={
+            !loading ? (
+              <View style={styles.emptyMessagesWrap}>
+                <Text style={{ fontSize: 32, marginBottom: 6 }}>💬</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: palette.textPrimary }}>
+                  Sin mensajes aún
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: palette.textMuted,
+                    textAlign: 'center',
+                    marginTop: 4,
+                    maxWidth: 260,
+                  }}
+                >
+                  Los mensajes de esta conversación aparecerán aquí en tiempo real.
+                </Text>
+              </View>
+            ) : null
+          }
+          renderItem={({ item, index }) => {
+            const effectiveReaction =
+              optimisticReactions[item.id] !== undefined
+                ? optimisticReactions[item.id]
+                : item.reaction;
+            const prevMsg = index > 0 ? displayedMessages[index - 1] : null;
+            const itemMs = toMillisSafe(item.createdAt) || toMillisSafe(item.timestamp);
+            const prevMs = prevMsg ? toMillisSafe(prevMsg.createdAt) || toMillisSafe(prevMsg.timestamp) : 0;
+            const showAssignedDivider =
+              isAdmin &&
+              assignedCutoffMs > 0 &&
+              prevMs > 0 &&
+              prevMs < assignedCutoffMs &&
+              itemMs >= assignedCutoffMs;
+
+            return (
+              <View style={{ gap: 8 }}>
+                {showAssignedDivider && (
+                  <View style={styles.assignedDividerRow}>
+                    <View style={[styles.dividerLine, { backgroundColor: palette.brandBorder }]} />
+                    <View
+                      style={[
+                        styles.assignedDividerPill,
+                        { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: palette.brandText }}>
+                        Asignado a tu gestión
+                      </Text>
+                    </View>
+                    <View style={[styles.dividerLine, { backgroundColor: palette.brandBorder }]} />
+                  </View>
+                )}
+
+                <ChatMessageBubble
+                  message={item}
+                  effectiveReaction={effectiveReaction}
+                  advisorName={item.advisorId ? advisorNamesMap.get(item.advisorId) : undefined}
+                  companyLineLabel={companyLineLabel}
+                  companyLinePhone={liveLead.inboxId}
+                  advisorWhatsappPhone={advisorWhatsappPhone}
+                  companyId={companyId ?? undefined}
+                  leadId={liveLead.id}
+                  palette={palette}
+                  onOpenImage={setLightboxImageUrl}
+                  onOpenReactionPicker={setReactionTarget}
+                />
+              </View>
+            );
+          }}
         />
-        {companyId ? <Composer companyId={companyId} lead={liveLead} disabled={!windowOpen} onOpenTemplates={() => setTemplatesOpen(true)} /> : null}
+
+        {/* Avisos contextuales de canal y Compositor / Pie de Ventana Cerrada */}
+        {companyId ? (
+          canUseComposer ? (
+            <View>
+              {companyLineBlocked && advisorAvailableForLead && (
+                <View
+                  style={[
+                    styles.composerNoticeBar,
+                    { backgroundColor: palette.amberBg, borderTopColor: palette.amberBorder },
+                  ]}
+                >
+                  <Icon name="AlertTriangle" size={14} color={palette.amber} style={{ marginTop: 1 }} />
+                  <Text style={[styles.composerNoticeText, { color: palette.textPrimary }]}>
+                    <Text style={{ fontWeight: '700' }}>Ventana 24h cerrada</Text> para {companyLineLabel}.
+                    Responde por <Text style={{ fontWeight: '700' }}>Mi WhatsApp</Text> o usa una plantilla.
+                  </Text>
+                  <Pressable onPress={() => setTemplatesOpen(true)} hitSlop={8}>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: '800',
+                        color: palette.brandText,
+                        textDecorationLine: 'underline',
+                      }}
+                    >
+                      Usar plantilla
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {isWhatsapp && advisorWhatsappNotice && leadHasPhone && (
+                <View
+                  style={[
+                    styles.composerNoticeBar,
+                    { backgroundColor: palette.amberBg, borderTopColor: palette.amberBorder },
+                  ]}
+                >
+                  <Icon name="AlertTriangle" size={14} color={palette.amber} style={{ marginTop: 1 }} />
+                  <Text style={[styles.composerNoticeText, { color: palette.textSecondary }]}>
+                    {advisorWhatsappNotice}
+                  </Text>
+                </View>
+              )}
+
+              {isWhatsapp && !leadHasPhone && (
+                <View
+                  style={[
+                    styles.composerNoticeBar,
+                    { backgroundColor: palette.skyBg, borderTopColor: palette.skyBorder },
+                  ]}
+                >
+                  <Icon name="Info" size={14} color={palette.sky} style={{ marginTop: 1 }} />
+                  <Text style={[styles.composerNoticeText, { color: palette.skyText }]}>
+                    Este prospecto entró por <Text style={{ fontWeight: '700' }}>usuario de WhatsApp</Text> (sin número visible). Solo se puede responder por <Text style={{ fontWeight: '700' }}>{companyLineLabel}</Text>.
+                  </Text>
+                </View>
+              )}
+
+              <MessageComposerBar
+                companyId={companyId}
+                lead={liveLead}
+                palette={palette}
+                companyLineLabel={companyLineLabel}
+                advisorWhatsappAvailable={advisorAvailableForLead}
+                defaultDeliveryChannel={defaultDeliveryChannel}
+                companyLineDisabled={companyLineBlocked}
+              />
+            </View>
+          ) : (
+            <ClosedWindowFooter
+              palette={palette}
+              onOpenTemplates={() => setTemplatesOpen(true)}
+            />
+          )
+        ) : null}
       </KeyboardAvoidingView>
+
+      {/* Barra inferior de navegación idéntica a iPhone Responsive Web */}
+      <StandaloneBottomNavBar activeTab="Bandeja" />
+
+      {/* Modales Compartidos y Nativos */}
       {companyId ? (
         <>
-          <LeadDetailsModal visible={detailsOpen} companyId={companyId} lead={liveLead} onClose={() => setDetailsOpen(false)} />
-          <TemplateModal visible={templatesOpen} companyId={companyId} leadId={liveLead.id} inboxId={liveLead.inboxId} onClose={() => setTemplatesOpen(false)} />
+          <LeadDrawerModal
+            visible={detailsOpen}
+            lead={liveLead}
+            companyId={companyId}
+            advisors={advisors}
+            onClose={() => setDetailsOpen(false)}
+          />
+
+          <FichaTecnicaModal
+            isOpen={fichaOpen}
+            onClose={() => setFichaOpen(false)}
+            companyId={companyId}
+            lead={{
+              id: liveLead.id,
+              name: liveLead.name,
+              phone: liveLead.phone,
+              project: resolvedProject,
+              advisorName: resolvedAdvisorName,
+              bitacoras: liveLead.bitacoras,
+              metadata: liveLead.metadata,
+            }}
+          />
+
+          <TemplatePickerModal
+            visible={templatesOpen}
+            companyId={companyId}
+            lead={liveLead}
+            palette={palette}
+            onClose={() => setTemplatesOpen(false)}
+          />
         </>
       ) : null}
+
+      {/* Barra flotante de 6 emojis al mantener presionada una burbuja */}
+      <ReactionPickerModal
+        message={reactionTarget}
+        activeEmoji={
+          reactionTarget
+            ? optimisticReactions[reactionTarget.id] !== undefined
+              ? optimisticReactions[reactionTarget.id]
+              : reactionTarget.reaction ?? ''
+            : ''
+        }
+        palette={palette}
+        onSelectEmoji={(emoji) => {
+          if (reactionTarget) void handleReactMessage(reactionTarget, emoji);
+        }}
+        onClose={() => setReactionTarget(null)}
+      />
+
+      {/* Lightbox Fullscreen con Zoom para Imágenes y Stickers */}
+      <ImageLightboxModal
+        uri={lightboxImageUrl}
+        onClose={() => setLightboxImageUrl(null)}
+      />
     </SafeAreaView>
   );
 }
 
-type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+// ─────────────────────────────────────────────────────────────────────────────
+// ConversationHeaderBar (2 filas compactas + SLA 24h + Ventana 24h Meraki Gold)
+// ─────────────────────────────────────────────────────────────────────────────
 
-const STATUS_CONFIG: Record<MessageStatus, { label: string; icon: string; color: string }> = {
-  pending:   { label: 'Enviando…',    icon: '🕓', color: '#71717a' },
-  sent:      { label: 'Enviado',      icon: '✓',  color: '#71717a' },
-  delivered: { label: 'Entregado',    icon: '✓✓', color: '#a1a1aa' },
-  read:      { label: 'Leído',        icon: '✓✓', color: '#38bdf8' },
-  failed:    { label: 'No entregado', icon: '⚠',  color: '#f87171' },
-};
+function ConversationHeaderBar({
+  lead,
+  companyId,
+  palette,
+  windowOpen,
+  onBack,
+  onOpenDetails,
+  onOpenTemplates,
+  onOpenFicha,
+}: {
+  lead: Lead;
+  companyId: string | null;
+  palette: MerakiThemePalette;
+  windowOpen: boolean;
+  onBack: () => void;
+  onOpenDetails: () => void;
+  onOpenTemplates: () => void;
+  onOpenFicha: () => void;
+}) {
+  const [aiEnabled, setAiEnabled] = useState(lead.aiEnabled);
+  const [togglingAi, setTogglingAi] = useState(false);
+  const [copiedPhone, setCopiedPhone] = useState(false);
 
-function DeliveryStatus({ status }: { status: MessageStatus }) {
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.sent;
+  useEffect(() => {
+    setAiEnabled(lead.aiEnabled);
+  }, [lead.aiEnabled]);
+
+  const handleToggleAi = async () => {
+    if (!companyId || togglingAi) return;
+    const next = !aiEnabled;
+    setAiEnabled(next);
+    setTogglingAi(true);
+    try {
+      await setLeadAi(companyId, lead.id, next);
+    } catch {
+      setAiEnabled(!next);
+      Alert.alert('Estado de IA', 'No se pudo cambiar el estado de Victoria IA.');
+    } finally {
+      setTogglingAi(false);
+    }
+  };
+
+  const handleCopyPhone = async () => {
+    if (!lead.phone) return;
+    await Clipboard.setStringAsync(lead.phone);
+    setCopiedPhone(true);
+    setTimeout(() => setCopiedPhone(false), 1800);
+  };
+
+  const isWhatsapp = !lead.channel || lead.channel === 'whatsapp';
+  const chBadge = channelBadgeInfo(lead.channel);
+  const flag = getCountryFlag(lead.phone);
+  const displayName = lead.name?.trim() || formatDisplayPhone(lead.phone) || 'Sin nombre';
+  const formattedPhone = formatDisplayPhone(lead.phone);
+
+  const hasMetaAd =
+    lead.source === 'meta_ads' ||
+    Boolean(lead.sourceMeta?.adId || lead.sourceMeta?.headline || lead.sourceMeta?.sourceUrl);
+  const adHeadline =
+    lead.sourceMeta?.headline ||
+    lead.metadata?.metaAdName ||
+    lead.firstTouch?.adName ||
+    'Meta Ads';
+  const isAdVideo =
+    lead.sourceMeta?.mediaType === 'video' || Boolean(lead.sourceMeta?.videoUrl);
+  const fallbackWebVideoLink =
+    lead.sourceMeta?.videoUrl && !isPlayableVideoUrl(lead.sourceMeta.videoUrl)
+      ? lead.sourceMeta.videoUrl
+      : undefined;
+  const adSourceUrl = lead.sourceMeta?.sourceUrl || fallbackWebVideoLink;
+
+  const manualSla = getManualTakeoverSlaInfo({ ...lead, aiEnabled });
+  const timeLeft = windowTimeLeft(lead.lastInboundAt ?? null);
+  const closedAgo = windowClosedAgo(lead.lastInboundAt ?? null);
+
   return (
-    <Text style={{ fontSize: 10, color: cfg.color, fontWeight: status === 'failed' ? '600' : '400' }}>
+    <View style={[styles.headerContainer, { backgroundColor: palette.bgCanvas, borderBottomColor: palette.border }]}>
+      {/* Fila 1: Botón Atrás + Nombre/Teléfono (1:1 con ConversationHeader.tsx en móvil) */}
+      <View style={styles.headerRow1}>
+        <Pressable
+          onPress={onBack}
+          hitSlop={8}
+          style={[styles.iconBoxBtn, { backgroundColor: palette.bgCard, borderColor: palette.border }]}
+        >
+          <Icon name="ArrowLeft" size={18} color={palette.textPrimary} />
+        </Pressable>
+
+        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+          <Pressable onPress={onOpenDetails} style={{ flexShrink: 1 }}>
+            <Text numberOfLines={1} style={[styles.headerLeadName, { color: palette.textPrimary }]}>
+              {displayName}
+            </Text>
+          </Pressable>
+
+          <View style={styles.phoneAndMetaRow}>
+            {lead.phone ? (
+              <Pressable onPress={handleCopyPhone} hitSlop={6} style={styles.copyPhoneBtn}>
+                <Text numberOfLines={1} style={{ fontSize: 12, color: palette.textSubtle, fontWeight: '500' }}>
+                  {lead.phone}
+                </Text>
+                {copiedPhone && (
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: palette.emerald }}>
+                    Copiado
+                  </Text>
+                )}
+              </Pressable>
+            ) : (
+              <Text style={{ fontSize: 11, color: palette.textSubtle }}>
+                {chBadge?.label || 'Usuario sin número visible'}
+              </Text>
+            )}
+
+            {hasMetaAd && (
+              <View style={styles.metaAdsInlineWrap}>
+                <View
+                  style={[
+                    styles.metaAdsPill,
+                    { backgroundColor: palette.skyBg, borderColor: palette.skyBorder },
+                  ]}
+                >
+                  <Icon name="Megaphone" size={10} color={palette.sky} />
+                  <Text
+                    numberOfLines={1}
+                    style={{ fontSize: 10, fontWeight: '600', color: palette.skyText, maxWidth: 150 }}
+                  >
+                    Pauta: {adHeadline}
+                    {isAdVideo ? ' · 🎬' : ''}
+                  </Text>
+                </View>
+
+                {adSourceUrl ? (
+                  <Pressable
+                    onPress={() => Linking.openURL(adSourceUrl)}
+                    hitSlop={6}
+                    style={[
+                      styles.fbVideoLinkBtn,
+                      { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+                    ]}
+                  >
+                    <Icon name="Play" size={9} color={palette.sky} />
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: palette.textSecondary }}>
+                      Ver video ↗
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            )}
+          </View>
+        </View>
+      </View>
+
+      {/* Fila 2: Tira de Acciones Móvil ([👤] | [⊞ Plantilla] | [📋 Ficha] | [🤖 IA pausada]) */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.headerActionStrip}
+      >
+        <Pressable
+          onPress={onOpenDetails}
+          style={[
+            styles.headerActionBtn,
+            { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong, paddingHorizontal: 10 },
+          ]}
+        >
+          <Icon name="User" size={14} color={palette.textSecondary} />
+        </Pressable>
+
+        {isWhatsapp && (
+          <Pressable
+            onPress={onOpenTemplates}
+            style={[
+              styles.headerActionBtn,
+              { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+            ]}
+          >
+            <Icon name="LayoutTemplate" size={14} color={palette.textSecondary} />
+            <Text style={[styles.headerActionText, { color: palette.textPrimary }]}>Plantilla</Text>
+          </Pressable>
+        )}
+
+        <Pressable
+          onPress={onOpenFicha}
+          style={[
+            styles.headerActionBtn,
+            { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+          ]}
+        >
+          <Icon name="ClipboardList" size={14} color={palette.brand} />
+          <Text style={[styles.headerActionText, { color: palette.textPrimary }]}>Ficha</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={handleToggleAi}
+          disabled={togglingAi}
+          style={[
+            styles.headerActionBtn,
+            aiEnabled
+              ? { backgroundColor: palette.emeraldBg, borderColor: palette.emeraldBorder }
+              : { backgroundColor: palette.amberBg, borderColor: palette.amberBorder },
+            togglingAi && { opacity: 0.65 },
+          ]}
+        >
+          {togglingAi ? (
+            <ActivityIndicator size="small" color={aiEnabled ? palette.emerald : palette.amber} />
+          ) : (
+            <Icon name="Bot" size={14} color={aiEnabled ? palette.emeraldText : palette.amberText} />
+          )}
+          <Text
+            style={[
+              styles.headerActionText,
+              { color: aiEnabled ? palette.emeraldText : palette.amberText },
+            ]}
+          >
+            {togglingAi ? 'Cambiando…' : aiEnabled ? 'IA activa' : 'IA pausada'}
+          </Text>
+        </Pressable>
+      </ScrollView>
+
+      {/* Barra SLA 24h Toma de Control Manual (1:1 con ConversationHeader.tsx) */}
+      {manualSla && (
+        <View
+          style={[
+            styles.slaBanner,
+            manualSla.status === 'compliant'
+              ? { backgroundColor: palette.emeraldBg, borderTopColor: palette.emeraldBorder }
+              : manualSla.status === 'overdue'
+              ? { backgroundColor: palette.roseBg, borderTopColor: palette.roseBorder }
+              : {
+                  backgroundColor: palette.isDark ? 'rgba(46, 16, 101, 0.55)' : '#f5f3ff',
+                  borderTopColor: palette.isDark ? 'rgba(139, 92, 246, 0.30)' : '#ddd6fe',
+                },
+          ]}
+        >
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.slaBannerText,
+              {
+                color:
+                  manualSla.status === 'compliant'
+                    ? palette.emeraldText
+                    : manualSla.status === 'overdue'
+                    ? palette.roseText
+                    : palette.isDark
+                    ? palette.brandLight
+                    : '#5b21b6',
+              },
+            ]}
+          >
+            {manualSla.label}
+          </Text>
+
+          {manualSla.status !== 'compliant' && (
+            <Pressable
+              onPress={onOpenFicha}
+              style={[
+                styles.slaActionCta,
+                {
+                  backgroundColor: manualSla.status === 'overdue' ? palette.rose : palette.brand,
+                },
+              ]}
+            >
+              <Text style={styles.slaActionCtaText}>📝 Llenar Ficha Ahora</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
+
+      {/* Barra Meraki Gold (#B7871C) de Ventana Oficial de 24h de WhatsApp */}
+      {isWhatsapp && lead.lastInboundAt && (
+        <View
+          style={[
+            styles.windowStatusBar,
+            windowOpen
+              ? {
+                  backgroundColor: palette.isDark ? 'rgba(24, 24, 27, 0.72)' : '#FAF5EA',
+                  borderTopColor: palette.border,
+                }
+              : {
+                  backgroundColor: palette.amberBg,
+                  borderTopColor: palette.amberBorder,
+                },
+          ]}
+        >
+          {windowOpen ? (
+            <View style={[styles.rowCenterGap6, { flex: 1, minWidth: 0 }]}>
+              <View
+                style={[
+                  styles.merakiWindowOpenPill,
+                  { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder },
+                ]}
+              >
+                <View style={[styles.windowDot, { backgroundColor: palette.brand }]} />
+                <Text style={{ fontSize: 10.5, fontWeight: '800', color: palette.brandText }}>
+                  Ventana 24h activa
+                </Text>
+              </View>
+              <Text
+                numberOfLines={1}
+                style={{ fontSize: 11, fontWeight: '700', color: palette.textPrimary, flexShrink: 1 }}
+              >
+                {timeLeft}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={[styles.rowCenterGap6, { flex: 1, minWidth: 0 }]}>
+                <View
+                  style={[
+                    styles.merakiWindowOpenPill,
+                    { backgroundColor: palette.amberBg, borderColor: palette.amberBorder },
+                  ]}
+                >
+                  <Text style={{ fontSize: 10.5, fontWeight: '800', color: palette.amberText }}>
+                    ⚠️ Ventana 24h cerrada
+                  </Text>
+                </View>
+                <Text
+                  numberOfLines={1}
+                  style={{ fontSize: 10.5, color: palette.textSecondary, flexShrink: 1 }}
+                >
+                  {lead.lastInboundAt ? closedAgo : 'Usa una plantilla oficial'}
+                </Text>
+              </View>
+
+              <Pressable
+                onPress={onOpenTemplates}
+                style={[styles.windowTemplateCta, { backgroundColor: palette.brand }]}
+              >
+                <Icon name="LayoutTemplate" size={11} color="#ffffff" />
+                <Text style={{ fontSize: 11, fontWeight: '800', color: '#ffffff' }}>
+                  Usar plantilla
+                </Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Muro de Privacidad Estricto post-reasignación (Confidencialidad Meraki)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PrivacyWallBanner({
+  hiddenCount,
+  palette,
+  onOpenFicha,
+}: {
+  hiddenCount: number;
+  palette: MerakiThemePalette;
+  onOpenFicha: () => void;
+}) {
+  return (
+    <View
+      style={[
+        styles.privacyBannerCard,
+        { backgroundColor: palette.bgCard, borderColor: palette.brandBorder },
+      ]}
+    >
+      <View style={styles.rowCenterGap6}>
+        <Icon name="Shield" size={15} color={palette.brand} />
+        <Text style={{ fontSize: 12, fontWeight: '800', color: palette.brandText, flex: 1 }}>
+          Conversación previa a tu asignación oculta por privacidad
+        </Text>
+      </View>
+
+      <Text style={{ fontSize: 11, lineHeight: 16, color: palette.textMuted, marginTop: 4 }}>
+        {hiddenCount} mensaje(s) de gestiones anteriores están protegidos por política de confidencialidad comercial. Revisa la{' '}
+        <Text style={{ fontWeight: '700', color: palette.textPrimary }}>Ficha Técnica</Text> y el{' '}
+        <Text style={{ fontWeight: '700', color: palette.textPrimary }}>Resumen IA</Text> para conocer todos los antecedentes del cliente.
+      </Text>
+
+      <View style={[styles.rowCenterGap6, { marginTop: 8, justifyContent: 'flex-start' }]}>
+        <Pressable
+          onPress={onOpenFicha}
+          style={[
+            styles.privacyMiniBtn,
+            { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder, paddingHorizontal: 12 },
+          ]}
+        >
+          <Icon name="ClipboardList" size={13} color={palette.brandText} />
+          <Text style={{ fontSize: 11, fontWeight: '800', color: palette.brandText }}>
+            Ver Ficha Técnica
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Burbuja de Mensaje + MediaMessage + AdReferralCard
+// ─────────────────────────────────────────────────────────────────────────────
+
+function renderLinkedText(text: string, textColor: string, linkColor: string): ReactNode {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  if (parts.length === 1) {
+    return <Text style={[styles.bubbleBodyText, { color: textColor }]}>{text}</Text>;
+  }
+  return (
+    <Text style={[styles.bubbleBodyText, { color: textColor }]}>
+      {parts.map((part, idx) =>
+        /^https?:\/\//.test(part) ? (
+          <Text
+            key={idx}
+            onPress={() => Linking.openURL(part)}
+            style={{ color: linkColor, textDecorationLine: 'underline' }}
+          >
+            {part}
+          </Text>
+        ) : (
+          part
+        )
+      )}
+    </Text>
+  );
+}
+
+const ChatMessageBubble = memo(
+  function ChatMessageBubble({
+    message,
+    effectiveReaction,
+    advisorName,
+    companyLineLabel,
+    companyLinePhone,
+    advisorWhatsappPhone,
+    companyId,
+    leadId,
+    palette,
+    onOpenImage,
+    onOpenReactionPicker,
+  }: {
+    message: EnrichedMessage;
+    effectiveReaction?: string;
+    advisorName?: string;
+    companyLineLabel: string;
+    companyLinePhone?: string | null;
+    advisorWhatsappPhone?: string | null;
+    companyId?: string;
+    leadId: string;
+    palette: MerakiThemePalette;
+    onOpenImage: (url: string) => void;
+    onOpenReactionPicker: (msg: EnrichedMessage) => void;
+  }) {
+    const [expanded, setExpanded] = useState(false);
+
+    if (message.senderType === 'system') {
+      return (
+        <View style={styles.systemRow}>
+          <View
+            style={[
+              styles.systemPill,
+              { backgroundColor: palette.bgElevated, borderColor: palette.border },
+            ]}
+          >
+            <Text style={{ fontSize: 11, fontStyle: 'italic', color: palette.textMuted, textAlign: 'center' }}>
+              {message.content}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    const isOutbound = message.direction === 'outbound';
+    const referral = message.metadata?.referral as LeadSourceMeta | undefined;
+    const mediaInfo = resolveMediaKind(message);
+    const hasMedia = Boolean(message.mediaUrl);
+    const isSticker = mediaInfo === 'sticker';
+    const hasContent = Boolean(message.content?.trim());
+    const isLong = (message.content?.length ?? 0) > LONG_MESSAGE_THRESHOLD;
+    const displayContent =
+      isLong && !expanded
+        ? `${message.content.slice(0, LONG_MESSAGE_THRESHOLD).trimEnd()}…`
+        : message.content;
+
+    let senderLabel = 'Lead';
+    let bubbleBg = palette.inboundBubbleBg;
+    let bubbleBorder = palette.inboundBubbleBorder;
+    let bubbleTextColor = palette.inboundBubbleText;
+    let linkColor = palette.skyText;
+
+    if (message.senderType === 'ai') {
+      senderLabel = '🤖 Victoria IA';
+      bubbleBg = palette.outboundAiBg;
+      bubbleBorder = palette.outboundAiBorder;
+      bubbleTextColor = palette.textPrimary;
+      linkColor = palette.brandText;
+    } else if (message.senderType === 'advisor') {
+      senderLabel = message.advisorId
+        ? `✋ ${advisorName || message.advisorName || 'Asesor'}`
+        : '📱 Enviado desde WhatsApp';
+      bubbleBg = palette.outboundAdvisorBg;
+      bubbleBorder = palette.outboundAdvisorBorder;
+      bubbleTextColor = palette.textPrimary;
+      linkColor = palette.skyText;
+    }
+
+    const timeStr = formatChatTimestamp(message.createdAt ?? message.timestamp);
+    const route = buildRouteLabel(
+      message,
+      companyLineLabel,
+      companyLinePhone,
+      advisorWhatsappPhone
+    );
+
+    const failCode = message.failureCode ?? message.errorCode;
+    const failRaw = message.failureReason ?? message.errorMessage;
+    const failExplanation =
+      isOutbound && message.status === 'failed'
+        ? friendlyFailureReason(failCode, failRaw)
+        : undefined;
+
+    const canReactInbound = message.direction === 'inbound' && message.senderType === 'lead';
+
+    return (
+      <View
+        style={[
+          styles.bubbleOuterWrap,
+          isSticker ? { maxWidth: 168 } : { maxWidth: '84%' },
+          isOutbound ? styles.alignEnd : styles.alignStart,
+        ]}
+      >
+        {/* Etiqueta del remitente */}
+        <Text
+          style={[
+            styles.senderCaption,
+            { color: message.senderType === 'ai' ? palette.brandText : palette.textSubtle },
+          ]}
+        >
+          {senderLabel}
+        </Text>
+
+        {/* Tarjeta de Anuncio Meta Ads adjunta a la burbuja entrante */}
+        {!isOutbound && referral && (
+          <AdReferralCard
+            referral={referral}
+            companyId={companyId}
+            leadId={leadId}
+            palette={palette}
+          />
+        )}
+
+        {/* Fila de Burbuja + Botón rápido de reacción */}
+        <View style={[styles.bubbleRowWithAction, isOutbound && { flexDirection: 'row-reverse' }]}>
+          <View style={{ position: 'relative', flexShrink: 1 }}>
+            <Pressable
+              delayLongPress={260}
+              onLongPress={() => onOpenReactionPicker(message)}
+              style={[
+                isSticker
+                  ? styles.stickerBubbleBox
+                  : [
+                      styles.chatBubbleBox,
+                      {
+                        backgroundColor: bubbleBg,
+                        borderColor: bubbleBorder,
+                        borderWidth: 1,
+                      },
+                    ],
+              ]}
+            >
+              {hasMedia ? (
+                <MediaMessageContent
+                  message={message}
+                  kind={mediaInfo}
+                  outbound={isOutbound}
+                  palette={palette}
+                  onOpenImage={onOpenImage}
+                />
+              ) : isSticker ? (
+                <View
+                  style={[
+                    styles.unavailableMediaPill,
+                    { backgroundColor: palette.bgElevated, borderColor: palette.border },
+                  ]}
+                >
+                  <Text style={{ fontSize: 11, color: palette.textMuted }}>Sticker no disponible</Text>
+                </View>
+              ) : null}
+
+              {hasContent && !isSticker ? (
+                <View style={hasMedia ? { marginTop: 6 } : undefined}>
+                  {renderLinkedText(displayContent, bubbleTextColor, linkColor)}
+                  {isLong && (
+                    <Pressable onPress={() => setExpanded((v) => !v)} style={{ marginTop: 4 }}>
+                      <Text
+                        style={{
+                          fontSize: 11.5,
+                          fontWeight: '700',
+                          color: palette.brandText,
+                          textDecorationLine: 'underline',
+                        }}
+                      >
+                        {expanded ? 'Ver menos' : 'Ver mensaje completo'}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              ) : null}
+
+              {!hasMedia && !hasContent ? (
+                message.mediaPending ? (
+                  <Text style={{ fontSize: 12, fontStyle: 'italic', color: palette.textMuted }}>
+                    {message.mediaType?.startsWith('image')
+                      ? '📷 Imagen'
+                      : message.mediaType?.startsWith('video')
+                      ? '🎥 Video'
+                      : message.mediaType?.startsWith('audio')
+                      ? '🎵 Audio'
+                      : message.mediaType?.includes('pdf')
+                      ? '📄 Documento'
+                      : '📎 Archivo'}{' '}
+                    · cargando…
+                  </Text>
+                ) : message.mediaType ? (
+                  <Text style={{ fontSize: 12, fontStyle: 'italic', color: palette.textMuted }}>
+                    {message.mediaType.startsWith('image')
+                      ? '📷 Imagen no disponible'
+                      : message.mediaType.startsWith('video')
+                      ? '🎥 Video no disponible'
+                      : message.mediaType.startsWith('audio')
+                      ? '🎵 Audio no disponible'
+                      : message.mediaType.includes('pdf')
+                      ? '📄 Documento no disponible'
+                      : '📎 Archivo no disponible'}
+                  </Text>
+                ) : (
+                  <Text style={{ fontSize: 12, fontStyle: 'italic', color: palette.textMuted }}>
+                    [Reacción o mensaje no compatible]
+                  </Text>
+                )
+              ) : null}
+            </Pressable>
+
+            {/* Píldora de reacción pegada a la burbuja */}
+            {effectiveReaction ? (
+              <Pressable
+                onPress={() => onOpenReactionPicker(message)}
+                style={[
+                  styles.reactionFloatingPill,
+                  isOutbound ? { left: -6 } : { right: -6 },
+                  { backgroundColor: palette.bgCard, borderColor: palette.borderStrong },
+                ]}
+              >
+                <Text style={{ fontSize: 12, lineHeight: 15 }}>{effectiveReaction}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {canReactInbound && (
+            <Pressable
+              onPress={() => onOpenReactionPicker(message)}
+              hitSlop={8}
+              style={styles.quickSmileBtn}
+            >
+              <Icon name="Smile" size={14} color={palette.textSubtle} />
+            </Pressable>
+          )}
+        </View>
+
+        {/* Hora + Ticks de entrega */}
+        {(timeStr || isOutbound) && (
+          <View
+            style={[
+              styles.metaTimestampRow,
+              effectiveReaction ? { marginTop: 8 } : { marginTop: 2 },
+            ]}
+          >
+            {timeStr ? (
+              <Text style={{ fontSize: 10, color: palette.textSubtle }}>{timeStr}</Text>
+            ) : null}
+            {isOutbound ? (
+              <>
+                {timeStr ? <Text style={{ fontSize: 10, color: palette.textSubtle }}>·</Text> : null}
+                <DeliveryStatusTicks status={message.status} palette={palette} />
+              </>
+            ) : null}
+          </View>
+        )}
+
+        {/* Traducción legible en español del código de error de Meta/WhatsApp */}
+        {failExplanation && (
+          <View
+            style={[
+              styles.failureReasonBox,
+              { backgroundColor: palette.roseBg, borderColor: palette.roseBorder },
+            ]}
+          >
+            <Text style={{ fontSize: 10.5, lineHeight: 14, color: palette.roseText }}>
+              {failExplanation}
+            </Text>
+          </View>
+        )}
+
+        {/* Etiqueta de Ruta de Línea (🏢 Ventas 317 / 📱 Mi WhatsApp) */}
+        <View
+          style={[
+            styles.routePill,
+            { backgroundColor: palette.bgCardSoft, borderColor: palette.border },
+          ]}
+        >
+          <Text numberOfLines={1} style={{ fontSize: 9.5, color: palette.textSubtle }}>
+            {route.text}
+          </Text>
+        </View>
+      </View>
+    );
+  },
+  (prev, next) =>
+    prev.message.id === next.message.id &&
+    prev.message.status === next.message.status &&
+    prev.message.mediaUrl === next.message.mediaUrl &&
+    prev.message.mediaPending === next.message.mediaPending &&
+    prev.message.content === next.message.content &&
+    prev.effectiveReaction === next.effectiveReaction &&
+    prev.advisorName === next.advisorName &&
+    prev.palette.mode === next.palette.mode
+);
+
+function DeliveryStatusTicks({
+  status,
+  palette,
+}: {
+  status: MessageStatus;
+  palette: MerakiThemePalette;
+}) {
+  const map: Record<MessageStatus, { icon: string; label: string; color: string; bold?: boolean }> = {
+    pending: { icon: '🕓', label: 'Enviando…', color: palette.textSubtle },
+    sent: { icon: '✓', label: 'Enviado', color: palette.textSubtle },
+    delivered: { icon: '✓✓', label: 'Entregado', color: palette.textMuted },
+    read: { icon: '✓✓', label: 'Leído', color: palette.sky, bold: true },
+    failed: { icon: '⚠', label: 'No entregado', color: palette.rose, bold: true },
+  };
+  const cfg = map[status] ?? map.sent;
+  return (
+    <Text style={{ fontSize: 10, color: cfg.color, fontWeight: cfg.bold ? '700' : '500' }}>
       {cfg.icon} {cfg.label}
     </Text>
   );
 }
 
-const MessageBubble = memo(function MessageBubble({ message }: { message: Message }) {
-  const outbound = message.direction === 'outbound';
-  
-  const isAdvisorWhatsapp = message.metadata?.deliveryChannel === 'advisor_whatsapp' || (message.metadata?.origin as string)?.startsWith('advisor_whatsapp');
-  
-  let senderLabel = 'Lead';
-  let bubbleStyle = styles.bubbleLead;
-  
-  if (message.senderType === 'ai') {
-    senderLabel = '🤖 Victoria IA';
-    bubbleStyle = styles.bubbleAi;
-  } else if (message.senderType === 'advisor') {
-    senderLabel = message.advisorId ? `✋ ${message.advisorName || 'Asesor'}` : '📱 Enviado desde WhatsApp';
-    bubbleStyle = styles.bubbleAdvisor;
+function resolveMediaKind(message: Message): NonNullable<Message['mediaKind']> {
+  const mediaKind = message.mediaKind;
+  const mediaType = (message.mediaType ?? '').toLowerCase();
+  const urlPath = decodeURIComponent((message.mediaUrl ?? '').split('?')[0]).toLowerCase();
+
+  if (mediaKind === 'sticker' || (mediaType === 'image/webp' && !message.content?.trim())) {
+    return 'sticker';
   }
-  
-  const phone = (message.metadata?.businessPhone as string) || (message.metadata?.advisorPhone as string) || '';
-  const routeText = isAdvisorWhatsapp 
-    ? (outbound ? 'Enviado desde: Mi WhatsApp' : 'Recibido en: Mi WhatsApp') 
-    : (outbound ? 'Enviado desde: Ventas 317' : 'Recibido en: Ventas 317');
-    
-  const routeLabel = phone ? `${routeText} +${phone.replace(/\D/g, '')}` : routeText;
+  if (
+    mediaKind === 'image' ||
+    mediaType.startsWith('image/') ||
+    /\.(jpe?g|png|gif|webp)$/.test(urlPath)
+  ) {
+    return 'image';
+  }
+  if (
+    mediaKind === 'video' ||
+    mediaType.startsWith('video/') ||
+    /\.(mp4|3gp|mov|m4v|webm)$/.test(urlPath)
+  ) {
+    return 'video';
+  }
+  if (
+    mediaKind === 'audio' ||
+    mediaType.startsWith('audio/') ||
+    /\.(mp3|m4a|aac|ogg|oga|wav|opus)$/.test(urlPath)
+  ) {
+    return 'audio';
+  }
+  if (mediaKind === 'document' || mediaType === 'application/pdf' || /\.pdf$/.test(urlPath)) {
+    return 'document';
+  }
+  return 'file';
+}
 
-  return (
-    <View className={`flex-col gap-0.5 max-w-[85%] ${outbound ? 'self-end items-end' : 'self-start items-start'}`}>
-      <Text className={`text-[10px] text-zinc-500 px-1 ${outbound ? 'text-right' : 'text-left'}`}>{senderLabel}</Text>
-      
-      <View className={`flex-row items-end gap-1 shrink ${outbound ? 'flex-row-reverse' : 'flex-row'}`}>
-        <View className={`shrink rounded-2xl px-3 py-2.5 ${message.senderType === 'lead' ? 'bg-zinc-700' : message.senderType === 'ai' ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-[#1c2438] border border-[#2b354f]'}`}>
-          {message.mediaUrl ? <MessageMedia message={message} outbound={outbound} /> : null}
-          {message.content ? <Text className={`text-sm leading-relaxed ${message.senderType === 'lead' ? 'text-zinc-100' : message.senderType === 'ai' ? 'text-amber-100' : 'text-zinc-100'}`}>{message.content}</Text> : null}
-          {message.mediaPending ? <Text className="text-xs italic text-zinc-400 mt-1">Adjunto cargando...</Text> : null}
-        </View>
-        {message.reaction && (
-          <View className="absolute -bottom-2 -right-1 rounded-full border border-zinc-700 bg-zinc-900 px-1 py-0.5 shadow">
-            <Text className="text-xs leading-none">{message.reaction}</Text>
-          </View>
-        )}
-      </View>
+function MediaMessageContent({
+  message,
+  kind,
+  outbound,
+  palette,
+  onOpenImage,
+}: {
+  message: Message;
+  kind: NonNullable<Message['mediaKind']>;
+  outbound: boolean;
+  palette: MerakiThemePalette;
+  onOpenImage: (url: string) => void;
+}) {
+  const url = message.mediaUrl!;
 
-      {message.createdAt && (
-        <View className={`flex-row items-center gap-1 mt-0.5 px-1 ${outbound ? 'self-end' : 'self-start'}`}>
-          <Text className="text-[10px] text-zinc-600">{shortTime(message.createdAt)}</Text>
-          {outbound ? (
-            <>
-              <Text className="text-zinc-600 text-[10px]">·</Text>
-              <DeliveryStatus status={message.status} />
-            </>
-          ) : null}
-        </View>
-      )}
-      
-      {message.senderType !== 'system' ? (
-        <View className={`max-w-full rounded-full border border-zinc-800 bg-zinc-900/80 px-2 py-0.5 mt-0.5 ${outbound ? 'self-end' : 'self-start'}`}>
-          <Text className="text-[10px] text-zinc-500">{routeLabel}</Text>
-        </View>
-      ) : null}
-    </View>
-  );
-}, (prev, next) => {
-  return (
-    prev.message.id === next.message.id &&
-    prev.message.status === next.message.status &&
-    prev.message.mediaPending === next.message.mediaPending &&
-    prev.message.reaction === next.message.reaction
-  );
-});
-
-function MessageMedia({ message, outbound }: { message: Message; outbound: boolean }) {
-  const media = getMediaInfo(message);
-  const openMedia = () => Linking.openURL(message.mediaUrl!);
-
-  if (media.kind === 'sticker') {
+  if (kind === 'sticker') {
     return (
-      <Pressable onPress={openMedia} className="w-[120px] h-[120px] max-w-full">
+      <Pressable onPress={() => onOpenImage(url)} style={styles.stickerMediaSize}>
         <ExpoImage
-          source={{ uri: message.mediaUrl }}
+          source={{ uri: url }}
           style={{ width: '100%', height: '100%' }}
           contentFit="contain"
           cachePolicy="memory-disk"
@@ -302,49 +2129,77 @@ function MessageMedia({ message, outbound }: { message: Message; outbound: boole
     );
   }
 
-  if (media.kind === 'image') {
+  if (kind === 'image') {
     return (
-      <Pressable onPress={openMedia} className="w-[200px] h-[200px] max-w-full rounded-xl overflow-hidden mb-1">
+      <Pressable
+        onPress={() => onOpenImage(url)}
+        style={[styles.imageMediaBox, { backgroundColor: palette.bgElevated }]}
+      >
         <ExpoImage
-          source={{ uri: message.mediaUrl }}
+          source={{ uri: url }}
           style={{ width: '100%', height: '100%' }}
           contentFit="cover"
           cachePolicy="memory-disk"
           transition={120}
         />
+        <View style={styles.zoomHintPill}>
+          <Ionicons name="expand-outline" size={12} color="#ffffff" />
+        </View>
       </Pressable>
     );
   }
 
-  if (media.kind === 'video') {
-    return <InlineVideo uri={message.mediaUrl!} />;
+  if (kind === 'video') {
+    return <InlineVideoPlayer uri={url} />;
   }
 
-  if (media.kind === 'audio') {
-    return <InlineAudio uri={message.mediaUrl!} outbound={outbound} />;
+  if (kind === 'audio') {
+    return <WhatsAppVoicePlayer uri={url} outbound={outbound} palette={palette} />;
   }
 
+  const isPdf = kind === 'document';
   return (
-    <Pressable onPress={openMedia} className={`min-w-[220px] max-w-full flex-row items-center gap-3 p-3 rounded-xl border mb-1 ${outbound ? 'bg-[#0f1422] border-[#2b354f]' : 'bg-zinc-800/50 border-zinc-700'}`}>
-      <View className={`w-10 h-10 rounded-lg items-center justify-center shrink-0 ${outbound ? 'bg-[#1c2438]' : 'bg-zinc-700/50'}`}>
-        <Ionicons name={media.kind === 'document' ? 'document-text' : 'attach'} size={20} color={outbound ? '#94a3b8' : '#a1a1aa'} />
+    <Pressable
+      onPress={() => Linking.openURL(url)}
+      style={[
+        styles.documentMediaCard,
+        {
+          backgroundColor: palette.isDark ? 'rgba(9, 9, 11, 0.55)' : palette.bgElevated,
+          borderColor: palette.borderStrong,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.docIconCircle,
+          { backgroundColor: isPdf ? palette.brandSoft : palette.skyBg },
+        ]}
+      >
+        <Text style={{ fontSize: 18 }}>{isPdf ? '📄' : '📎'}</Text>
       </View>
-      <View className="flex-1 mr-2">
-        <Text numberOfLines={1} className={`text-sm font-medium ${outbound ? 'text-zinc-100' : 'text-zinc-200'}`}>{message.fileName || (media.kind === 'document' ? 'Documento PDF' : 'Archivo adjunto')}</Text>
-        <Text numberOfLines={1} className={`text-[11px] mt-0.5 ${outbound ? 'text-zinc-400' : 'text-zinc-400'}`}>{message.fileName ? 'Toca para abrir' : (message.mediaType || 'Toca para abrir')}</Text>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text
+          numberOfLines={1}
+          style={{ fontSize: 12.5, fontWeight: '700', color: palette.textPrimary }}
+        >
+          {message.fileName || (isPdf ? 'Documento PDF' : 'Archivo adjunto')}
+        </Text>
+        <Text numberOfLines={1} style={{ fontSize: 10.5, color: palette.textMuted, marginTop: 1 }}>
+          Toca para abrir o descargar
+        </Text>
       </View>
-      <Ionicons name="open-outline" size={14} color={outbound ? '#475569' : '#52525b'} className="shrink-0" />
+      <Icon name="Download" size={15} color={palette.textMuted} />
     </Pressable>
   );
 }
 
-function InlineVideo({ uri }: { uri: string }) {
+function InlineVideoPlayer({ uri }: { uri: string }) {
   const player = useVideoPlayer({ uri }, (videoPlayer) => {
     videoPlayer.loop = false;
   });
 
   return (
-    <View className="w-[220px] h-[300px] max-w-full rounded-xl overflow-hidden bg-black/20 mb-1">
+    <View style={styles.inlineVideoBox}>
       <VideoView
         player={player}
         style={{ width: '100%', height: '100%' }}
@@ -357,83 +2212,567 @@ function InlineVideo({ uri }: { uri: string }) {
   );
 }
 
-function InlineAudio({ uri, outbound }: { uri: string; outbound: boolean }) {
-  const player = useAudioPlayer({ uri }, { updateInterval: 500 });
+const STATIC_AUDIO_WAVE = [
+  0.35, 0.6, 0.45, 0.85, 0.55, 0.95, 0.4, 0.75, 0.62, 0.3, 0.8, 0.9, 0.5, 0.68, 0.42, 0.88, 0.52,
+  0.74, 0.38, 0.65, 0.82, 0.48, 0.58, 0.35,
+];
+
+function WhatsAppVoicePlayer({
+  uri,
+  outbound,
+  palette,
+}: {
+  uri: string;
+  outbound: boolean;
+  palette: MerakiThemePalette;
+}) {
+  const player = useAudioPlayer({ uri }, { updateInterval: 250 });
   const playback = useAudioPlayerStatus(player);
+  const [speed, setSpeed] = useState<1 | 1.5 | 2>(1);
+
   const playing = playback.playing;
   const duration = playback.duration || 0;
+  const current = playback.currentTime || 0;
+  const pct = duration > 0 ? Math.max(0, Math.min(1, current / duration)) : 0;
 
-  const toggle = async () => {
-    await setAudioModeAsync({ playsInSilentMode: true });
-    if (playing) {
-      player.pause();
-      return;
+  const togglePlay = async () => {
+    try {
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+      if (playing) {
+        player.pause();
+      } else {
+        if (playback.didJustFinish || (duration > 0 && current >= duration - 0.15)) {
+          await player.seekTo(0);
+        }
+        player.play();
+      }
+    } catch {
+      Linking.openURL(uri).catch(() => {});
     }
-    player.play();
   };
 
+  const cycleSpeed = () => {
+    const next: 1 | 1.5 | 2 = speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1;
+    setSpeed(next);
+    try {
+      player.setPlaybackRate(next, 'high');
+    } catch {}
+  };
+
+  const accent = outbound ? palette.brand : palette.emerald;
+
   return (
-    <Pressable onPress={toggle} className="flex-row items-center gap-3 py-1 min-w-[180px]">
-      <View className={`w-9 h-9 rounded-full items-center justify-center ${outbound ? 'bg-[#0f1422] border border-[#2b354f]' : 'bg-brand-500/20'}`}>
-        <Ionicons name={playing ? 'pause' : 'play'} size={16} color={outbound ? '#94a3b8' : '#C4B5FD'} style={!playing ? { marginLeft: 2 } : {}} />
-      </View>
-      <View className="flex-1">
-        <View className="flex-row items-center justify-between mb-1">
-          <Text className={`text-xs font-medium ${outbound ? 'text-zinc-100' : 'text-zinc-100'}`}>Nota de voz</Text>
-          <Text className={`text-[10px] ${outbound ? 'text-zinc-400' : 'text-zinc-400'}`}>{formatAudioSeconds(playback.currentTime)} / {formatAudioSeconds(duration)}</Text>
+    <View style={styles.voiceNoteWrap}>
+      <Pressable
+        onPress={togglePlay}
+        style={[
+          styles.voicePlayBtn,
+          { backgroundColor: accent },
+        ]}
+      >
+        <Ionicons
+          name={playing ? 'pause' : 'play'}
+          size={17}
+          color="#ffffff"
+          style={!playing ? { marginLeft: 2 } : undefined}
+        />
+      </Pressable>
+
+      <View style={{ flex: 1, minWidth: 138, gap: 4 }}>
+        <View style={styles.voiceBarsRow}>
+          {STATIC_AUDIO_WAVE.map((lvl, idx) => {
+            const barFilled = idx / STATIC_AUDIO_WAVE.length <= pct;
+            return (
+              <View
+                key={idx}
+                style={{
+                  width: 3,
+                  height: Math.max(4, Math.round(lvl * 20)),
+                  borderRadius: 2,
+                  backgroundColor: barFilled
+                    ? accent
+                    : palette.isDark
+                    ? 'rgba(255,255,255,0.22)'
+                    : 'rgba(13,6,10,0.18)',
+                }}
+              />
+            );
+          })}
         </View>
-        <View className={`h-1 rounded-full overflow-hidden ${outbound ? 'bg-[#0f1422]' : 'bg-zinc-600/50'}`}>
-          <View className={`h-full rounded-full ${outbound ? 'bg-zinc-400' : 'bg-brand-400'}`} style={{ width: audioProgressWidth(playback.currentTime, duration) as `${number}%` }} />
+
+        <View style={styles.rowBetweenCenter}>
+          <Text
+            style={{
+              fontSize: 10,
+              color: palette.textMuted,
+              fontVariant: ['tabular-nums'],
+            }}
+          >
+            {playing || current > 0 ? formatAudioClock(current) : formatAudioClock(duration)}
+            {duration > 0 ? ` / ${formatAudioClock(duration)}` : ''}
+          </Text>
+
+          <Pressable
+            onPress={cycleSpeed}
+            hitSlop={6}
+            style={[
+              styles.speedChip,
+              {
+                backgroundColor: palette.isDark ? 'rgba(0,0,0,0.28)' : 'rgba(13,6,10,0.08)',
+              },
+            ]}
+          >
+            <Text style={{ fontSize: 9.5, fontWeight: '800', color: palette.textSecondary }}>
+              {speed}x
+            </Text>
+          </Pressable>
         </View>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
-function getMediaInfo(message: Message): { kind: NonNullable<Message['mediaKind']> } {
-  const mediaKind = message.mediaKind;
-  const mediaType = (message.mediaType ?? '').toLowerCase();
-  const urlPath = decodeURIComponent((message.mediaUrl ?? '').split('?')[0]).toLowerCase();
+// ─────────────────────────────────────────────────────────────────────────────
+// AdReferralCard (Creativo de Meta Ads con video MP4 o miniatura + enlace FB)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  if (mediaKind === 'sticker' || (mediaType === 'image/webp' && !message.content?.trim())) return { kind: 'sticker' };
-  if (mediaKind === 'image' || mediaType.startsWith('image/') || /\.(jpe?g|png|gif|webp)$/.test(urlPath)) return { kind: 'image' };
-  if (mediaKind === 'video' || mediaType.startsWith('video/') || /\.(mp4|3gp|mov|m4v|webm)$/.test(urlPath)) return { kind: 'video' };
-  if (mediaKind === 'audio' || mediaType.startsWith('audio/') || /\.(mp3|m4a|aac|ogg|oga|wav|opus)$/.test(urlPath)) return { kind: 'audio' };
-  if (mediaKind === 'document' || mediaType === 'application/pdf' || /\.pdf$/.test(urlPath)) return { kind: 'document' };
-  return { kind: 'file' };
+function AdReferralCard({
+  referral,
+  companyId,
+  leadId,
+  palette,
+}: {
+  referral: LeadSourceMeta;
+  companyId?: string;
+  leadId?: string;
+  palette: MerakiThemePalette;
+}) {
+  const [creative, setCreative] = useState<MetaAdCreative | null>(null);
+  const [fetching, setFetching] = useState(false);
+
+  const directPlayable = isPlayableVideoUrl(referral.videoUrl);
+
+  useEffect(() => {
+    if ((directPlayable && referral.imageUrl) || !referral.adId || !companyId) return;
+    let cancelled = false;
+    setFetching(true);
+
+    (async () => {
+      try {
+        const cached = await firestore()
+          .collection('companies')
+          .doc(companyId)
+          .collection('metaAdCreatives')
+          .doc(referral.adId!)
+          .get();
+
+        if (!cancelled && snapExists(cached)) {
+          const d = cached.data() ?? {};
+          if (d.videoUrl || d.imageUrl) {
+            setCreative({
+              adId: referral.adId!,
+              headline: d.headline,
+              body: d.body,
+              mediaType: d.mediaType || (d.videoUrl ? 'video' : 'image'),
+              videoUrl: d.videoUrl,
+              imageUrl: d.imageUrl,
+              sourceUrl: d.sourceUrl,
+            });
+            setFetching(false);
+            return;
+          }
+        }
+
+        const callable = httpsCallable<
+          { companyId: string; adId: string; leadId?: string },
+          { creative?: MetaAdCreative }
+        >(functionsInstance, 'getMetaAdCreative');
+        const res = await callable({ companyId, adId: referral.adId!, leadId });
+        if (!cancelled && res.data?.creative) {
+          setCreative(res.data.creative);
+        }
+      } catch {
+        // Fallback silencioso a los datos presentes en referral
+      } finally {
+        if (!cancelled) setFetching(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, referral.adId, referral.imageUrl, directPlayable, leadId]);
+
+  const videoUrl = directPlayable
+    ? referral.videoUrl
+    : isPlayableVideoUrl(creative?.videoUrl)
+    ? creative?.videoUrl
+    : undefined;
+  const imageUrl = referral.imageUrl || creative?.imageUrl;
+  const isVideo =
+    referral.mediaType === 'video' || creative?.mediaType === 'video' || Boolean(videoUrl);
+  const headline = referral.headline || creative?.headline || 'Anuncio de Meta';
+  const body = referral.body || creative?.body;
+  const nonPlayableVideoLink =
+    referral.videoUrl && !isPlayableVideoUrl(referral.videoUrl) ? referral.videoUrl : undefined;
+  const sourceUrl = referral.sourceUrl || nonPlayableVideoLink || creative?.sourceUrl;
+
+  return (
+    <View
+      style={[
+        styles.adReferralCard,
+        { backgroundColor: palette.bgCard, borderColor: palette.brandBorder },
+      ]}
+    >
+      <View style={[styles.adReferralHeader, { borderBottomColor: palette.border }]}>
+        <View style={styles.rowCenterGap6}>
+          <Icon name="Megaphone" size={13} color={palette.brand} />
+          <Text
+            style={{
+              fontSize: 10.5,
+              fontWeight: '800',
+              color: palette.brandText,
+              textTransform: 'uppercase',
+              letterSpacing: 0.4,
+            }}
+          >
+            Anuncio de Meta
+          </Text>
+        </View>
+
+        <View style={styles.rowCenterGap6}>
+          {fetching && <ActivityIndicator size="small" color={palette.brand} />}
+          <View
+            style={[
+              styles.inlineMicroChip,
+              { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+            ]}
+          >
+            <Text
+              style={{
+                fontSize: 10,
+                fontWeight: '700',
+                color: isVideo ? palette.amber : palette.sky,
+              }}
+            >
+              {isVideo ? '🎬 Video' : '🖼️ Imagen'}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      {videoUrl ? (
+        <View style={styles.adVideoContainer}>
+          <AdVideoPlayer uri={videoUrl} />
+        </View>
+      ) : imageUrl ? (
+        <View style={styles.adImageContainer}>
+          <ExpoImage
+            source={{ uri: imageUrl }}
+            style={{ width: '100%', height: '100%' }}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+          />
+          {sourceUrl ? (
+            <Pressable
+              onPress={() => Linking.openURL(sourceUrl)}
+              style={styles.adPlayOverlay}
+            >
+              <View style={[styles.adPlayCircle, { backgroundColor: palette.brand }]}>
+                <Ionicons name="play" size={20} color="#ffffff" style={{ marginLeft: 2 }} />
+              </View>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
+      <View style={{ marginTop: 8, gap: 3 }}>
+        <Text style={{ fontSize: 12.5, fontWeight: '700', color: palette.textPrimary }}>
+          {headline}
+        </Text>
+        {body ? (
+          <Text
+            numberOfLines={3}
+            style={{ fontSize: 11, lineHeight: 16, color: palette.textMuted }}
+          >
+            {body}
+          </Text>
+        ) : null}
+      </View>
+
+      {sourceUrl ? (
+        <Pressable
+          onPress={() => Linking.openURL(sourceUrl)}
+          style={[
+            styles.adFacebookBtn,
+            { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder },
+          ]}
+        >
+          <Ionicons name="logo-facebook" size={13} color={palette.brandText} />
+          <Text style={{ fontSize: 11.5, fontWeight: '700', color: palette.brandText }}>
+            {videoUrl ? 'Ver anuncio en Facebook ↗' : 'Ver video del anuncio en Facebook ↗'}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {referral.adId ? (
+        <Text
+          style={{
+            marginTop: 5,
+            textAlign: 'right',
+            fontSize: 9,
+            color: palette.textSubtle,
+          }}
+        >
+          Ad ID: {referral.adId}
+        </Text>
+      ) : null}
+    </View>
+  );
 }
 
-function Composer({ companyId, lead, disabled, onOpenTemplates }: { companyId: string; lead: Lead; disabled: boolean; onOpenTemplates: () => void }) {
+function AdVideoPlayer({ uri }: { uri: string }) {
+  const player = useVideoPlayer({ uri }, (videoPlayer) => {
+    videoPlayer.loop = false;
+  });
+
+  return (
+    <VideoView
+      player={player}
+      style={{ width: '100%', height: '100%' }}
+      contentFit="contain"
+      nativeControls
+      fullscreenOptions={{ enable: true }}
+      allowsPictureInPicture
+    />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pie de Ventana 24h Cerrada (cuando tampoco hay Mi WhatsApp disponible)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ClosedWindowFooter({
+  palette,
+  onOpenTemplates,
+}: {
+  palette: MerakiThemePalette;
+  onOpenTemplates: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        styles.closedFooterBox,
+        {
+          backgroundColor: palette.bgCanvas,
+          borderTopColor: palette.border,
+          paddingBottom: Math.max(insets.bottom, 16),
+        },
+      ]}
+    >
+      <View style={styles.rowCenterGap6}>
+        <View style={[styles.windowDot, { backgroundColor: palette.amber }]} />
+        <Text style={{ fontSize: 12, fontWeight: '800', color: palette.amberText }}>
+          Ventana de 24h cerrada
+        </Text>
+      </View>
+      <Text
+        style={{
+          fontSize: 11.5,
+          lineHeight: 16,
+          color: palette.textMuted,
+          textAlign: 'center',
+          maxWidth: 310,
+        }}
+      >
+        Han pasado más de 24h desde el último mensaje del prospecto. Solo puedes enviar plantillas pre-aprobadas por Meta.
+      </Text>
+      <Pressable
+        onPress={onOpenTemplates}
+        style={[styles.closedFooterBtn, { backgroundColor: palette.brand }]}
+      >
+        <Text style={{ fontSize: 13, fontWeight: '800', color: '#ffffff' }}>
+          📋 Enviar plantilla oficial de WhatsApp
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MessageComposerBar + VoiceRecorder + Attachment Sheet + PortfolioPicker
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MessageComposerBar({
+  companyId,
+  lead,
+  palette,
+  companyLineLabel,
+  advisorWhatsappAvailable,
+  defaultDeliveryChannel,
+  companyLineDisabled,
+}: {
+  companyId: string;
+  lead: Lead;
+  palette: MerakiThemePalette;
+  companyLineLabel: string;
+  advisorWhatsappAvailable: boolean;
+  defaultDeliveryChannel: DeliveryChannel;
+  companyLineDisabled: boolean;
+}) {
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
-  const [deliveryChannel, setDeliveryChannel] = useState<'company_whatsapp' | 'advisor_whatsapp'>('company_whatsapp');
-  // Un lead que entró por USUARIO (sin número visible) solo lo alcanza la línea que
-  // contactó (el 317): su identidad de WhatsApp está atada a esa WABA. Ni el WhatsApp
-  // personal (Baileys, solo teléfonos) ni la coexistencia (otra WABA) pueden escribirle.
-  const leadHasPhone = !!lead.phone;
-  useEffect(() => {
-    if (!leadHasPhone && deliveryChannel === 'advisor_whatsapp') setDeliveryChannel('company_whatsapp');
-  }, [leadHasPhone, deliveryChannel]);
+  const [deliveryChannel, setDeliveryChannel] = useState<DeliveryChannel>(defaultDeliveryChannel);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [pending, setPending] = useState<UploadedMedia | null>(null);
+  const [uploadPct, setUploadPct] = useState(0);
+  const [pendingMedia, setPendingMedia] = useState<UploadedMedia | null>(null);
+  const [localPreviewUri, setLocalPreviewUri] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [attachSheetOpen, setAttachSheetOpen] = useState(false);
   const [portfoliosOpen, setPortfoliosOpen] = useState(false);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder, 250);
 
-  const chooseAttachment = () => Alert.alert('Adjuntar', 'Selecciona el tipo de archivo', [
-    { text: 'Foto o GIF', onPress: pickMedia },
-    { text: 'PDF o documento', onPress: pickDocument },
-    { text: 'Portafolio guardado', onPress: () => setPortfoliosOpen(true) },
-    { text: 'Cancelar', style: 'cancel' },
-  ]);
+  // Grabadora de voz preservando RecordingPresets.HIGH_QUALITY (.m4a AAC nítido) + metering para waveform
+  const recorder = useAudioRecorder({
+    ...RecordingPresets.HIGH_QUALITY,
+    isMeteringEnabled: true,
+  });
+  const recorderState = useAudioRecorderState(recorder, 120);
 
-  // Un portafolio de la biblioteca ya vive permanente en Storage: no se re-sube,
-  // solo se marca como adjunto pendiente y se envia por su enlace.
-  const selectPortfolio = (item: LibraryItem) => {
+  const [voiceMode, setVoiceMode] = useState<'idle' | 'recording' | 'preview'>('idle');
+  const [audioLevels, setAudioLevels] = useState<number[]>(() => Array(WAVEFORM_BARS).fill(0.16));
+  const [frozenLevels, setFrozenLevels] = useState<number[]>([]);
+  const [recordedUri, setRecordedUri] = useState<string | null>(null);
+  const [recordedDurationSec, setRecordedDurationSec] = useState(0);
+
+  useEffect(() => {
+    if (!companyLineDisabled || !advisorWhatsappAvailable) {
+      setDeliveryChannel(defaultDeliveryChannel);
+    }
+  }, [defaultDeliveryChannel, companyLineDisabled, advisorWhatsappAvailable]);
+
+  useEffect(() => {
+    if (!advisorWhatsappAvailable && deliveryChannel === 'advisor_whatsapp') {
+      setDeliveryChannel('company_whatsapp');
+    }
+    if (companyLineDisabled && advisorWhatsappAvailable && deliveryChannel === 'company_whatsapp') {
+      setDeliveryChannel('advisor_whatsapp');
+    }
+  }, [advisorWhatsappAvailable, companyLineDisabled, deliveryChannel]);
+
+  // Alimentar las barras del waveform en vivo mientras graba
+  useEffect(() => {
+    if (!recorderState.isRecording) return;
+    let normalized = 0.25;
+    if (typeof recorderState.metering === 'number' && Number.isFinite(recorderState.metering)) {
+      // metering dBFS suele ir de -60 (silencio) a 0 (máximo)
+      const clampedDb = Math.max(-55, Math.min(0, recorderState.metering));
+      normalized = Math.max(0.12, Math.min(1, (clampedDb + 55) / 55));
+    } else {
+      const t = recorderState.durationMillis / 180;
+      normalized = 0.22 + Math.abs(Math.sin(t)) * 0.45 + Math.random() * 0.2;
+    }
+    setAudioLevels((prev) => [...prev.slice(1), normalized]);
+  }, [recorderState.isRecording, recorderState.durationMillis, recorderState.metering]);
+
+  const handleUploadLocalFile = async (file: LocalFile, previewUri?: string) => {
+    setErrorMsg(null);
+    setLocalPreviewUri(previewUri ?? null);
+    setUploading(true);
+    setUploadPct(0);
+    try {
+      const uploaded = await uploadMedia(companyId, lead.id, file, setUploadPct);
+      setPendingMedia(uploaded);
+    } catch (err) {
+      setLocalPreviewUri(null);
+      const detail = err instanceof Error ? err.message : 'Revisa tu conexión e inténtalo de nuevo.';
+      setErrorMsg(detail);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const pickFromGallery = async () => {
+    setAttachSheetOpen(false);
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permiso requerido', 'Permite el acceso a tu galería para adjuntar fotos o videos.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      quality: 0.82,
+      allowsEditing: false,
+    });
+    if (res.canceled || !res.assets[0]) return;
+    const asset = res.assets[0];
+    const isVideo = asset.type === 'video' || asset.mimeType?.startsWith('video/');
+    const ext = isVideo ? 'mp4' : 'jpg';
+    const mimeType = asset.mimeType ?? (isVideo ? 'video/mp4' : 'image/jpeg');
+    await handleUploadLocalFile(
+      {
+        uri: asset.uri,
+        name: asset.fileName ?? `galeria_${Date.now()}.${ext}`,
+        mimeType,
+        size: asset.fileSize,
+      },
+      !isVideo ? asset.uri : undefined
+    );
+  };
+
+  const takeCameraPhoto = async () => {
+    setAttachSheetOpen(false);
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permiso requerido', 'Permite el acceso a la cámara para tomar fotografías.');
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.82,
+    });
+    if (res.canceled || !res.assets[0]) return;
+    const asset = res.assets[0];
+    await handleUploadLocalFile(
+      {
+        uri: asset.uri,
+        name: asset.fileName ?? `foto_${Date.now()}.jpg`,
+        mimeType: asset.mimeType ?? 'image/jpeg',
+        size: asset.fileSize,
+      },
+      asset.uri
+    );
+  };
+
+  const pickDocumentPdf = async () => {
+    setAttachSheetOpen(false);
+    const res = await DocumentPicker.getDocumentAsync({
+      type: ['application/pdf', 'image/*'],
+      copyToCacheDirectory: true,
+    });
+    if (res.canceled || !res.assets[0]) return;
+    const asset = res.assets[0];
+    await handleUploadLocalFile(
+      {
+        uri: asset.uri,
+        name: asset.name,
+        mimeType: asset.mimeType ?? 'application/pdf',
+        size: asset.size,
+      },
+      asset.mimeType?.startsWith('image/') ? asset.uri : undefined
+    );
+  };
+
+  const handleSelectPortfolioItem = (item: LibraryItem) => {
     setPortfoliosOpen(false);
-    setPending({
+    setErrorMsg(null);
+    setLocalPreviewUri(item.contentType.startsWith('image/') ? item.downloadUrl : null);
+    setPendingMedia({
       downloadUrl: item.downloadUrl,
       storagePath: item.storagePath,
       contentType: item.contentType,
@@ -441,1209 +2780,2807 @@ function Composer({ companyId, lead, disabled, onOpenTemplates }: { companyId: s
     });
   };
 
-  const upload = async (file: LocalFile) => {
-    setUploading(true);
-    setProgress(0);
+  const removePendingMedia = () => {
+    setPendingMedia(null);
+    setLocalPreviewUri(null);
+  };
+
+  const handleSendTextOrAttachment = async () => {
+    const content = text.trim();
+    if ((!content && !pendingMedia) || sending || uploading) return;
+
+    const mediaSnapshot = pendingMedia;
+    const previewSnapshot = localPreviewUri;
+    setErrorMsg(null);
+    setText('');
+    setPendingMedia(null);
+    setLocalPreviewUri(null);
+    setSending(true);
+
     try {
-      setPending(await uploadMedia(companyId, lead.id, file, setProgress));
+      await sendMessage(companyId, lead.id, content, mediaSnapshot ?? undefined, deliveryChannel);
     } catch (err) {
-      const detail = err instanceof Error ? err.message : 'Revisa tu conexion e intenta nuevamente.';
-      Alert.alert('No se pudo adjuntar', detail);
+      setText(content);
+      setPendingMedia(mediaSnapshot);
+      setLocalPreviewUri(previewSnapshot);
+      const reason = (err as { message?: string })?.message;
+      setErrorMsg(
+        reason && reason.length < 220
+          ? reason
+          : 'No se pudo enviar el mensaje. Revisa tu conexión e inténtalo de nuevo.'
+      );
     } finally {
+      setSending(false);
+    }
+  };
+
+  // ── Acciones de Nota de Voz (.m4a con configuración de audio clara) ─────────
+  const startVoiceRecording = async () => {
+    setErrorMsg(null);
+    try {
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permiso requerido', 'Activa el micrófono para grabar notas de voz.');
+        return;
+      }
+      setRecordedUri(null);
+      setFrozenLevels([]);
+      setAudioLevels(Array(WAVEFORM_BARS).fill(0.16));
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setVoiceMode('recording');
+    } catch {
+      setErrorMsg('No se pudo iniciar el micrófono. Verifica los permisos de la app.');
+    }
+  };
+
+  const stopToPreviewVoice = async () => {
+    try {
+      const durationSec = Math.max(1, Math.round(recorderState.durationMillis / 1000));
+      const snapshotLevels = [...audioLevels];
+      await recorder.stop();
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+      const uri = recorder.uri;
+      if (!uri) {
+        setVoiceMode('idle');
+        return;
+      }
+      setRecordedDurationSec(durationSec);
+      setFrozenLevels(snapshotLevels);
+      setRecordedUri(uri);
+      setVoiceMode('preview');
+    } catch {
+      setVoiceMode('idle');
+    }
+  };
+
+  const cancelVoiceRecording = async () => {
+    try {
+      if (recorderState.isRecording) {
+        await recorder.stop();
+      }
+    } catch {}
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      shouldRouteThroughEarpiece: false,
+    }).catch(() => {});
+    setRecordedUri(null);
+    setFrozenLevels([]);
+    setVoiceMode('idle');
+  };
+
+  const uploadAndSendVoiceUri = async (uri: string) => {
+    setSending(true);
+    setUploading(true);
+    setUploadPct(0);
+    try {
+      const uploaded = await uploadMedia(
+        companyId,
+        lead.id,
+        {
+          uri,
+          name: `voz_${Date.now()}.m4a`,
+          mimeType: 'audio/mp4',
+        },
+        setUploadPct
+      );
+      await sendMessage(companyId, lead.id, '', uploaded, deliveryChannel);
+      setRecordedUri(null);
+      setFrozenLevels([]);
+      setVoiceMode('idle');
+    } catch {
+      Alert.alert('No se envió la nota de voz', 'Revisa tu conexión e intenta nuevamente.');
+    } finally {
+      setSending(false);
       setUploading(false);
     }
   };
 
-  async function pickMedia() {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return Alert.alert('Permiso requerido', 'Permite el acceso a fotos para adjuntar imagenes.');
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], quality: 0.82, allowsEditing: false });
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      if (asset.type === ('video' as any)) {
-        Alert.alert('Usa Portafolio', 'Para controlar consumo y evitar copias, los videos deben enviarse desde Portafolio o como enlace.');
+  const stopAndSendImmediately = async () => {
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+      const uri = recorder.uri;
+      if (!uri) {
+        setVoiceMode('idle');
         return;
       }
-      const fallbackExt = asset.type === ('video' as any) ? 'mp4' : 'jpg';
-      const fallbackMime = asset.type === ('video' as any) ? 'video/mp4' : 'image/jpeg';
-      await upload({
-        uri: asset.uri,
-        name: asset.fileName ?? `media_${Date.now()}.${fallbackExt}`,
-        mimeType: asset.mimeType ?? fallbackMime,
-        size: asset.fileSize,
-      });
-    }
-  }
-
-  async function pickDocument() {
-    const result = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'], copyToCacheDirectory: true });
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      await upload({
-        uri: asset.uri,
-        name: asset.name,
-        mimeType: asset.mimeType ?? 'application/octet-stream',
-        size: asset.size,
-      });
-    }
-  }
-
-  const startRecording = async () => {
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) return Alert.alert('Permiso requerido', 'Activa el microfono para enviar notas de voz.');
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-  };
-
-  const stopAndSendRecording = async () => {
-    await recorder.stop();
-    const uri = recorder.uri;
-    if (!uri) return;
-    setSending(true);
-    try {
-      const media = await uploadMedia(companyId, lead.id, { uri, name: `voz_${Date.now()}.m4a`, mimeType: 'audio/mp4' }, setProgress);
-      await sendMessage(companyId, lead.id, '', media, deliveryChannel);
+      await uploadAndSendVoiceUri(uri);
     } catch {
-      Alert.alert('No se envio el audio', 'Intenta nuevamente.');
-    } finally {
-      setSending(false);
-      await setAudioModeAsync({ allowsRecording: false });
+      setVoiceMode('idle');
+      Alert.alert('No se envió el audio', 'Intenta nuevamente.');
     }
   };
 
-  const submit = async () => {
-    const content = text.trim();
-    if ((!content && !pending) || sending || uploading) return;
-    setText('');
-    const media = pending;
-    setPending(null);
-    setSending(true);
-    try { await sendMessage(companyId, lead.id, content, media ?? undefined, deliveryChannel); }
-    catch (err) {
-      setText(content);
-      setPending(media);
-      // Mostrar el motivo real del backend (p. ej. "lead entró por usuario: usa la
-      // Línea de Ventas") en vez de un genérico que invita a reintentar en vano.
-      const reason = (err as { message?: string })?.message;
-      Alert.alert('No se envió', reason && reason.length < 240 ? reason : 'El mensaje quedó pendiente. Intenta nuevamente.');
-    } finally { setSending(false); }
-  };
-
-  if (recorderState.isRecording) {
-    const seconds = Math.floor(recorderState.durationMillis / 1000);
+  // Vista activa: Grabando o Previsualizando Nota de Voz
+  if (voiceMode === 'recording' || recorderState.isRecording) {
+    const liveSeconds = Math.floor(recorderState.durationMillis / 1000);
     return (
-      <View style={[styles.recordingBar, { paddingBottom: Math.max(insets.bottom, 24) }]}>
-        <View style={styles.recordingDot} />
-        <Text style={styles.recordingTime}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</Text>
-        <Text style={styles.recordingLabel}>Grabando nota de voz</Text>
-        <Pressable onPress={() => recorder.stop()} style={styles.cancelRecording}><Ionicons name="trash-outline" size={21} color={colors.red} /></Pressable>
-        <Pressable onPress={stopAndSendRecording} style={styles.sendRecording}><Ionicons name="send" size={19} color={colors.background} /></Pressable>
+      <View
+        style={[
+          styles.voiceRecorderContainer,
+          {
+            backgroundColor: palette.bgCanvas,
+            borderTopColor: palette.border,
+            paddingBottom: Math.max(insets.bottom, 12),
+          },
+        ]}
+      >
+        <Pressable
+          onPress={cancelVoiceRecording}
+          hitSlop={8}
+          style={[styles.voiceTrashBtn, { backgroundColor: palette.roseBg }]}
+        >
+          <Icon name="Trash2" size={17} color={palette.rose} />
+        </Pressable>
+
+        <View style={[styles.voiceWaveformPill, { backgroundColor: palette.bgElevated }]}>
+          <View style={[styles.recordingPulseDot, { backgroundColor: palette.rose }]} />
+          <View style={styles.liveWaveformRow}>
+            {audioLevels.map((lvl, idx) => (
+              <View
+                key={idx}
+                style={{
+                  width: 3,
+                  height: Math.max(4, Math.round(lvl * 24)),
+                  borderRadius: 2,
+                  backgroundColor: palette.brand,
+                  opacity: 0.45 + lvl * 0.55,
+                }}
+              />
+            ))}
+          </View>
+          <Text style={[styles.voiceTimerText, { color: palette.textPrimary }]}>
+            {formatDurationMMSS(liveSeconds)}
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={stopToPreviewVoice}
+          style={[
+            styles.voiceStopBtn,
+            { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+          ]}
+        >
+          <Icon name="Pause" size={16} color={palette.brand} />
+        </Pressable>
+
+        <Pressable
+          onPress={stopAndSendImmediately}
+          disabled={sending}
+          style={[styles.merakiSendCircle, { backgroundColor: palette.brand }]}
+        >
+          {sending ? (
+            <ActivityIndicator size="small" color="#ffffff" />
+          ) : (
+            <Icon name="Send" size={16} color="#ffffff" />
+          )}
+        </Pressable>
       </View>
     );
   }
 
-  const isDeliveryDisabled = disabled && deliveryChannel === 'company_whatsapp';
+  if (voiceMode === 'preview' && recordedUri) {
+    return (
+      <VoiceRecordedPreviewBar
+        uri={recordedUri}
+        levels={frozenLevels}
+        durationSec={recordedDurationSec}
+        sending={sending || uploading}
+        palette={palette}
+        bottomInset={insets.bottom}
+        onCancel={cancelVoiceRecording}
+        onSend={() => void uploadAndSendVoiceUri(recordedUri)}
+      />
+    );
+  }
+
+  const hasSendablePayload = Boolean(text.trim() || pendingMedia);
 
   return (
-    <View className={`border-t border-zinc-800 bg-zinc-950`} style={{ paddingBottom: Math.max(insets.bottom, 24) }}>
-      {isDeliveryDisabled ? (
-        <View className="mx-3 mt-3 flex-row items-center justify-between rounded-xl border border-amber-500/20 bg-amber-500/10 p-4">
-          <View className="flex-1 mr-4">
-            <Text className="text-sm font-semibold text-amber-500 mb-1">Ventana de 24h cerrada</Text>
-            <Text className="text-xs text-amber-500/80 leading-relaxed">Usa una plantilla aprobada para reactivar la conversación.</Text>
+    <View
+      style={[
+        styles.composerContainer,
+        {
+          backgroundColor: palette.bgCanvas,
+          borderTopColor: palette.border,
+          paddingBottom: 8,
+        },
+      ]}
+    >
+      {/* Modal selector de adjuntos (Galería, Cámara, PDF, Portafolio) */}
+      <AttachmentActionSheet
+        visible={attachSheetOpen}
+        palette={palette}
+        onPickGallery={pickFromGallery}
+        onTakePhoto={takeCameraPhoto}
+        onPickPdf={pickDocumentPdf}
+        onOpenPortfolio={() => {
+          setAttachSheetOpen(false);
+          setPortfoliosOpen(true);
+        }}
+        onClose={() => setAttachSheetOpen(false)}
+      />
+
+      {/* Modal 2 niveles Portafolio Meraki + Planos Interactivos */}
+      <PortfolioPickerModal
+        visible={portfoliosOpen}
+        companyId={companyId}
+        palette={palette}
+        onSelect={handleSelectPortfolioItem}
+        onClose={() => setPortfoliosOpen(false)}
+      />
+
+      {/* Alerta de error de envío/carga */}
+      {errorMsg && (
+        <View
+          style={[
+            styles.composerErrorBanner,
+            { backgroundColor: palette.roseBg, borderColor: palette.roseBorder },
+          ]}
+        >
+          <Text style={{ flex: 1, fontSize: 11.5, color: palette.roseText }}>{errorMsg}</Text>
+          <Pressable onPress={() => setErrorMsg(null)} hitSlop={8}>
+            <Icon name="X" size={14} color={palette.roseText} />
+          </Pressable>
+        </View>
+      )}
+
+      {/* Previsualización de archivo adjunto o progreso de subida */}
+      {(pendingMedia || uploading) && (
+        <View style={{ paddingHorizontal: 10, paddingTop: 8 }}>
+          <View
+            style={[
+              styles.pendingAttachmentRow,
+              { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+            ]}
+          >
+            {uploading ? (
+              <>
+                <ActivityIndicator size="small" color={palette.brand} />
+                <Text style={{ fontSize: 11.5, color: palette.textSecondary }}>
+                  Subiendo… {uploadPct}%
+                </Text>
+                <View style={[styles.uploadTrack, { backgroundColor: palette.bgSubtle }]}>
+                  <View
+                    style={{
+                      height: '100%',
+                      width: `${uploadPct}%`,
+                      backgroundColor: palette.brand,
+                    }}
+                  />
+                </View>
+              </>
+            ) : pendingMedia ? (
+              <>
+                {localPreviewUri && pendingMedia.contentType.startsWith('image/') ? (
+                  <ExpoImage
+                    source={{ uri: localPreviewUri }}
+                    style={styles.pendingThumb}
+                    contentFit="cover"
+                  />
+                ) : (
+                  <View style={[styles.pendingFileIconBox, { backgroundColor: palette.brandSoft }]}>
+                    <Icon
+                      name={
+                        pendingMedia.contentType.startsWith('video/')
+                          ? 'Video'
+                          : pendingMedia.contentType.startsWith('audio/')
+                          ? 'Mic'
+                          : 'FileText'
+                      }
+                      size={16}
+                      color={palette.brand}
+                    />
+                  </View>
+                )}
+                <Text
+                  numberOfLines={1}
+                  style={{ flex: 1, fontSize: 12, fontWeight: '600', color: palette.textPrimary }}
+                >
+                  {pendingMedia.fileName}
+                </Text>
+                <Pressable onPress={removePendingMedia} hitSlop={8}>
+                  <Icon name="X" size={16} color={palette.textMuted} />
+                </Pressable>
+              </>
+            ) : null}
           </View>
-          <Pressable onPress={onOpenTemplates} className="h-10 px-4 shrink-0 flex-row items-center justify-center gap-2 rounded-lg bg-amber-600 active:bg-amber-700">
-            <Ionicons name="document-text-outline" size={16} color="#fff" />
-            <Text className="text-sm font-medium text-white">Plantilla</Text>
-          </Pressable>
         </View>
-      ) : null}
+      )}
 
-      <View className="flex-row items-center gap-2 px-4 pt-3 pb-1">
-        <Text className="text-[10px] text-zinc-500">Enviar por</Text>
-        <View className="flex-row rounded-lg border border-zinc-800 bg-zinc-900 p-0.5">
-          <Pressable onPress={() => setDeliveryChannel('company_whatsapp')} className={`flex-row items-center gap-1 rounded-md px-2 py-1 ${deliveryChannel === 'company_whatsapp' ? 'bg-brand-600/20' : ''}`}>
-            <Ionicons name="business" size={12} color={deliveryChannel === 'company_whatsapp' ? '#ddd6fe' : '#71717a'} />
-            <Text className={`text-[11px] font-medium ${deliveryChannel === 'company_whatsapp' ? 'text-brand-200' : 'text-zinc-500'}`}>Línea de Ventas</Text>
-          </Pressable>
-          <Pressable disabled={!leadHasPhone} onPress={() => setDeliveryChannel('advisor_whatsapp')} className={`flex-row items-center gap-1 rounded-md px-2 py-1 ${deliveryChannel === 'advisor_whatsapp' ? 'bg-emerald-500/15' : ''} ${!leadHasPhone ? 'opacity-40' : ''}`}>
-            <Ionicons name="phone-portrait" size={12} color={deliveryChannel === 'advisor_whatsapp' ? '#a7f3d0' : '#71717a'} />
-            <Text className={`text-[11px] font-medium ${deliveryChannel === 'advisor_whatsapp' ? 'text-emerald-200' : 'text-zinc-500'}`}>Mi WhatsApp</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      {!leadHasPhone ? (
-        <View className="mx-4 mb-1 flex-row items-start gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2">
-          <Ionicons name="information-circle-outline" size={15} color="#7dd3fc" className="mt-0.5" />
-          <Text className="flex-1 text-[11px] leading-relaxed text-sky-200">
-            Este lead entró por usuario de WhatsApp (sin número). Solo se puede responder por la Línea de Ventas.
-          </Text>
-        </View>
-      ) : null}
-
-      {(pending || uploading) ? (
-        <View className="mx-3 mb-2 flex-row items-center rounded-lg border border-zinc-800 bg-zinc-900/50 p-2">
-          <Ionicons name={pending?.contentType.startsWith('image/') ? 'image' : 'document-text'} size={20} color="#a1a1aa" className="mr-2 shrink-0" />
-          <Text numberOfLines={1} className="flex-1 text-xs text-zinc-300 mx-2">{uploading ? `Subiendo archivo... ${progress}%` : pending?.fileName}</Text>
-          {!uploading ? (
-            <Pressable onPress={() => setPending(null)} className="p-1 active:opacity-50" hitSlop={10}>
-              <Ionicons name="close" size={16} color="#71717a" />
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
-
-      <PortfolioModal visible={portfoliosOpen} companyId={companyId} onSelect={selectPortfolio} onClose={() => setPortfoliosOpen(false)} />
-      
-      <View className="flex-row items-end gap-2 px-3 py-2">
-        <Pressable disabled={sending || uploading || isDeliveryDisabled} onPress={chooseAttachment} className="h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 active:bg-zinc-800 disabled:opacity-40" hitSlop={5}>
-          <Ionicons name="attach" size={20} color="#d4d4d8" />
+      {/* Fila principal de entrada: [📎] [📁] [TextInput] [Enviar / Mic #B7871C] */}
+      <View style={styles.composerInputRow}>
+        <Pressable
+          disabled={sending || uploading}
+          onPress={() => setAttachSheetOpen(true)}
+          style={[
+            styles.composerSquareBtn,
+            { backgroundColor: palette.bgCard, borderColor: palette.borderStrong },
+            (sending || uploading) && { opacity: 0.45 },
+          ]}
+        >
+          <Icon name="Paperclip" size={18} color={palette.textSecondary} />
         </Pressable>
-        <Pressable disabled={sending || uploading || isDeliveryDisabled} onPress={() => setPortfoliosOpen(true)} className="h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 active:bg-zinc-800 disabled:opacity-40" hitSlop={5}>
-          <Ionicons name="folder-open-outline" size={20} color="#d4d4d8" />
+
+        <Pressable
+          disabled={sending || uploading}
+          onPress={() => setPortfoliosOpen(true)}
+          style={[
+            styles.composerSquareBtn,
+            { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder },
+            (sending || uploading) && { opacity: 0.45 },
+          ]}
+        >
+          <Icon name="FolderOpen" size={18} color={palette.brandText} />
         </Pressable>
-        
+
         <TextInput
           value={text}
           onChangeText={setText}
-          editable={!isDeliveryDisabled}
+          editable={!sending}
           multiline
           maxLength={2000}
-          placeholder="Escribe un mensaje..."
-          placeholderTextColor="#71717a"
-          className="flex-1 min-h-[40px] max-h-[140px] rounded-xl border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm text-zinc-100 disabled:opacity-40"
-          style={{ textAlignVertical: 'center' }}
+          placeholder="Escribe un mensaje…"
+          placeholderTextColor={palette.placeholder}
+          style={[
+            styles.composerTextInput,
+            {
+              backgroundColor: palette.bgInput,
+              borderColor: palette.borderInput,
+              color: palette.textPrimary,
+            },
+          ]}
         />
-        
-        {text.trim() || pending ? (
-          <Pressable disabled={sending || uploading || isDeliveryDisabled} onPress={submit} className="h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 active:bg-brand-500 disabled:opacity-40">
-            <Ionicons name="send" size={16} color="#ffffff" style={{ marginLeft: 2 }} />
+
+        {hasSendablePayload ? (
+          <Pressable
+            disabled={sending || uploading}
+            onPress={handleSendTextOrAttachment}
+            style={[
+              styles.merakiSendCircle,
+              { backgroundColor: palette.brand },
+              (sending || uploading) && { opacity: 0.5 },
+            ]}
+          >
+            {sending ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Icon name="Send" size={16} color="#ffffff" />
+            )}
           </Pressable>
         ) : (
-          <Pressable disabled={sending || uploading || isDeliveryDisabled} onPress={startRecording} className="h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 active:bg-brand-500 disabled:opacity-40">
-            <Ionicons name="mic" size={18} color="#ffffff" />
+          <Pressable
+            disabled={sending || uploading}
+            onPress={startVoiceRecording}
+            style={[
+              styles.merakiSendCircle,
+              { backgroundColor: palette.brand },
+              (sending || uploading) && { opacity: 0.5 },
+            ]}
+          >
+            <Icon name="Mic" size={18} color="#ffffff" />
           </Pressable>
         )}
+      </View>
+
+      {/* Selector de Canal: Enviar por [🏢 Ventas 317 | 📱 Mi WhatsApp] */}
+      <View style={styles.channelToggleRow}>
+        <Text style={{ fontSize: 10.5, fontWeight: '600', color: palette.textSubtle }}>
+          Enviar por
+        </Text>
+        <View
+          style={[
+            styles.channelSegmentedWrap,
+            { backgroundColor: palette.bgCard, borderColor: palette.border },
+          ]}
+        >
+          <Pressable
+            disabled={companyLineDisabled}
+            onPress={() => setDeliveryChannel('company_whatsapp')}
+            style={[
+              styles.channelSegmentBtn,
+              deliveryChannel === 'company_whatsapp' && {
+                backgroundColor: palette.brandSoft,
+                borderColor: palette.brandBorder,
+                borderWidth: 1,
+              },
+              companyLineDisabled && { opacity: 0.4 },
+            ]}
+          >
+            <Text style={{ fontSize: 11 }}>🏢</Text>
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: deliveryChannel === 'company_whatsapp' ? '800' : '600',
+                color:
+                  deliveryChannel === 'company_whatsapp' ? palette.brandText : palette.textMuted,
+              }}
+            >
+              {companyLineLabel === 'Sin número' ? 'Ventas 317' : companyLineLabel}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            disabled={!advisorWhatsappAvailable}
+            onPress={() => setDeliveryChannel('advisor_whatsapp')}
+            style={[
+              styles.channelSegmentBtn,
+              deliveryChannel === 'advisor_whatsapp' && {
+                backgroundColor: palette.emeraldBg,
+                borderColor: palette.emeraldBorder,
+                borderWidth: 1,
+              },
+              !advisorWhatsappAvailable && { opacity: 0.4 },
+            ]}
+          >
+            <Text style={{ fontSize: 11 }}>📱</Text>
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: deliveryChannel === 'advisor_whatsapp' ? '800' : '600',
+                color:
+                  deliveryChannel === 'advisor_whatsapp'
+                    ? palette.emeraldText
+                    : palette.textMuted,
+              }}
+            >
+              Mi WhatsApp
+            </Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
 }
 
-function LeadDetailsModal({ visible, companyId, lead, onClose }: { visible: boolean; companyId: string; lead: Lead; onClose: () => void }) {
-  const notes = useLeadNotes(companyId, lead.id);
-  const calls = useLeadCalls(companyId, lead.id);
-  const [name, setName] = useState(lead.name ?? '');
-  const [status, setStatus] = useState<Lead['status']>(lead.status);
-  const [tags, setTags] = useState((lead.tags ?? []).join(', '));
-  const [metadata, setMetadata] = useState<Record<string, string>>(lead.metadata ?? {});
-  const [fields, setFields] = useState<ContactField[]>([]);
-  const [noteKind, setNoteKind] = useState<'note' | 'reminder'>('note');
-  const [note, setNote] = useState('');
-  const [dueDate, setDueDate] = useState(formatDateInput(Date.now() + 60 * 60 * 1000));
-  const [dueTime, setDueTime] = useState(formatTimeInput(Date.now() + 60 * 60 * 1000));
-  const [reminderPicker, setReminderPicker] = useState<'date' | 'time' | null>(null);
-  const [analysis, setAnalysis] = useState<LeadAnalysis | undefined>(lead.aiAnalysis);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [busy, setBusy] = useState(false);
+function VoiceRecordedPreviewBar({
+  uri,
+  levels,
+  durationSec,
+  sending,
+  palette,
+  bottomInset,
+  onCancel,
+  onSend,
+}: {
+  uri: string;
+  levels: number[];
+  durationSec: number;
+  sending: boolean;
+  palette: MerakiThemePalette;
+  bottomInset: number;
+  onCancel: () => void;
+  onSend: () => void;
+}) {
+  const player = useAudioPlayer({ uri }, { updateInterval: 150 });
+  const status = useAudioPlayerStatus(player);
+  const playing = status.playing;
+  const total = status.duration > 0 ? status.duration : Math.max(1, durationSec);
+  const current = status.currentTime || 0;
+  const pct = Math.max(0, Math.min(100, (current / total) * 100));
 
-  useEffect(() => {
-    setName(lead.name ?? '');
-    setStatus(lead.status);
-    setTags((lead.tags ?? []).join(', '));
-    setMetadata(lead.metadata ?? {});
-    setAnalysis(lead.aiAnalysis);
-  }, [lead.id, lead.name, lead.status, lead.tags, lead.metadata, lead.aiAnalysis]);
-
-  useEffect(() => {
-    if (!visible) return;
-    listContactFields(companyId).then(setFields).catch((error) => {
-      console.warn('[LeadDetailsModal] contact fields', error);
-      setFields([]);
+  const togglePreview = async () => {
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      shouldRouteThroughEarpiece: false,
     });
-    listLeadAppointments(companyId, lead.id).then(setAppointments).catch((error) => {
-      console.warn('[LeadDetailsModal] appointments', error);
-      setAppointments([]);
-    });
-  }, [companyId, visible, lead.id]);
-
-  const tagList = tags.split(',').map((tag) => tag.trim()).filter(Boolean);
-  const displayName = name.trim() || lead.name || lead.phone || 'Lead';
-
-  const save = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await updateLead(companyId, lead.id, {
-        name: name.trim() || undefined,
-        status,
-        tags: tagList,
-        metadata,
-      });
-      Alert.alert('Guardado', 'Datos del contacto actualizados.');
-    } catch {
-      Alert.alert('No se pudo guardar', 'Intenta nuevamente.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const addNote = async () => {
-    const text = note.trim();
-    if (!text || busy) return;
-    const dueAt = noteKind === 'reminder' ? parseReminderMillis(dueDate, dueTime) : undefined;
-    if (noteKind === 'reminder' && !dueAt) {
-      Alert.alert('Fecha invalida', 'Escribe una fecha y hora valida para el recordatorio.');
-      return;
-    }
-    setBusy(true);
-    try {
-      const noteId = await addLeadNote(companyId, lead.id, noteKind, text, dueAt);
-      if (noteKind === 'reminder' && dueAt) {
-        const scheduled = await scheduleLeadReminderNotification({
-          noteId,
-          companyId,
-          leadId: lead.id,
-          leadName: displayName,
-          text,
-          dueAt,
-        }).catch((error) => {
-          console.warn('[LeadDetailsModal] local reminder', error);
-          return false;
-        });
-        Alert.alert(
-          'Recordatorio guardado',
-          scheduled
-            ? `Te avisare el ${formatDateTime(dueAt)}.`
-            : 'El recordatorio quedo guardado, pero Android no permitio programar la notificacion local. Revisa permisos de notificaciones de la app.'
-        );
-      } else {
-        Alert.alert('Nota guardada', 'La nota quedo registrada en el contacto.');
+    if (playing) {
+      player.pause();
+    } else {
+      if (status.didJustFinish || current >= total - 0.1) {
+        await player.seekTo(0);
       }
-      setNote('');
-      setNoteKind('note');
-    } catch (error: any) {
-      Alert.alert('No se pudo agregar', String(error?.message ?? 'Revisa tu conexion.'));
-    } finally {
-      setBusy(false);
+      player.play();
     }
   };
 
-  const toggleReminder = async (item: LeadNote) => {
-    if (item.kind !== 'reminder') return;
-    const next = !item.done;
-    try {
-      await setReminderDone(companyId, lead.id, item.id, next);
-      if (next) await cancelLeadReminderNotification(item.id).catch(() => undefined);
-    } catch {
-      Alert.alert('No se pudo actualizar', 'Intenta nuevamente.');
-    }
-  };
-
-  const removeNote = async (item: LeadNote) => {
-    Alert.alert('Eliminar', 'Quieres eliminar esta nota?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Eliminar',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteLeadNote(companyId, lead.id, item.id);
-            if (item.kind === 'reminder') await cancelLeadReminderNotification(item.id).catch(() => undefined);
-          } catch {
-            Alert.alert('No se pudo eliminar', 'Intenta nuevamente.');
-          }
-        },
-      },
-    ]);
-  };
-
-  const runAnalysis = async () => {
-    if (busy) return;
-    setBusy(true);
-    try { setAnalysis(await analyzeLead(companyId, lead.id)); }
-    catch (error: any) { Alert.alert('No se pudo analizar', String(error?.message ?? 'Intenta nuevamente.')); }
-    finally { setBusy(false); }
-  };
-
-  const callWithAi = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await startAiCall(companyId, lead.id);
-      Alert.alert('Llamada iniciada', 'El resumen, la transcripcion y la grabacion apareceran aqui cuando Dapta actualice la llamada.');
-    } catch (error: any) {
-      Alert.alert('No se pudo llamar', String(error?.message ?? 'Revisa configuracion de Dapta.'));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const bars = levels.length > 0 ? levels : Array(WAVEFORM_BARS).fill(0.32);
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
-          <View style={styles.modalHeader}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={styles.modalTitle}>{displayName}</Text>
-              <Text style={styles.modalSub}>{lead.phone || 'Lead sin telefono'}</Text>
-            </View>
-            <Pressable onPress={onClose} style={styles.closeButton}><Ionicons name="close" size={22} color={colors.text} /></Pressable>
+    <View
+      style={[
+        styles.voiceRecorderContainer,
+        {
+          backgroundColor: palette.bgCanvas,
+          borderTopColor: palette.border,
+          paddingBottom: Math.max(bottomInset, 12),
+        },
+      ]}
+    >
+      <Pressable
+        onPress={onCancel}
+        disabled={sending}
+        hitSlop={8}
+        style={[styles.voiceTrashBtn, { backgroundColor: palette.roseBg }]}
+      >
+        <Icon name="Trash2" size={17} color={palette.rose} />
+      </Pressable>
+
+      <View style={[styles.voiceWaveformPill, { backgroundColor: palette.bgElevated }]}>
+        <Pressable
+          onPress={togglePreview}
+          style={[styles.previewPlayCircle, { backgroundColor: palette.brandSoft }]}
+        >
+          <Ionicons
+            name={playing ? 'pause' : 'play'}
+            size={15}
+            color={palette.brandText}
+            style={!playing ? { marginLeft: 1 } : undefined}
+          />
+        </Pressable>
+
+        <View style={{ flex: 1, gap: 3 }}>
+          <View style={styles.liveWaveformRow}>
+            {bars.map((lvl, idx) => (
+              <View
+                key={idx}
+                style={{
+                  width: 3,
+                  height: Math.max(4, Math.round(lvl * 22)),
+                  borderRadius: 2,
+                  backgroundColor: palette.brand,
+                  opacity: (idx / bars.length) * 100 <= pct ? 1 : 0.45,
+                }}
+              />
+            ))}
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalContent}>
-            <Section title="Datos del contacto">
-              <Field label="Nombre" value={name} onChangeText={setName} placeholder={lead.phone} />
-              <Text style={styles.label}>Estado comercial</Text>
-              <View style={styles.statusGrid}>
-                {(['new', 'active', 'qualified', 'scheduled', 'lost', 'closed'] as Lead['status'][]).map((item) => (
-                  <Pressable key={item} onPress={() => setStatus(item)} style={[styles.statusPick, status === item && styles.statusPickActive]}>
-                    <Text style={[styles.statusPickText, status === item && { color: colors.emerald }]}>{statusLabel(item)}</Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Field label="Etiquetas" value={tags} onChangeText={setTags} placeholder="interesado, prioridad, proyecto" />
-              {tagList.length > 0 ? <View style={styles.chips}>{tagList.map((tag) => <Text key={tag} style={styles.chip}>#{tag}</Text>)}</View> : null}
-              {fields.length > 0 ? (
-                <View style={styles.customFieldsBlock}>
-                  <Text style={styles.subsectionTitle}>Campos personalizados</Text>
-                  {fields.map((field) => (
-                    <View key={field.id}>
-                      <Text style={styles.label}>{field.label}</Text>
-                      {field.type === 'select' ? (
-                        <View style={styles.statusGrid}>
-                          {['', ...field.options].map((option) => (
-                            <Pressable key={option || 'empty'} onPress={() => setMetadata((prev) => ({ ...prev, [field.id]: option }))} style={[styles.statusPick, (metadata[field.id] ?? '') === option && styles.statusPickActive]}>
-                              <Text style={[styles.statusPickText, (metadata[field.id] ?? '') === option && { color: colors.emerald }]}>{option || 'Sin valor'}</Text>
-                            </Pressable>
-                          ))}
-                        </View>
-                      ) : (
-                        <Field
-                          label=""
-                          value={metadata[field.id] ?? ''}
-                          onChangeText={(value) => setMetadata((prev) => ({ ...prev, [field.id]: value }))}
-                          placeholder={field.type === 'date' ? 'YYYY-MM-DD' : undefined}
-                          keyboardType={field.type === 'number' ? 'numeric' : 'default'}
-                        />
-                      )}
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-              <Pressable disabled={busy} onPress={save} style={styles.primaryWide}><Ionicons name="save-outline" size={17} color={colors.background} /><Text style={styles.primaryText}>Guardar cambios</Text></Pressable>
-            </Section>
-
-            <Section title="Notas y recordatorios">
-              <View style={styles.segmentRow}>
-                <Pressable onPress={() => setNoteKind('note')} style={[styles.segment, noteKind === 'note' && styles.segmentActive]}><Ionicons name="document-text-outline" size={15} color={noteKind === 'note' ? colors.emerald : colors.muted} /><Text style={[styles.segmentText, noteKind === 'note' && { color: colors.emerald }]}>Nota</Text></Pressable>
-                <Pressable onPress={() => setNoteKind('reminder')} style={[styles.segment, noteKind === 'reminder' && styles.segmentActive]}><Ionicons name="alarm-outline" size={15} color={noteKind === 'reminder' ? colors.emerald : colors.muted} /><Text style={[styles.segmentText, noteKind === 'reminder' && { color: colors.emerald }]}>Recordatorio</Text></Pressable>
-              </View>
-              <TextInput value={note} onChangeText={setNote} multiline placeholder={noteKind === 'note' ? 'Escribe una nota interna...' : 'Ej: llamar para confirmar visita'} placeholderTextColor={colors.faint} style={styles.noteInput} />
-              {noteKind === 'reminder' ? (
-                <View style={styles.row}>
-                  <SelectField label="Fecha" value={formatDateLabel(dueDate)} icon="calendar-outline" onPress={() => setReminderPicker('date')} />
-                  <SelectField label="Hora" value={dueTime} icon="time-outline" onPress={() => setReminderPicker('time')} />
-                </View>
-              ) : null}
-              <Pressable disabled={busy || !note.trim()} onPress={addNote} style={styles.secondaryButtonFull}><Ionicons name={noteKind === 'note' ? 'add' : 'alarm-outline'} size={17} color={colors.text} /><Text style={styles.secondaryText}>{noteKind === 'note' ? 'Agregar nota' : 'Agregar recordatorio'}</Text></Pressable>
-              {notes.length === 0 ? <Text style={styles.muted}>Aun no hay notas ni recordatorios.</Text> : notes.map((item) => (
-                <NoteRow key={item.id} note={item} onToggle={() => toggleReminder(item)} onDelete={() => removeNote(item)} />
-              ))}
-            </Section>
-            <ReminderPickerSheet
-              picker={reminderPicker}
-              date={dueDate}
-              time={dueTime}
-              onDate={setDueDate}
-              onTime={setDueTime}
-              onClose={() => setReminderPicker(null)}
+          <View style={[styles.previewProgressBar, { backgroundColor: palette.bgSubtle }]}>
+            <View
+              style={{
+                height: '100%',
+                width: `${pct}%`,
+                backgroundColor: palette.brand,
+              }}
             />
+          </View>
+        </View>
 
-            <Section title="Citas">
-              {appointments.length === 0 ? <Text style={styles.muted}>Sin citas agendadas.</Text> : appointments.map((appointment) => (
-                <AppointmentRow key={appointment.id} appointment={appointment} />
-              ))}
-            </Section>
+        <Text style={[styles.voiceTimerText, { color: palette.textSecondary }]}>
+          {formatDurationMMSS(playing ? Math.round(current) : Math.round(total))}
+        </Text>
+      </View>
 
-            <Section title="Radiografia IA">
-              {analysis ? <AnalysisBlock analysis={analysis} /> : <Text style={styles.muted}>Aun no hay analisis para este lead.</Text>}
-              <Pressable disabled={busy} onPress={runAnalysis} style={styles.secondaryButtonFull}><Ionicons name="sparkles-outline" size={17} color={colors.text} /><Text style={styles.secondaryText}>{analysis ? 'Actualizar radiografia' : 'Analizar lead'}</Text></Pressable>
-            </Section>
+      <Pressable
+        onPress={onSend}
+        disabled={sending}
+        style={[
+          styles.merakiSendCircle,
+          { backgroundColor: palette.brand },
+          sending && { opacity: 0.6 },
+        ]}
+      >
+        {sending ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : (
+          <Icon name="Send" size={16} color="#ffffff" />
+        )}
+      </Pressable>
+    </View>
+  );
+}
 
-            <Section title="Llamadas IA">
-              <Pressable disabled={busy || !lead.phone} onPress={callWithAi} style={styles.primaryWide}><Ionicons name="call-outline" size={17} color={colors.background} /><Text style={styles.primaryText}>Iniciar llamada IA</Text></Pressable>
-              {calls.length === 0 ? <Text style={styles.muted}>Aun no hay llamadas registradas para este lead.</Text> : calls.map((call) => <CallRow key={call.id} call={call} />)}
-            </Section>
+// ─────────────────────────────────────────────────────────────────────────────
+// AttachmentActionSheet (Galería Foto/Video, Cámara, Documento PDF, Portafolio)
+// ─────────────────────────────────────────────────────────────────────────────
 
-            <Section title="SmartHome">
-              <SmartHomeBitacoraPanel companyId={companyId} lead={lead} />
-            </Section>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
+function AttachmentActionSheet({
+  visible,
+  palette,
+  onPickGallery,
+  onTakePhoto,
+  onPickPdf,
+  onOpenPortfolio,
+  onClose,
+}: {
+  visible: boolean;
+  palette: MerakiThemePalette;
+  onPickGallery: () => void;
+  onTakePhoto: () => void;
+  onPickPdf: () => void;
+  onOpenPortfolio: () => void;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  if (!visible) return null;
+
+  const actions = [
+    {
+      key: 'gallery',
+      title: 'Galería (Foto o Video)',
+      sub: 'Imágenes hasta 5 MB · Videos cortos hasta 16 MB',
+      icon: 'Image' as const,
+      tint: palette.sky,
+      bg: palette.skyBg,
+      onPress: onPickGallery,
+    },
+    {
+      key: 'camera',
+      title: 'Cámara Fotográfica',
+      sub: 'Tomar fotografía en vivo para enviar al cliente',
+      icon: 'Camera' as const,
+      tint: palette.emerald,
+      bg: palette.emeraldBg,
+      onPress: onTakePhoto,
+    },
+    {
+      key: 'pdf',
+      title: 'Documento PDF o Imagen',
+      sub: 'Cotizaciones, documentos y fichas hasta 100 MB',
+      icon: 'FileText' as const,
+      tint: palette.brand,
+      bg: palette.brandSoft,
+      onPress: onPickPdf,
+    },
+    {
+      key: 'portfolio',
+      title: 'Portafolio Meraki & Planos en Vivo',
+      sub: 'Mi Tarjeta de Presentación, Brochures y Disponibilidad',
+      icon: 'FolderOpen' as const,
+      tint: palette.brand,
+      bg: palette.brandSoft,
+      onPress: onOpenPortfolio,
+    },
+  ];
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={[styles.sheetBackdrop, { backgroundColor: palette.backdrop }]} onPress={onClose}>
+        <Pressable
+          onPress={() => {}}
+          style={[
+            styles.bottomSheetCard,
+            {
+              backgroundColor: palette.bgCard,
+              borderColor: palette.border,
+              paddingBottom: Math.max(insets.bottom + 10, 20),
+            },
+          ]}
+        >
+          <View style={[styles.sheetHeaderRow, { borderBottomColor: palette.border }]}>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: palette.textPrimary }}>
+              Adjuntar contenido
+            </Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Icon name="X" size={18} color={palette.textMuted} />
+            </Pressable>
+          </View>
+
+          <View style={{ padding: 12, gap: 8 }}>
+            {actions.map((act) => (
+              <Pressable
+                key={act.key}
+                onPress={act.onPress}
+                style={[
+                  styles.attachActionItem,
+                  { backgroundColor: palette.bgElevated, borderColor: palette.border },
+                ]}
+              >
+                <View style={[styles.attachIconCircle, { backgroundColor: act.bg }]}>
+                  <Icon name={act.icon} size={18} color={act.tint} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13.5, fontWeight: '700', color: palette.textPrimary }}>
+                    {act.title}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 1 }}>
+                    {act.sub}
+                  </Text>
+                </View>
+                <Icon name="ChevronRight" size={16} color={palette.textSubtle} />
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
 
-function NoteRow({ note, onToggle, onDelete }: { note: LeadNote; onToggle: () => void; onDelete: () => void }) {
-  const dueMs = timestampMs(note.dueAt);
-  const overdue = note.kind === 'reminder' && !note.done && dueMs > 0 && dueMs < Date.now();
-  return (
-    <View style={[styles.noteRow, overdue && styles.noteRowOverdue]}>
-      <Pressable disabled={note.kind !== 'reminder'} onPress={onToggle} style={styles.noteIconButton}>
-        <Ionicons name={note.kind === 'reminder' ? (note.done ? 'checkmark-circle' : 'alarm-outline') : 'document-text-outline'} size={17} color={note.done ? colors.faint : overdue ? colors.red : colors.emerald} />
-      </Pressable>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.noteText, note.done && { textDecorationLine: 'line-through', color: colors.faint }]}>{note.text}</Text>
-        <Text style={styles.noteMeta}>{note.kind === 'reminder' && dueMs ? `${formatDateTime(dueMs)} · ` : ''}{note.authorName} · {shortTime(note.createdAt)}{overdue ? ' · vencido' : ''}</Text>
-      </View>
-      <Pressable onPress={onDelete} hitSlop={8} style={styles.noteIconButton}><Ionicons name="trash-outline" size={17} color={colors.red} /></Pressable>
-    </View>
-  );
-}
-function AppointmentRow({ appointment }: { appointment: Appointment }) {
-  const status = appointmentStatus(appointment.status);
-  return (
-    <View style={styles.apptCard}>
-      <View style={styles.apptHeader}>
-        <Text numberOfLines={1} style={styles.apptTitle}>{appointment.title}</Text>
-        <Text style={[styles.apptStatus, { color: status.color }]}>{status.label}</Text>
-      </View>
-      <Text style={styles.apptWhen}>{formatAppointmentRange(appointment.startTime, appointment.endTime)}</Text>
-      {appointment.googleMeetLink ? <MeetLink link={appointment.googleMeetLink} /> : null}
-    </View>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// PortfolioPickerModal (2 niveles: Mi Tarjeta + Proyectos Meraki + Planos vivos)
+// ─────────────────────────────────────────────────────────────────────────────
 
-function MeetLink({ link }: { link: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    await Clipboard.setStringAsync(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  return (
-    <View style={styles.meetRow}>
-      <Ionicons name="videocam" size={15} color={colors.emerald} />
-      <Text numberOfLines={1} style={styles.meetLinkText}>{link}</Text>
-      <Pressable onPress={() => Linking.openURL(link)} hitSlop={8} style={styles.meetAction}><Ionicons name="open-outline" size={16} color={colors.emerald} /></Pressable>
-      <Pressable onPress={copy} hitSlop={8} style={styles.meetAction}><Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={16} color={copied ? colors.emerald : colors.muted} /></Pressable>
-    </View>
-  );
-}
+function PortfolioPickerModal({
+  visible,
+  companyId,
+  palette,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  companyId: string;
+  palette: MerakiThemePalette;
+  onSelect: (item: LibraryItem) => void;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const { user, profile, role, platformAdmin } = useAuth();
+  const isAdmin = platformAdmin || isAdminRole(role ?? profile?.role);
+  const { items, loading } = useLibrary(visible ? companyId : null);
 
-function appointmentStatus(status: Appointment['status']): { label: string; color: string } {
-  if (status === 'canceled') return { label: 'Cancelada', color: colors.faint };
-  if (status === 'completed') return { label: 'Realizada', color: colors.cyan };
-  return { label: 'Agendada', color: colors.emerald };
-}
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [planos, setPlanos] = useState<PlanoIndexItem[]>([]);
 
-function formatAppointmentRange(start: number, end: number) {
-  const day = new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', month: 'short' }).format(start);
-  const time = (ms: number) => new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit' }).format(ms);
-  return `${day} · ${time(start)}–${time(end)}`;
-}
-
-function TemplateModal({ visible, companyId, leadId, inboxId, onClose }: { visible: boolean; companyId: string; leadId: string; inboxId?: string; onClose: () => void }) {
-  const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
-  const [selected, setSelected] = useState<WhatsAppTemplate | null>(null);
-  const [variables, setVariables] = useState<Record<string, string>>({});
-  const [sending, setSending] = useState(false);
+  useEffect(() => {
+    if (!visible) setSelectedProject(null);
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;
-    // Solo plantillas aprobadas Y de la línea del lead (las plantillas son por WABA:
-    // la línea del asesor ve las suyas y el 317 las suyas). Si el lead no tiene inbox,
-    // se muestran todas para no dejar la lista vacía.
-    listTemplates(companyId)
-      .then((rows) => setTemplates(rows.filter((t) =>
-        t.status === 'approved' && (!inboxId || !t.lineNumber || t.lineNumber === inboxId))))
-      .catch(() => Alert.alert('Plantillas', 'No se pudieron cargar.'));
-  }, [companyId, visible, inboxId]);
+    let alive = true;
+    fetchPlanosIndex().then((list) => {
+      if (alive) setPlanos(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [visible]);
 
-  const selectTemplate = (template: WhatsAppTemplate) => {
-    setSelected(template);
-    const next: Record<string, string> = {};
-    template.variables?.forEach((variable) => { next[variable.key] = ''; });
-    setVariables(next);
+  const planoGenAt = useMemo(() => {
+    const m = new Map<string, string | null>();
+    planos.forEach((p) => m.set(planoItemId(p.planoId), p.generatedAt));
+    return m;
+  }, [planos]);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, LibraryItem[]>();
+    const cardFolder = isAdmin ? 'Tarjetas de Presentación' : 'Mi Tarjeta de Presentación';
+
+    items
+      .filter((i) => {
+        if (i.project === 'Tarjeta de Presentación' || i.kind === 'card') {
+          return isAdmin || i.advisorId === user?.uid;
+        }
+        if ((i.visibility ?? 'general') === 'advisor') {
+          return isAdmin || i.advisorId === user?.uid;
+        }
+        return true;
+      })
+      .forEach((i) => {
+        const isCard = i.project === 'Tarjeta de Presentación' || i.kind === 'card';
+        const key = isCard ? cardFolder : i.project?.trim() || NO_PROJECT;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(i);
+      });
+
+    if (planos.length > 0) {
+      const keyByNorm = new Map<string, string>();
+      [...map.keys()].forEach((k) => keyByNorm.set(normalizeProjectName(k), k));
+      planos.forEach((p) => {
+        const norm = normalizeProjectName(p.projectName);
+        let groupKey = keyByNorm.get(norm);
+        if (!groupKey) {
+          groupKey = p.projectName || p.name;
+          keyByNorm.set(norm, groupKey);
+          map.set(groupKey, []);
+        }
+        map.set(groupKey, [
+          planoToLibraryItem(p, companyId, groupKey),
+          ...(map.get(groupKey) ?? []),
+        ]);
+      });
+    }
+
+    return map;
+  }, [items, planos, companyId, isAdmin, user?.uid]);
+
+  const projectNames = useMemo(() => {
+    return [...groups.keys()].sort((a, b) => {
+      const isCardA = a === 'Mi Tarjeta de Presentación' || a === 'Tarjetas de Presentación';
+      const isCardB = b === 'Mi Tarjeta de Presentación' || b === 'Tarjetas de Presentación';
+      if (isCardA && !isCardB) return -1;
+      if (!isCardA && isCardB) return 1;
+      if (a === NO_PROJECT) return 1;
+      if (b === NO_PROJECT) return -1;
+
+      const idxA = CANONICAL_PROJECT_ORDER.findIndex(
+        (c) => normalizeProjectName(c) === normalizeProjectName(a)
+      );
+      const idxB = CANONICAL_PROJECT_ORDER.findIndex(
+        (c) => normalizeProjectName(c) === normalizeProjectName(b)
+      );
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.localeCompare(b, 'es');
+    });
+  }, [groups]);
+
+  useEffect(() => {
+    if (!loading && selectedProject === null && projectNames.length === 1) {
+      setSelectedProject(projectNames[0]);
+    }
+  }, [loading, selectedProject, projectNames]);
+
+  const currentItems = useMemo(() => {
+    const list = selectedProject ? groups.get(selectedProject) ?? [] : [];
+    if (
+      selectedProject === 'Tarjetas de Presentación' ||
+      selectedProject === 'Mi Tarjeta de Presentación'
+    ) {
+      return [...list].sort((a, b) =>
+        (a.advisorName || a.title).localeCompare(b.advisorName || b.title, 'es')
+      );
+    }
+    return list;
+  }, [selectedProject, groups]);
+
+  if (!visible) return null;
+
+  const showBack = selectedProject !== null && projectNames.length > 1;
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={[styles.sheetBackdrop, { backgroundColor: palette.backdrop }]} onPress={onClose}>
+        <Pressable
+          onPress={() => {}}
+          style={[
+            styles.portfolioSheet,
+            {
+              backgroundColor: palette.bgCard,
+              borderColor: palette.border,
+              paddingBottom: Math.max(insets.bottom + 8, 16),
+            },
+          ]}
+        >
+          <View style={[styles.sheetHeaderRow, { borderBottomColor: palette.border }]}>
+            <View style={[styles.rowCenterGap6, { flex: 1, minWidth: 0 }]}>
+              {showBack && (
+                <Pressable onPress={() => setSelectedProject(null)} hitSlop={10}>
+                  <Icon name="ChevronLeft" size={20} color={palette.textPrimary} />
+                </Pressable>
+              )}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text
+                  numberOfLines={1}
+                  style={{ fontSize: 15, fontWeight: '800', color: palette.textPrimary }}
+                >
+                  {selectedProject ?? 'Portafolio Meraki & Planos'}
+                </Text>
+                <Text style={{ fontSize: 11, color: palette.textMuted }}>
+                  {selectedProject
+                    ? 'Toca un documento o plano para adjuntarlo'
+                    : 'Selecciona tu tarjeta o la carpeta del proyecto'}
+                </Text>
+              </View>
+            </View>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Icon name="X" size={18} color={palette.textMuted} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={{ maxHeight: 460 }}
+            contentContainerStyle={{ padding: 12, gap: 8 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {loading ? (
+              <View style={{ paddingVertical: 36, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color={palette.brand} />
+                <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 8 }}>
+                  Cargando biblioteca comercial…
+                </Text>
+              </View>
+            ) : projectNames.length === 0 ? (
+              <View style={{ paddingVertical: 32, paddingHorizontal: 16, alignItems: 'center' }}>
+                <Text style={{ fontSize: 13, color: palette.textMuted, textAlign: 'center' }}>
+                  No hay documentos cargados todavía. Un administrador puede subirlos en Configuración → Portafolios.
+                </Text>
+              </View>
+            ) : selectedProject === null ? (
+              projectNames.map((folderName) => {
+                const isCardFolder =
+                  folderName === 'Mi Tarjeta de Presentación' ||
+                  folderName === 'Tarjetas de Presentación';
+                const isAdminCards = folderName === 'Tarjetas de Presentación';
+                const folderItems = groups.get(folderName) ?? [];
+                const hasLivePlano = folderItems.some((item) => isPlanoItem(item));
+
+                return (
+                  <Pressable
+                    key={folderName}
+                    onPress={() => setSelectedProject(folderName)}
+                    style={[
+                      styles.portfolioFolderRow,
+                      isCardFolder
+                        ? { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder }
+                        : { backgroundColor: palette.bgElevated, borderColor: palette.border },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.attachIconCircle,
+                        { backgroundColor: isCardFolder ? palette.brand : palette.brandSoft },
+                      ]}
+                    >
+                      <Icon
+                        name={isCardFolder ? 'User' : 'FolderOpen'}
+                        size={18}
+                        color={isCardFolder ? '#ffffff' : palette.brand}
+                      />
+                    </View>
+
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={styles.rowCenterGap6}>
+                        <Text
+                          numberOfLines={1}
+                          style={{
+                            fontSize: 13.5,
+                            fontWeight: '700',
+                            color: isCardFolder ? palette.brandText : palette.textPrimary,
+                            flexShrink: 1,
+                          }}
+                        >
+                          {folderName}
+                        </Text>
+                        {isCardFolder && (
+                          <View
+                            style={[
+                              styles.inlineMicroChip,
+                              { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder },
+                            ]}
+                          >
+                            <Text style={{ fontSize: 9.5, fontWeight: '800', color: palette.brandText }}>
+                              {isAdminCards ? 'Equipo' : 'Personal'}
+                            </Text>
+                          </View>
+                        )}
+                        {hasLivePlano && (
+                          <View
+                            style={[
+                              styles.inlineMicroChip,
+                              {
+                                backgroundColor: palette.emeraldBg,
+                                borderColor: palette.emeraldBorder,
+                              },
+                            ]}
+                          >
+                            <Text style={{ fontSize: 9.5, fontWeight: '800', color: palette.emeraldText }}>
+                              Plano en vivo
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text numberOfLines={1} style={{ fontSize: 11, color: palette.textMuted, marginTop: 2 }}>
+                        {isAdminCards
+                          ? `${folderItems.length} tarjeta(s) de asesores`
+                          : isCardFolder
+                          ? 'Tarjeta con tu foto y presentación oficial'
+                          : `${folderItems.length} documento(s)`}
+                      </Text>
+                    </View>
+
+                    <Icon name="ChevronRight" size={16} color={palette.textSubtle} />
+                  </Pressable>
+                );
+              })
+            ) : (
+              currentItems.map((item) => {
+                const plano = isPlanoItem(item);
+                const isVideo = item.kind === 'video' || item.contentType.startsWith('video/');
+                const isImage = item.contentType.startsWith('image/');
+                const isCard = item.project === 'Tarjeta de Presentación' || item.kind === 'card';
+
+                return (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => onSelect(item)}
+                    style={[
+                      styles.portfolioFolderRow,
+                      plano
+                        ? { backgroundColor: palette.emeraldBg, borderColor: palette.emeraldBorder }
+                        : { backgroundColor: palette.bgElevated, borderColor: palette.border },
+                    ]}
+                  >
+                    {isImage ? (
+                      <ExpoImage
+                        source={{ uri: item.downloadUrl }}
+                        style={styles.portfolioImageThumb}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                      />
+                    ) : (
+                      <View
+                        style={[
+                          styles.attachIconCircle,
+                          {
+                            backgroundColor: plano
+                              ? palette.emeraldBg
+                              : isVideo
+                              ? palette.amberBg
+                              : palette.brandSoft,
+                          },
+                        ]}
+                      >
+                        <Icon
+                          name={plano ? 'MapPin' : isVideo ? 'Video' : 'FileText'}
+                          size={18}
+                          color={plano ? palette.emerald : isVideo ? palette.amber : palette.brand}
+                        />
+                      </View>
+                    )}
+
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text
+                        numberOfLines={1}
+                        style={{ fontSize: 13, fontWeight: '700', color: palette.textPrimary }}
+                      >
+                        {item.title}
+                      </Text>
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          fontSize: 11,
+                          color: plano ? palette.emeraldText : palette.textMuted,
+                          marginTop: 2,
+                        }}
+                      >
+                        {isCard && item.advisorName
+                          ? `Asesor: ${item.advisorName}`
+                          : plano
+                          ? timeAgo(planoGenAt.get(item.id) ?? null) || 'Disponibilidad en vivo'
+                          : isVideo && (item.visibility ?? 'general') === 'advisor'
+                          ? `Solo ${item.advisorName || 'asesor'} · ${formatFileSize(item.sizeBytes)}`
+                          : formatFileSize(item.sizeBytes)}
+                      </Text>
+                    </View>
+
+                    <Icon name="Send" size={15} color={palette.brand} />
+                  </Pressable>
+                );
+              })
+            )}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TemplatePickerModal (2 pasos: 'list' -> 'preview', selector WABA, UTF-8 limpio)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TEMPLATE_CATEGORY_LABEL: Record<string, string> = {
+  marketing: '📣 Marketing',
+  utility: '⚙️ Utilidad / Servicio',
+  authentication: '🔐 Autenticación',
+};
+
+function fillTemplateBody(body: string, vars: Record<string, string>): string {
+  return body.replace(/\{\{(\w+)\}\}/g, (_, k: string) =>
+    vars[k]?.trim() ? vars[k] : `{{${k}}}`
+  );
+}
+
+function TemplatePickerModal({
+  visible,
+  companyId,
+  lead,
+  palette,
+  onClose,
+}: {
+  visible: boolean;
+  companyId: string;
+  lead: Lead;
+  palette: MerakiThemePalette;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const uid = user?.uid;
+
+  const [allTemplates, setAllTemplates] = useState<WhatsAppTemplate[]>([]);
+  const [lines, setLines] = useState<MessagingLine[]>([]);
+  const [selectedLine, setSelectedLine] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [step, setStep] = useState<'list' | 'preview'>('list');
+  const [selected, setSelected] = useState<WhatsAppTemplate | null>(null);
+  const [variables, setVariables] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    let alive = true;
+    setLoading(true);
+    setStep('list');
+    setSelected(null);
+    setVariables({});
+    setSearch('');
+    setError(null);
+
+    Promise.all([
+      listTemplates(companyId).catch(() => [] as WhatsAppTemplate[]),
+      listMessagingLines(companyId).catch(() => [] as MessagingLine[]),
+    ])
+      .then(([tpls, lns]) => {
+        if (!alive) return;
+        setAllTemplates(tpls);
+        setLines(lns);
+        const mine = uid ? lns.find((l) => l.advisorId === uid) : undefined;
+        const def = lns.find((l) => l.isDefault);
+        const initial =
+          mine && digitsOnly(lead.inboxId) === digitsOnly(mine.number)
+            ? mine.number
+            : def?.number ?? mine?.number ?? null;
+        setSelectedLine(initial);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setError('No se pudieron cargar las plantillas oficiales.');
+        setLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [visible, companyId, uid, lead.inboxId]);
+
+  const defaultLine = useMemo(() => lines.find((l) => l.isDefault) ?? null, [lines]);
+  const myLine = useMemo(
+    () => (uid ? lines.find((l) => l.advisorId === uid) ?? null : null),
+    [lines, uid]
+  );
+  const canChooseLine = Boolean(myLine && defaultLine);
+  const activeLineNumber = canChooseLine ? selectedLine : lead.inboxId ?? null;
+
+  const filteredTemplates = useMemo(() => {
+    const byLine = allTemplates.filter(
+      (t) =>
+        !activeLineNumber ||
+        !t.lineNumber ||
+        digitsOnly(t.lineNumber) === digitsOnly(activeLineNumber)
+    );
+    const q = search.trim().toLowerCase();
+    if (!q) return byLine;
+    return byLine.filter(
+      (t) =>
+        t.displayName.toLowerCase().includes(q) ||
+        t.body.toLowerCase().includes(q) ||
+        (t.category && t.category.toLowerCase().includes(q))
+    );
+  }, [allTemplates, activeLineNumber, search]);
+
+  const handleChangeLine = (lineNum: string) => {
+    if (lineNum === selectedLine) return;
+    setSelectedLine(lineNum);
+    setSelected(null);
+    setVariables({});
+    setError(null);
+    setStep('list');
   };
 
-  const send = async () => {
-    if (!selected) return;
+  const handleSelectTemplate = (tpl: WhatsAppTemplate) => {
+    setSelected(tpl);
+    const initVars: Record<string, string> = {};
+    (tpl.variables ?? []).forEach((v) => {
+      initVars[v.key] = '';
+    });
+    setVariables(initVars);
+    setError(null);
+    setStep('preview');
+  };
+
+  const handleSendTemplate = async () => {
+    if (!selected || sending) return;
     setSending(true);
+    setError(null);
     try {
-      await sendTemplateMessage(companyId, leadId, selected.id, variables);
-      Alert.alert('Plantilla enviada', 'La conversaciÃ³n quedÃ³ reactivada cuando el cliente responda.');
+      await sendTemplateMessageWithLine(
+        companyId,
+        lead.id,
+        selected.id,
+        variables,
+        canChooseLine ? selectedLine ?? undefined : undefined
+      );
+      Alert.alert(
+        'Plantilla enviada',
+        'El mensaje oficial fue enviado. La conversación quedará habilitada en cuanto el cliente responda.'
+      );
       onClose();
-    } catch {
-      Alert.alert('No se pudo enviar', 'Verifica que la plantilla estÃ© aprobada y tenga variables completas.');
+    } catch (err) {
+      const msg = (err as { message?: string })?.message;
+      setError(
+        msg || 'No se pudo enviar la plantilla. Verifica que esté aprobada por Meta y tenga todas sus variables.'
+      );
     } finally {
       setSending(false);
     }
   };
 
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeader}>
-          <View><Text style={styles.modalTitle}>Enviar plantilla</Text><Text style={styles.modalSub}>Mensajes aprobados por Meta</Text></View>
-          <Pressable onPress={onClose} style={styles.closeButton}><Ionicons name="close" size={22} color={colors.text} /></Pressable>
-        </View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalContent}>
-          {templates.map((template) => (
-            <Pressable key={template.id} onPress={() => selectTemplate(template)} style={[styles.templateCard, selected?.id === template.id && { borderColor: colors.emerald }]}>
-              <Text style={styles.templateName}>{template.displayName}</Text>
-              <Text numberOfLines={3} style={styles.templateBody}>{template.body}</Text>
-            </Pressable>
-          ))}
-          {selected?.variables?.map((variable) => (
-            <Field key={variable.key} label={`{{${variable.key}}}`} value={variables[variable.key] ?? ''} onChangeText={(value) => setVariables((prev) => ({ ...prev, [variable.key]: value }))} placeholder={variable.example} />
-          ))}
-          {/* Exigir que TODAS las variables tengan valor: WhatsApp rechaza parámetros vacíos. */}
-          <Pressable disabled={!selected || sending || !(selected?.variables ?? []).every((v) => (variables[v.key] ?? '').trim())} onPress={send} style={styles.primaryWide}><Ionicons name="send-outline" size={17} color={colors.background} /><Text style={styles.primaryText}>Enviar plantilla</Text></Pressable>
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
+  if (!visible) return null;
+
+  const previewText = selected ? fillTemplateBody(selected.body, variables) : '';
+  const allVarsFilled = Boolean(
+    selected && (selected.variables ?? []).every((v) => Boolean(variables[v.key]?.trim()))
   );
-}
+  const canSend = Boolean(selected && !sending && allVarsFilled);
+  const leadFirstName = lead.name?.trim().split(/\s+/)[0] || '';
 
-const NO_PROJECT = 'Otros documentos';
-
-function PortfolioModal({ visible, companyId, onSelect, onClose }: { visible: boolean; companyId: string; onSelect: (item: LibraryItem) => void; onClose: () => void }) {
-  const { user, profile } = useAuth();
-  const { items, loading } = useLibrary(visible ? companyId : null);
-  const [project, setProject] = useState<string | null>(null);
-  const [planos, setPlanos] = useState<PlanoIndexItem[]>([]);
-
-  useEffect(() => { if (!visible) setProject(null); }, [visible]);
-
-  useEffect(() => {
-    let alive = true;
-    fetchPlanosIndex().then((list) => { if (alive) setPlanos(list); });
-    return () => { alive = false; };
-  }, []);
-
-  const planoGenAt = useRef(new Map<string, string | null>());
-  useEffect(() => {
-    const m = new Map<string, string | null>();
-    planos.forEach((p) => m.set(planoItemId(p.planoId), p.generatedAt));
-    planoGenAt.current = m;
-  }, [planos]);
-
-  const sizeLabel = (bytes: number) => {
-    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-    return `${bytes} B`;
+  const getStatusBadge = (st: WhatsAppTemplate['status']) => {
+    if (st === 'approved') {
+      return {
+        label: '✓ Aprobada Meta',
+        bg: palette.emeraldBg,
+        border: palette.emeraldBorder,
+        text: palette.emeraldText,
+      };
+    }
+    if (st === 'pending') {
+      return {
+        label: '⏳ En Revisión Meta',
+        bg: palette.amberBg,
+        border: palette.amberBorder,
+        text: palette.amberText,
+      };
+    }
+    if (st === 'rejected') {
+      return {
+        label: '✕ Rechazada',
+        bg: palette.roseBg,
+        border: palette.roseBorder,
+        text: palette.roseText,
+      };
+    }
+    return {
+      label: 'Borrador Local',
+      bg: palette.bgElevated,
+      border: palette.borderStrong,
+      text: palette.textMuted,
+    };
   };
 
-  const groups = new Map<string, LibraryItem[]>();
-  items.filter((i) => {
-    const isVideo = i.kind === 'video' || i.contentType?.startsWith('video/');
-    if (!isVideo) return true;
-    if ((i.visibility ?? 'general') !== 'advisor') return true;
-    return profile?.role === 'admin' || profile?.role === 'manager' || i.advisorId === user?.uid;
-  }).forEach((i) => {
-    const key = i.project?.trim() || NO_PROJECT;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(i);
-  });
-
-  if (planos.length) {
-    const keyByNorm = new Map<string, string>();
-    [...groups.keys()].forEach((k) => keyByNorm.set(normalizeProjectName(k), k));
-    planos.forEach((p) => {
-      const norm = normalizeProjectName(p.projectName);
-      let groupKey = keyByNorm.get(norm);
-      if (!groupKey) {
-        groupKey = p.name;
-        keyByNorm.set(norm, groupKey);
-        groups.set(groupKey, []);
-      }
-      groups.set(groupKey, [planoToLibraryItem(p, companyId, groupKey), ...(groups.get(groupKey) ?? [])]);
-    });
-  }
-
-  const projectNames = [...groups.keys()].sort((a, b) => {
-    if (a === NO_PROJECT) return 1;
-    if (b === NO_PROJECT) return -1;
-    return a.localeCompare(b);
-  });
-  const currentItems = project ? (groups.get(project) ?? []) : [];
-  const showBack = project !== null && projectNames.length > 1;
-
-  const close = () => { setProject(null); onClose(); };
-
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={close}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeader}>
-          {showBack ? (
-            <Pressable onPress={() => setProject(null)} hitSlop={10} style={{ marginRight: 8 }}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
-          ) : null}
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text numberOfLines={1} style={styles.modalTitle}>{project ?? 'Enviar documento'}</Text>
-            <Text style={styles.modalSub}>{project ? 'Elige un documento' : 'Elige un proyecto'}</Text>
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={[styles.screen, { backgroundColor: palette.bgCanvas }]}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        {/* Header del Modal */}
+        <View
+          style={[
+            styles.tplHeader,
+            {
+              backgroundColor: palette.bgCard,
+              borderBottomColor: palette.border,
+              paddingTop: Math.max(insets.top + 8, 14),
+            },
+          ]}
+        >
+          <View style={[styles.rowCenterGap6, { flex: 1, minWidth: 0 }]}>
+            {step === 'preview' && (
+              <Pressable
+                onPress={() => setStep('list')}
+                hitSlop={10}
+                style={[
+                  styles.iconBoxBtn,
+                  { backgroundColor: palette.bgElevated, borderColor: palette.borderStrong },
+                ]}
+              >
+                <Icon name="ArrowLeft" size={17} color={palette.textPrimary} />
+              </Pressable>
+            )}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={styles.rowCenterGap6}>
+                <Icon name="LayoutTemplate" size={16} color={palette.brand} />
+                <Text
+                  numberOfLines={1}
+                  style={{ fontSize: 15, fontWeight: '800', color: palette.textPrimary, flexShrink: 1 }}
+                >
+                  Enviar Plantilla de WhatsApp
+                </Text>
+              </View>
+              <Text numberOfLines={1} style={{ fontSize: 11, color: palette.textMuted, marginTop: 1 }}>
+                Mensajes oficiales pre-aprobados por Meta
+              </Text>
+            </View>
           </View>
-          <Pressable onPress={close} style={styles.closeButton}><Ionicons name="close" size={22} color={colors.text} /></Pressable>
+
+          <Pressable
+            onPress={onClose}
+            hitSlop={10}
+            style={[
+              styles.iconBoxBtn,
+              { backgroundColor: palette.bgElevated, borderColor: palette.border },
+            ]}
+          >
+            <Icon name="X" size={17} color={palette.textSecondary} />
+          </Pressable>
         </View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalContent}>
-          {loading ? (
-            <Text style={styles.muted}>Cargando...</Text>
-          ) : items.length === 0 && planos.length === 0 ? (
-            <Text style={styles.muted}>No hay documentos cargados todavia. Un administrador puede subirlos desde el CRM web, en Configuracion, Portafolios.</Text>
-          ) : project === null ? (
-            projectNames.map((name) => (
-              <Pressable key={name} onPress={() => setProject(name)} style={styles.templateCard}>
-                <View style={styles.portfolioRow}>
-                  <Ionicons name="folder-open" size={22} color={colors.amber} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text numberOfLines={1} style={styles.templateName}>{name}</Text>
-                    <Text numberOfLines={1} style={styles.templateBody}>{groups.get(name)!.length} documento(s)</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={17} color={colors.muted} />
-                </View>
-              </Pressable>
-            ))
+
+        {/* Barra de Selección de Línea WABA */}
+        <View
+          style={[
+            styles.tplLineBar,
+            { backgroundColor: palette.bgCardSoft, borderBottomColor: palette.border },
+          ]}
+        >
+          {canChooseLine ? (
+            <View style={[styles.rowCenterGap6, { flexWrap: 'wrap' }]}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: palette.textMuted }}>
+                Línea de salida:
+              </Text>
+              <View
+                style={[
+                  styles.channelSegmentedWrap,
+                  { backgroundColor: palette.bgCard, borderColor: palette.borderStrong },
+                ]}
+              >
+                {[defaultLine, myLine].map((line) => {
+                  if (!line) return null;
+                  const active = digitsOnly(selectedLine) === digitsOnly(line.number);
+                  return (
+                    <Pressable
+                      key={line.number}
+                      onPress={() => handleChangeLine(line.number)}
+                      style={[
+                        styles.channelSegmentBtn,
+                        active && {
+                          backgroundColor: palette.brandSoft,
+                          borderColor: palette.brandBorder,
+                          borderWidth: 1,
+                        },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 11 }}>{line.isDefault ? '🏢' : '📱'}</Text>
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          fontWeight: active ? '800' : '600',
+                          color: active ? palette.brandText : palette.textMuted,
+                        }}
+                      >
+                        {line.isDefault ? 'Ventas 317' : 'Mi WhatsApp'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : activeLineNumber ? (
+            <View style={styles.rowCenterGap6}>
+              <Text style={{ fontSize: 11, color: palette.textMuted }}>Se enviará desde:</Text>
+              <View
+                style={[
+                  styles.inlineMicroChip,
+                  { backgroundColor: palette.emeraldBg, borderColor: palette.emeraldBorder },
+                ]}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: palette.emeraldText }}>
+                  🏢 {inboxLabel(activeLineNumber)}
+                </Text>
+              </View>
+            </View>
           ) : (
-            currentItems.map((item) => {
-              const plano = isPlanoItem(item);
-              const isVideo = item.kind === 'video' || item.contentType?.startsWith('video/');
-              return (
-              <Pressable key={item.id} onPress={() => { onSelect(item); setProject(null); }} style={[styles.templateCard, plano && { borderColor: '#10B98150', backgroundColor: '#10B98108' }]}>
-                <View style={styles.portfolioRow}>
-                  <Ionicons name={plano ? 'map' : isVideo ? 'videocam' : 'document-text'} size={22} color={plano ? '#34D399' : isVideo ? colors.amber : colors.emerald} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text numberOfLines={1} style={styles.templateName}>{item.title}</Text>
-                    <Text numberOfLines={1} style={styles.templateBody}>{plano ? (timeAgo(planoGenAt.current.get(item.id) ?? null) || 'disponibilidad en vivo') : isVideo && (item.visibility ?? 'general') === 'advisor' ? `Solo ${item.advisorName || 'asesor'} - ${sizeLabel(item.sizeBytes)}` : sizeLabel(item.sizeBytes)}</Text>
-                  </View>
-                  <Ionicons name="send" size={17} color={colors.muted} />
-                </View>
-              </Pressable>
-              );
-            })
+            <Text style={{ fontSize: 11, color: palette.textMuted }}>
+              {filteredTemplates.length} plantilla(s) disponible(s)
+            </Text>
           )}
-        </ScrollView>
-      </SafeAreaView>
+        </View>
+
+        {/* Cuerpo: Paso 1 ('list') vs Paso 2 ('preview') */}
+        {step === 'list' ? (
+          <View style={{ flex: 1 }}>
+            <View style={[styles.tplSearchWrap, { borderBottomColor: palette.border }]}>
+              <View
+                style={[
+                  styles.tplSearchBox,
+                  { backgroundColor: palette.bgInput, borderColor: palette.borderInput },
+                ]}
+              >
+                <Icon name="Search" size={14} color={palette.textMuted} />
+                <TextInput
+                  value={search}
+                  onChangeText={setSearch}
+                  placeholder="Buscar plantilla por nombre o texto…"
+                  placeholderTextColor={palette.placeholder}
+                  style={{ flex: 1, fontSize: 13, color: palette.textPrimary, paddingVertical: 0 }}
+                />
+                {search ? (
+                  <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                    <Icon name="X" size={14} color={palette.textMuted} />
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+
+            {loading ? (
+              <View style={styles.centerGuardWrap}>
+                <ActivityIndicator size="large" color={palette.brand} />
+                <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 10 }}>
+                  Cargando plantillas de Meta…
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filteredTemplates}
+                keyExtractor={(item) => item.id}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 32 }}
+                ListEmptyComponent={
+                  <View style={{ paddingVertical: 44, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 28, marginBottom: 6 }}>🔍</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: palette.textPrimary }}>
+                      No hay plantillas que coincidan
+                    </Text>
+                    <Text style={{ fontSize: 11.5, color: palette.textMuted, marginTop: 4 }}>
+                      Intenta con otra búsqueda o cambia de línea de salida.
+                    </Text>
+                  </View>
+                }
+                renderItem={({ item }) => {
+                  const st = getStatusBadge(item.status);
+                  const varCount = item.variables?.length ?? 0;
+                  return (
+                    <Pressable
+                      onPress={() => handleSelectTemplate(item)}
+                      style={[
+                        styles.tplListItem,
+                        { backgroundColor: palette.bgCard, borderColor: palette.border },
+                      ]}
+                    >
+                      <View style={styles.rowBetweenCenter}>
+                        <Text
+                          numberOfLines={1}
+                          style={{
+                            flex: 1,
+                            fontSize: 13.5,
+                            fontWeight: '800',
+                            color: palette.textPrimary,
+                            marginRight: 8,
+                          }}
+                        >
+                          {item.displayName}
+                        </Text>
+                        <View
+                          style={[
+                            styles.inlineMicroChip,
+                            { backgroundColor: st.bg, borderColor: st.border },
+                          ]}
+                        >
+                          <Text style={{ fontSize: 9.5, fontWeight: '700', color: st.text }}>
+                            {st.label}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <Text
+                        numberOfLines={2}
+                        style={{ fontSize: 12, lineHeight: 17, color: palette.textMuted, marginTop: 4 }}
+                      >
+                        {item.body}
+                      </Text>
+
+                      <View style={[styles.rowCenterGap6, { marginTop: 6 }]}>
+                        <Text style={{ fontSize: 10.5, color: palette.textSubtle, fontWeight: '600' }}>
+                          {TEMPLATE_CATEGORY_LABEL[item.category] || item.category}
+                        </Text>
+                        {varCount > 0 && (
+                          <Text style={{ fontSize: 10.5, color: palette.brandText, fontWeight: '700' }}>
+                            • {varCount} variable{varCount > 1 ? 's' : ''}
+                          </Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  );
+                }}
+              />
+            )}
+          </View>
+        ) : selected ? (
+          <View style={{ flex: 1 }}>
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: 28 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* Navegación rápida de retorno a la lista */}
+              <View style={[styles.rowBetweenCenter, { borderBottomWidth: 1, borderBottomColor: palette.border, paddingBottom: 10 }]}>
+                <Pressable onPress={() => setStep('list')} style={styles.rowCenterGap6}>
+                  <Icon name="ArrowLeft" size={14} color={palette.brandText} />
+                  <Text style={{ fontSize: 12.5, fontWeight: '800', color: palette.brandText }}>
+                    Elegir otra plantilla
+                  </Text>
+                </Pressable>
+
+                {(() => {
+                  const st = getStatusBadge(selected.status);
+                  return (
+                    <View
+                      style={[
+                        styles.inlineMicroChip,
+                        { backgroundColor: st.bg, borderColor: st.border },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: st.text }}>
+                        {st.label}
+                      </Text>
+                    </View>
+                  );
+                })()}
+              </View>
+
+              {/* Encabezado de Plantilla */}
+              <View>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: palette.textPrimary }}>
+                  {selected.displayName}
+                </Text>
+                <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}>
+                  Categoría:{' '}
+                  <Text style={{ fontWeight: '700', color: palette.textSecondary }}>
+                    {TEMPLATE_CATEGORY_LABEL[selected.category] || selected.category}
+                  </Text>
+                </Text>
+              </View>
+
+              {/* Variables Requeridas */}
+              {(selected.variables?.length ?? 0) > 0 && (
+                <View
+                  style={[
+                    styles.tplVarsCard,
+                    { backgroundColor: palette.bgCard, borderColor: palette.border },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      fontSize: 11.5,
+                      fontWeight: '800',
+                      color: palette.textSecondary,
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    ✏️ Variables requeridas ({selected.variables.length})
+                  </Text>
+
+                  {selected.variables.map((v, idx) => (
+                    <View key={v.key} style={{ gap: 5 }}>
+                      <View style={styles.rowBetweenCenter}>
+                        <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.textMuted }}>
+                          {`{{${v.key}}}`}{' '}
+                          {v.example ? (
+                            <Text style={{ color: palette.textSubtle }}>(ej: {v.example})</Text>
+                          ) : null}
+                        </Text>
+
+                        {idx === 0 && leadFirstName ? (
+                          <Pressable
+                            onPress={() =>
+                              setVariables((prev) => ({ ...prev, [v.key]: leadFirstName }))
+                            }
+                            style={[
+                              styles.inlineMicroChip,
+                              { backgroundColor: palette.brandSoft, borderColor: palette.brandBorder },
+                            ]}
+                          >
+                            <Text style={{ fontSize: 10, fontWeight: '700', color: palette.brandText }}>
+                              + Usar «{leadFirstName}»
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+
+                      <TextInput
+                        value={variables[v.key] ?? ''}
+                        onChangeText={(val) =>
+                          setVariables((prev) => ({ ...prev, [v.key]: val }))
+                        }
+                        placeholder={v.example || `Valor para {{${v.key}}}`}
+                        placeholderTextColor={palette.placeholder}
+                        style={[
+                          styles.tplVarInput,
+                          {
+                            backgroundColor: palette.bgInput,
+                            borderColor: palette.borderInput,
+                            color: palette.textPrimary,
+                          },
+                        ]}
+                      />
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {/* Vista Previa Real en el WhatsApp del Cliente */}
+              <View
+                style={[
+                  styles.tplVarsCard,
+                  { backgroundColor: palette.bgBody, borderColor: palette.border },
+                ]}
+              >
+                <View style={[styles.rowBetweenCenter, { borderBottomWidth: 1, borderBottomColor: palette.border, paddingBottom: 8 }]}>
+                  <Text
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: '800',
+                      color: palette.textMuted,
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    📱 Vista Previa en el WhatsApp del Cliente
+                  </Text>
+                  <Text style={{ fontSize: 10, color: palette.textSubtle }}>Formato Oficial Meta</Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.whatsappPreviewBubble,
+                    { backgroundColor: palette.bgCard, borderColor: palette.borderStrong },
+                  ]}
+                >
+                  {selected.headerText ? (
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: '800',
+                        color: palette.textPrimary,
+                        paddingBottom: 6,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: palette.border,
+                      }}
+                    >
+                      {selected.headerText}
+                    </Text>
+                  ) : null}
+
+                  <Text style={{ fontSize: 13, lineHeight: 19, color: palette.textPrimary }}>
+                    {previewText}
+                  </Text>
+
+                  {selected.footer ? (
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontStyle: 'italic',
+                        color: palette.textMuted,
+                        paddingTop: 6,
+                        borderTopWidth: StyleSheet.hairlineWidth,
+                        borderTopColor: palette.border,
+                      }}
+                    >
+                      {selected.footer}
+                    </Text>
+                  ) : null}
+
+                  {selected.buttons && selected.buttons.length > 0 ? (
+                    <View style={{ gap: 5, paddingTop: 6 }}>
+                      {selected.buttons.map((btn, bIdx) => (
+                        <View
+                          key={`${btn.text}-${bIdx}`}
+                          style={[
+                            styles.tplPreviewBtnRow,
+                            { backgroundColor: palette.bgElevated, borderColor: palette.border },
+                          ]}
+                        >
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: palette.sky }}>
+                            {btn.text}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+
+                  <View style={[styles.rowCenterGap6, { justifyContent: 'flex-end' }]}>
+                    <Text style={{ fontSize: 10, color: palette.textSubtle }}>Ahora</Text>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: palette.sky }}>✓✓</Text>
+                  </View>
+                </View>
+              </View>
+
+              {error && (
+                <View
+                  style={[
+                    styles.composerErrorBanner,
+                    { backgroundColor: palette.roseBg, borderColor: palette.roseBorder, marginHorizontal: 0 },
+                  ]}
+                >
+                  <Icon name="AlertTriangle" size={15} color={palette.rose} />
+                  <Text style={{ flex: 1, fontSize: 12, color: palette.roseText }}>{error}</Text>
+                </View>
+              )}
+            </ScrollView>
+
+            {/* Footer de Envío */}
+            <View
+              style={[
+                styles.tplFooter,
+                {
+                  backgroundColor: palette.bgCard,
+                  borderTopColor: palette.border,
+                  paddingBottom: Math.max(insets.bottom + 8, 14),
+                },
+              ]}
+            >
+              <View style={[styles.rowCenterGap6, { marginBottom: 10 }]}>
+                <Icon
+                  name={selected.status === 'approved' ? 'Check' : 'AlertTriangle'}
+                  size={14}
+                  color={selected.status === 'approved' ? palette.emerald : palette.amber}
+                />
+                <Text style={{ flex: 1, fontSize: 11, color: palette.textMuted }}>
+                  {selected.status === 'approved'
+                    ? 'Plantilla aprobada por Meta. Puede enviarse fuera de las 24 horas.'
+                    : 'Solo puede enviarse mientras la ventana de 24h esté activa.'}
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Button variant="secondary" onPress={onClose} style={{ flex: 1 }}>
+                  Cancelar
+                </Button>
+                <Pressable
+                  disabled={!canSend}
+                  onPress={handleSendTemplate}
+                  style={[
+                    styles.tplSendBtn,
+                    { backgroundColor: palette.brand, flex: 2 },
+                    !canSend && { opacity: 0.45 },
+                  ]}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <Icon name="Send" size={14} color="#ffffff" />
+                  )}
+                  <Text style={{ fontSize: 13.5, fontWeight: '800', color: '#ffffff' }}>
+                    {sending ? 'Enviando…' : 'Enviar Plantilla'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ) : null}
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// ReactionPickerModal (6 emojis WhatsApp + Copiar texto)
+// ─────────────────────────────────────────────────────────────────────────────
 
-function statusLabel(status: Lead['status']) {
-  return ({
-    new: 'Nuevo',
-    active: 'Activo',
-    qualified: 'Calificado',
-    scheduled: 'Agendado',
-    lost: 'Perdido',
-    closed: 'Vendido',
-  } satisfies Record<Lead['status'], string>)[status] ?? status;
-}
-
-function formatDateInput(ms: number) {
-  const date = new Date(ms);
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatTimeInput(ms: number) {
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-function parseReminderMillis(dateText: string, timeText: string) {
-  const value = new Date(`${dateText.trim()}T${timeText.trim()}:00`);
-  const ms = value.getTime();
-  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
-}
-
-function formatDateTime(ms: number) {
-  return new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(ms));
-}
-
-function parseDateInput(value: string) {
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isFinite(date.getTime()) ? date : null;
-}
-
-function formatDateLabel(value: string) {
-  const date = parseDateInput(value);
-  return date ? new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'short' }).format(date) : value;
-}
-
-function startOfMonth(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function addMonths(monthMs: number, count: number) {
-  const date = new Date(monthMs);
-  return new Date(date.getFullYear(), date.getMonth() + count, 1).getTime();
-}
-
-function buildMonthGrid(month: Date) {
-  const first = startOfMonth(month);
-  const mondayOffset = (first.getDay() + 6) % 7;
-  const start = new Date(first.getFullYear(), first.getMonth(), first.getDate() - mondayOffset);
-  return Array.from({ length: 42 }, (_, index) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + index));
-}
-
-function capitalize(value: string) {
-  return value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : value;
-}
-
-function Field({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  keyboardType = 'default',
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  placeholder?: string;
-  keyboardType?: 'default' | 'numeric';
-}) {
-  return (
-    <View style={{ flex: 1 }}>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
-      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.faint} keyboardType={keyboardType} style={styles.fieldInput} />
-    </View>
-  );
-}
-
-function SelectField({ label, value, icon, onPress }: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={styles.selectField}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.selectInput}>
-        <Ionicons name={icon} size={16} color={colors.muted} />
-        <Text numberOfLines={1} style={styles.selectValue}>{value}</Text>
-        <Ionicons name="chevron-down" size={16} color={colors.faint} />
-      </View>
-    </Pressable>
-  );
-}
-
-function ReminderPickerSheet({
-  picker,
-  date,
-  time,
-  onDate,
-  onTime,
+function ReactionPickerModal({
+  message,
+  activeEmoji,
+  palette,
+  onSelectEmoji,
   onClose,
 }: {
-  picker: 'date' | 'time' | null;
-  date: string;
-  time: string;
-  onDate: (value: string) => void;
-  onTime: (value: string) => void;
+  message: EnrichedMessage | null;
+  activeEmoji: string;
+  palette: MerakiThemePalette;
+  onSelectEmoji: (emoji: string) => void;
   onClose: () => void;
 }) {
-  const [month, setMonth] = useState(startOfMonth(parseDateInput(date) ?? new Date()).getTime());
+  if (!message) return null;
 
-  useEffect(() => {
-    if (picker === 'date') setMonth(startOfMonth(parseDateInput(date) ?? new Date()).getTime());
-  }, [date, picker]);
+  const canReactToWhatsApp =
+    message.direction === 'inbound' && message.senderType === 'lead';
 
-  if (!picker) return null;
-
-  const monthDate = new Date(month);
-  const monthDays = buildMonthGrid(monthDate);
+  const copyMessageText = async () => {
+    if (message.content?.trim()) {
+      await Clipboard.setStringAsync(message.content.trim());
+    }
+    onClose();
+  };
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.sheetOverlay} onPress={onClose} />
-      <SafeAreaView edges={['bottom']} style={styles.sheet}>
-        <View style={styles.sheetHeader}>
-          <Text style={styles.sheetTitle}>{picker === 'date' ? 'Fecha del recordatorio' : 'Hora del recordatorio'}</Text>
-          <Pressable onPress={onClose} style={styles.sheetClose}><Ionicons name="close" size={22} color={colors.text} /></Pressable>
-        </View>
-        {picker === 'date' ? (
-          <>
-            <View style={styles.sheetMonthRow}>
-              <Pressable onPress={() => setMonth(addMonths(month, -1))} style={styles.sheetNav}><Ionicons name="chevron-back" size={20} color={colors.text} /></Pressable>
-              <Text style={styles.sheetMonth}>{capitalize(new Intl.DateTimeFormat('es-CO', { month: 'long', year: 'numeric' }).format(monthDate))}</Text>
-              <Pressable onPress={() => setMonth(addMonths(month, 1))} style={styles.sheetNav}><Ionicons name="chevron-forward" size={20} color={colors.text} /></Pressable>
-            </View>
-            <View style={styles.sheetCalendar}>
-              {['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((day, index) => <Text key={`${day}-${index}`} style={styles.sheetWeekday}>{day}</Text>)}
-              {monthDays.map((day) => {
-                const value = formatDateInput(day.getTime());
-                const selected = value === date;
-                const inMonth = day.getMonth() === monthDate.getMonth();
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        style={[styles.reactionBackdrop, { backgroundColor: palette.backdrop }]}
+        onPress={onClose}
+      >
+        <Pressable
+          onPress={() => {}}
+          style={[
+            styles.reactionPopupCard,
+            { backgroundColor: palette.bgCard, borderColor: palette.borderStrong },
+          ]}
+        >
+          {canReactToWhatsApp ? (
+            <View style={styles.emojiBarRow}>
+              {QUICK_REACTIONS.map((emoji) => {
+                const isSelected = activeEmoji === emoji;
                 return (
-                  <Pressable key={day.toISOString()} onPress={() => { onDate(value); onClose(); }} style={[styles.sheetDay, selected && styles.sheetDayActive]}>
-                    <Text style={[styles.sheetDayText, !inMonth && styles.sheetDayMuted, selected && styles.sheetDayTextActive]}>{day.getDate()}</Text>
+                  <Pressable
+                    key={emoji}
+                    onPress={() => onSelectEmoji(emoji)}
+                    style={[
+                      styles.emojiOptionBtn,
+                      isSelected && {
+                        backgroundColor: palette.brandSoft,
+                        borderColor: palette.brandBorder,
+                        borderWidth: 1,
+                      },
+                    ]}
+                  >
+                    <Text style={{ fontSize: 24 }}>{emoji}</Text>
                   </Pressable>
                 );
               })}
             </View>
-          </>
-        ) : (
-          <View style={styles.optionGrid}>
-            {reminderTimeOptions.map((value) => {
-              const selected = value === time;
-              return (
-                <Pressable key={value} onPress={() => { onTime(value); onClose(); }} style={[styles.optionPill, selected && styles.optionPillActive]}>
-                  <Text style={[styles.optionText, selected && styles.optionTextActive]}>{value}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-      </SafeAreaView>
+          ) : (
+            <Text style={{ fontSize: 11.5, color: palette.textMuted, paddingHorizontal: 8 }}>
+              Las reacciones de WhatsApp están disponibles en mensajes entrantes del cliente.
+            </Text>
+          )}
+
+          {message.content?.trim() ? (
+            <Pressable
+              onPress={copyMessageText}
+              style={[
+                styles.copyMsgActionRow,
+                { borderTopColor: palette.border },
+              ]}
+            >
+              <Icon name="Copy" size={14} color={palette.textSecondary} />
+              <Text style={{ fontSize: 13, fontWeight: '600', color: palette.textPrimary }}>
+                Copiar texto del mensaje
+              </Text>
+            </Pressable>
+          ) : null}
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
 
-function AnalysisBlock({ analysis }: { analysis: LeadAnalysis }) {
-  const nextAction = analysis.nextAction || analysis.nextBestAction;
-  const analyzedAt = typeof analysis.analyzedAt === 'number' ? analysis.analyzedAt : timestampMs(analysis.analyzedAt);
-  return (
-    <View style={styles.analysisBox}>
-      <View style={styles.analysisHeader}>
-        <Text style={styles.analysisScore}>{analysis.score ?? 0}/100</Text>
-        <Text style={styles.temperatureChip}>{temperatureLabel(analysis.temperature)}</Text>
-      </View>
-      <Text style={styles.analysisText}>{analysis.summary || 'Sin resumen.'}</Text>
-      {(analysis.budget || analysis.interestArea) ? (
-        <View style={styles.chips}>
-          {analysis.budget ? <Text style={styles.chip}>Presupuesto: {analysis.budget}</Text> : null}
-          {analysis.interestArea ? <Text style={styles.chip}>Zona: {analysis.interestArea}</Text> : null}
-        </View>
-      ) : null}
-      {nextAction ? <AnalysisPart title="Proximo paso" body={nextAction} detail={analysis.nextActionReason} /> : null}
-      {analysis.interestLevel ? <AnalysisPart title="Nivel de interes" body={analysis.interestLevel} /> : null}
-      <BulletBlock title="Senales de compra" items={analysis.buyingSignals} />
-      <BulletBlock title="Objeciones / frenos" items={analysis.objections} />
-      {analysis.lossRisk ? <AnalysisPart title="Riesgo de perdida" body={analysis.lossRisk} /> : null}
-      <BulletBlock title="Por que este puntaje" items={analysis.scoreReasons} />
-      {analysis.recommendedMessage ? <AnalysisPart title="Mensaje sugerido" body={analysis.recommendedMessage} /> : null}
-      {analyzedAt ? <Text style={styles.analysisFoot}>Analizado {formatDateTime(analyzedAt)} - {analysis.messageCount ?? 0} mensajes</Text> : null}
-    </View>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// ImageLightboxModal (Zoom Fullscreen para imágenes y stickers)
+// ─────────────────────────────────────────────────────────────────────────────
 
-function temperatureLabel(value?: LeadAnalysis['temperature']) {
-  if (value === 'hot') return 'Caliente';
-  if (value === 'cold') return 'Frio';
-  return 'Tibio';
-}
+function ImageLightboxModal({
+  uri,
+  onClose,
+}: {
+  uri: string | null;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  if (!uri) return null;
 
-function AnalysisPart({ title, body, detail }: { title: string; body: string; detail?: string }) {
-  return (
-    <View style={styles.analysisPart}>
-      <Text style={styles.analysisPartTitle}>{title}</Text>
-      <Text style={styles.analysisText}>{body}</Text>
-      {detail ? <Text style={styles.analysisMuted}>{detail}</Text> : null}
-    </View>
-  );
-}
-
-function BulletBlock({ title, items }: { title: string; items?: string[] }) {
-  if (!items?.length) return null;
-  return (
-    <View style={styles.analysisPart}>
-      <Text style={styles.analysisPartTitle}>{title}</Text>
-      {items.map((item, index) => <Text key={`${title}-${index}`} style={styles.analysisText}>- {item}</Text>)}
-    </View>
-  );
-}
-
-function CallRow({ call }: { call: RecentCall }) {
-  const [open, setOpen] = useState(false);
-  const player = useAudioPlayer(call.recordingUrl ? { uri: call.recordingUrl } : null, { updateInterval: 500 });
-  const playback = useAudioPlayerStatus(player);
-  const hasDetails = !!(call.summary || call.transcript || call.recordingUrl || call.outcome);
-  const duration = call.durationSec ? formatCallDuration(call.durationSec) : formatAudioSeconds(playback.duration);
-  const current = formatAudioSeconds(playback.currentTime);
-
-  const togglePlayback = async () => {
-    if (!call.recordingUrl) return;
-    try {
-      await setAudioModeAsync({ playsInSilentMode: true });
-      if (playback.playing) {
-        player.pause();
-      } else {
-        if (playback.didJustFinish) player.seekTo(0);
-        player.play();
-      }
-    } catch {
-      Alert.alert('No se pudo reproducir', 'Intenta abrir la grabacion mas tarde.');
-    }
+  const handleShare = () => {
+    Share.share({ message: uri, url: uri }).catch(() => {
+      Linking.openURL(uri).catch(() => {});
+    });
   };
 
   return (
-    <View style={styles.callCard}>
-      <Pressable disabled={!hasDetails} onPress={() => setOpen((value) => !value)} style={styles.callSummaryRow}>
-        <View style={styles.callIcon}>
-          <Ionicons name={callStatusIcon(call.status)} size={18} color={callStatusColor(call.status)} />
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.lightboxRoot}>
+        <View style={[styles.lightboxTopBar, { paddingTop: Math.max(insets.top + 8, 18) }]}>
+          <Pressable onPress={() => Linking.openURL(uri)} style={styles.lightboxActionBtn}>
+            <Icon name="ExternalLink" size={18} color="#ffffff" />
+          </Pressable>
+          <Pressable onPress={handleShare} style={styles.lightboxActionBtn}>
+            <Icon name="Share2" size={18} color="#ffffff" />
+          </Pressable>
+          <Pressable onPress={onClose} style={styles.lightboxActionBtn}>
+            <Icon name="X" size={20} color="#ffffff" />
+          </Pressable>
         </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.callTitle}>{callStatusLabel(call.status)}{duration ? ` · ${duration}` : ''}</Text>
-          {call.summary ? <Text numberOfLines={open ? undefined : 2} style={styles.callText}>{call.summary}</Text> : <Text style={styles.callText}>Sin resumen todavia.</Text>}
-          {call.outcome ? <Text style={styles.callOutcome}>{call.outcome}</Text> : null}
-        </View>
-        {hasDetails ? <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.faint} /> : null}
-      </Pressable>
 
-      {open ? (
-        <View style={styles.callDetails}>
-          {call.recordingUrl ? (
-            <View style={styles.audioBox}>
-              <Pressable onPress={togglePlayback} style={styles.playButton}>
-                <Ionicons name={playback.playing ? 'pause' : 'play'} size={16} color={colors.background} />
-              </Pressable>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.audioTitle}>Grabacion</Text>
-                <Text style={styles.audioTime}>{current}{duration ? ` / ${duration}` : ''}</Text>
-                <View style={styles.audioTrack}>
-                  <View style={[styles.audioProgress, { width: audioProgressWidth(playback.currentTime, playback.duration) as `${number}%` }]} />
-                </View>
-              </View>
-            </View>
-          ) : <Text style={styles.muted}>Esta llamada aun no tiene grabacion.</Text>}
-
-          {call.transcript ? (
-            <View style={styles.callTextBlock}>
-              <Text style={styles.callBlockTitle}>Transcripcion</Text>
-              <Text style={styles.callTranscript}>{call.transcript}</Text>
-            </View>
-          ) : <Text style={styles.muted}>Aun no hay transcripcion para esta llamada.</Text>}
-        </View>
-      ) : null}
-    </View>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.lightboxScrollCenter}
+          maximumZoomScale={4}
+          minimumZoomScale={1}
+          centerContent
+          showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
+        >
+          <ExpoImage
+            source={{ uri }}
+            style={styles.lightboxFullImage}
+            contentFit="contain"
+            cachePolicy="memory-disk"
+          />
+        </ScrollView>
+      </View>
+    </Modal>
   );
 }
 
-function callStatusLabel(status: string) {
-  return ({
-    initiated: 'Marcando',
-    ringing: 'Sonando',
-    connecting: 'Conectando',
-    'in-progress': 'En curso',
-    missed: 'Perdida',
-    rejected: 'Rechazada',
-    completed: 'Completada',
-    'no-answer': 'Sin respuesta',
-    voicemail: 'Buzon de voz',
-    busy: 'Ocupado',
-    failed: 'Fallida',
-    transferred: 'Transferida',
-  } as Record<string, string>)[status] ?? (status || 'Llamada');
-}
-
-function callStatusIcon(status: string): keyof typeof Ionicons.glyphMap {
-  if (status === 'completed' || status === 'in-progress') return 'call-outline';
-  if (status === 'missed' || status === 'no-answer') return 'call-outline';
-  if (status === 'failed' || status === 'rejected' || status === 'busy') return 'call-outline';
-  return 'call-outline';
-}
-
-function callStatusColor(status: string) {
-  if (status === 'completed' || status === 'in-progress') return colors.emerald;
-  if (status === 'failed' || status === 'rejected') return colors.red;
-  if (status === 'missed' || status === 'no-answer' || status === 'busy') return colors.amber;
-  return colors.cyan;
-}
-
-function formatCallDuration(seconds?: number) {
-  if (!seconds || seconds <= 0) return '';
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${String(secs).padStart(2, '0')}`;
-}
-
-function formatAudioSeconds(seconds?: number) {
-  if (!seconds || seconds <= 0 || !Number.isFinite(seconds)) return '0:00';
-  return formatCallDuration(Math.floor(seconds));
-}
-
-function audioProgressWidth(current?: number, duration?: number) {
-  if (!current || !duration || duration <= 0) return '0%';
-  const pct = Math.max(0, Math.min(100, (current / duration) * 100));
-  return `${pct}%`;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Estilos optimizados (320px - 430px Mobile Responsive Parity)
+// ─────────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  composerWrap: { backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border },
-  templateOnly: { padding: 12, backgroundColor: '#0B5F4D', flexDirection: 'row', alignItems: 'center', gap: 10 },
-  templateOnlyTitle: { color: colors.emerald, fontSize: 13, fontWeight: '900' },
-  templateOnlyText: { color: colors.emerald, fontSize: 11, marginTop: 2 },
-  templateButton: { backgroundColor: colors.emerald, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  templateButtonText: { color: colors.background, fontSize: 12, fontWeight: '900' },
-  channelSelector: { flexDirection: 'row', padding: 8, gap: 8 },
-  channelBtn: { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: 6, backgroundColor: colors.raised },
-  channelBtnActiveCompany: { backgroundColor: colors.brand },
-  channelBtnActiveAdvisor: { backgroundColor: colors.emerald },
-  channelText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
-  channelTextActive: { color: colors.background, fontWeight: '900' },
-  pending: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: colors.raised, marginHorizontal: 8, borderRadius: 6 },
-  pendingText: { flex: 1, color: colors.text, fontSize: 12 },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', padding: 8, gap: 8 },
-  composerButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  composerInput: { flex: 1, minHeight: 36, maxHeight: 100, backgroundColor: colors.raised, borderRadius: 18, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10, color: colors.text, fontSize: 14 },
-  send: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.brand, alignItems: 'center', justifyContent: 'center' },
-  messageText: { color: colors.text, fontSize: 14, lineHeight: 20 },
-  messageMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 4 },
-  messageTime: { color: colors.faint, fontSize: 10 },
-  stickerWrap: { width: 140, height: 140, borderRadius: 12, overflow: 'hidden' },
-  sticker: { width: '100%', height: '100%' },
-  mediaWrap: { width: 220, height: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.raised },
-  imageMedia: { width: '100%', height: '100%' },
-  videoFrame: { width: 220, height: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.raised },
-  videoMedia: { width: '100%', height: '100%' },
-  file: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 12, backgroundColor: colors.raised, width: 240 },
-  fileCopy: { flex: 1 },
-  fileText: { color: colors.text, fontSize: 14, fontWeight: '700' },
-  fileMeta: { color: colors.muted, fontSize: 11, marginTop: 2 },
-  messageAudioButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.emerald, alignItems: 'center', justifyContent: 'center' },
-  messageAudioButtonOutbound: { backgroundColor: colors.brand },
-  messageAudioMain: { flex: 1, marginLeft: 10 },
-  messageAudioTitle: { color: colors.text, fontSize: 13, fontWeight: '700' },
-  messageAudioTrack: { height: 4, borderRadius: 2, backgroundColor: colors.border, marginTop: 8, overflow: 'hidden' },
-  messageAudioProgress: { height: '100%', backgroundColor: colors.emerald },
-  messageAudioTime: { color: colors.muted, fontSize: 10, marginTop: 4 },
-  safe: { flex: 1, backgroundColor: colors.background },
-  chatBody: { flex: 1, backgroundColor: colors.background },
-  header: { minHeight: 82, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.background, borderBottomWidth: 1, borderBottomColor: colors.border },
-  headerButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.brand, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: colors.background, fontSize: 14, fontWeight: '800' },
-  headerCopy: { flex: 1 },
-  name: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  phone: { color: colors.muted, fontSize: 12, marginTop: 2 },
-  ai: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: colors.raised, borderWidth: 1, borderColor: colors.border },
-  aiActive: { backgroundColor: colors.brandDark, borderColor: colors.brandBorder },
-  aiDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.muted },
-  aiText: { color: colors.muted, fontSize: 10, fontWeight: '700' },
-  windowBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, gap: 6 },
-  windowOpen: { backgroundColor: colors.emeraldDark },
-  windowClosed: { backgroundColor: colors.raised },
-  windowText: { color: colors.text, fontSize: 11, fontWeight: '800' },
-  windowAction: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  messages: { padding: 12, gap: 8 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
-  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  messageRowOutbound: { flexDirection: 'row-reverse' },
-  messageContainer: { maxWidth: '85%', marginBottom: 6 },
-  senderLabel: { color: colors.muted, fontSize: 10, paddingHorizontal: 4, marginBottom: 2 },
-  routeLabel: { color: colors.faint, fontSize: 9, paddingHorizontal: 4, marginTop: 2 },
-  bubble: { padding: 12, borderRadius: 16 },
-  bubbleOutbound: { borderBottomRightRadius: 4 },
-  bubbleInbound: { borderBottomLeftRadius: 4 },
-  bubbleLead: { backgroundColor: '#3F3F46' },
-  bubbleAi: { backgroundColor: '#5B21B666', borderColor: '#7C3AED66', borderWidth: 1 },
-  bubbleAdvisor: { backgroundColor: '#1E3A8A66', borderColor: '#2563EB66', borderWidth: 1 },
-  audioFile: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.raised, borderRadius: 12, padding: 10, width: 240 },
-  recordingBar: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 13, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border },
-  recordingDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.red },
-  recordingTime: { color: colors.text, fontSize: 13, fontVariant: ['tabular-nums'] },
-  recordingLabel: { flex: 1, color: colors.muted, fontSize: 10 },
-  cancelRecording: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  sendRecording: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.emerald },
-  modalSafe: { flex: 1, backgroundColor: colors.background },
-  modalHeader: { minHeight: 68, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface },
-  modalTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
-  modalSub: { color: colors.muted, fontSize: 11, marginTop: 3 },
-  closeButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  modalContent: { padding: 14, gap: 14, paddingBottom: 34 },
-  section: { gap: 10, padding: 13, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-  sectionTitle: { color: colors.text, fontSize: 13, fontWeight: '800', textTransform: 'uppercase' },
-  label: { color: colors.muted, fontSize: 11, fontWeight: '700', marginTop: 2 },
-  fieldInput: { minHeight: 44, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, color: colors.text, paddingHorizontal: 12, fontSize: 13 },
-  selectField: { flex: 1, gap: 6 },
-  selectInput: { minHeight: 46, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  selectValue: { flex: 1, color: colors.text, fontSize: 13, fontWeight: '800' },
-  statusGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  statusPick: { height: 32, paddingHorizontal: 10, borderRadius: 7, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', backgroundColor: colors.raised },
-  statusPickActive: { borderColor: colors.emerald, backgroundColor: colors.emeraldDark },
-  statusPickText: { color: colors.muted, fontSize: 10, fontWeight: '800' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: { borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, color: colors.muted, paddingHorizontal: 9, paddingVertical: 4, fontSize: 10, fontWeight: '700' },
-  customFieldsBlock: { gap: 9, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
-  subsectionTitle: { color: colors.faint, fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
-  primaryWide: { minHeight: 44, borderRadius: 8, backgroundColor: colors.brand, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12 },
-  primaryText: { color: colors.background, fontSize: 13, fontWeight: '900' },
-  secondaryButton: { minHeight: 39, flex: 1, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  secondaryButtonFull: { minHeight: 42, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10 },
-  secondaryText: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  row: { flexDirection: 'row', gap: 8 },
-  segmentRow: { flexDirection: 'row', gap: 7 },
-  segment: { flex: 1, minHeight: 36, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  segmentActive: { borderColor: colors.emerald, backgroundColor: colors.emeraldDark },
-  segmentText: { color: colors.muted, fontSize: 12, fontWeight: '800' },
-  noteInput: { minHeight: 74, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, color: colors.text, padding: 12, fontSize: 13, textAlignVertical: 'top' },
-  noteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, paddingVertical: 9, borderTopWidth: 1, borderTopColor: colors.border },
-  noteRowOverdue: { backgroundColor: '#2A1111', borderRadius: 7, paddingHorizontal: 8, borderTopWidth: 0 },
-  noteIconButton: { width: 28, minHeight: 28, alignItems: 'center', justifyContent: 'center' },
-  noteText: { color: colors.text, fontSize: 12, lineHeight: 17 },
-  noteMeta: { color: colors.faint, fontSize: 10, marginTop: 2 },
-  muted: { color: colors.muted, fontSize: 12, lineHeight: 17 },
-  analysisBox: { borderRadius: 7, backgroundColor: colors.raised, borderWidth: 1, borderColor: colors.border, padding: 11, gap: 6 },
-  analysisHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  analysisScore: { color: colors.emerald, fontSize: 13, fontWeight: '900' },
-  temperatureChip: { borderRadius: 999, borderWidth: 1, borderColor: '#0B5F4D', backgroundColor: colors.emeraldDark, color: colors.emerald, paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '900' },
-  analysisText: { color: colors.text, fontSize: 12, lineHeight: 17 },
-  analysisMuted: { color: colors.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
-  analysisPart: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8, gap: 4 },
-  analysisPartTitle: { color: colors.faint, fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
-  analysisFoot: { color: colors.faint, fontSize: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8 },
-  callCard: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, overflow: 'hidden' },
-  callSummaryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 10 },
-  callIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
-  callDetails: { gap: 10, borderTopWidth: 1, borderTopColor: colors.border, padding: 10 },
-  audioBox: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: 10 },
-  audioTitle: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  audioTime: { color: colors.muted, fontSize: 10, marginTop: 2, fontVariant: ['tabular-nums'] },
-  audioTrack: { height: 4, borderRadius: 999, backgroundColor: colors.border, marginTop: 7, overflow: 'hidden' },
-  audioProgress: { height: 4, borderRadius: 999, backgroundColor: colors.emerald },
-  callTextBlock: { gap: 5 },
-  callBlockTitle: { color: colors.faint, fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
-  callTitle: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  callText: { color: colors.muted, fontSize: 11, lineHeight: 16, marginTop: 4 },
-  callOutcome: { alignSelf: 'flex-start', marginTop: 6, borderRadius: 999, borderWidth: 1, borderColor: colors.border, color: colors.muted, paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '700' },
-  callTranscript: { color: colors.text, fontSize: 11, lineHeight: 17 },
-  playButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.emerald, alignItems: 'center', justifyContent: 'center' },
-  apptCard: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, padding: 11, gap: 6 },
-  apptHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  apptTitle: { flex: 1, minWidth: 0, color: colors.text, fontSize: 12, fontWeight: '800' },
-  apptStatus: { fontSize: 10, fontWeight: '900' },
-  apptWhen: { color: colors.muted, fontSize: 11, textTransform: 'capitalize' },
-  meetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 7, borderWidth: 1, borderColor: '#0B5F4D', backgroundColor: colors.emeraldDark, paddingHorizontal: 9, paddingVertical: 7, marginTop: 2 },
-  meetLinkText: { flex: 1, minWidth: 0, color: colors.emerald, fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
-  meetAction: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  templateCard: { padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-  templateName: { color: colors.text, fontSize: 13, fontWeight: '800' },
-  templateBody: { color: colors.muted, fontSize: 11, lineHeight: 16, marginTop: 6 },
-  portfolioRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  sheetOverlay: { flex: 1, backgroundColor: '#00000088' },
-  sheet: { backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16 },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  sheetTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
-  sheetClose: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  sheetMonthRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  sheetNav: { width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.raised },
-  sheetMonth: { color: colors.text, fontSize: 14, fontWeight: '900', textTransform: 'capitalize' },
-  sheetCalendar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  sheetWeekday: { width: `${100 / 7 - 1}%`, color: colors.muted, textAlign: 'center', fontSize: 11, fontWeight: '800' },
-  sheetDay: { width: `${100 / 7 - 1}%`, aspectRatio: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.raised },
-  sheetDayActive: { backgroundColor: colors.brand },
-  sheetDayText: { color: colors.text, fontSize: 13, fontWeight: '800' },
-  sheetDayMuted: { color: colors.faint },
-  sheetDayTextActive: { color: colors.background },
-  optionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 4 },
-  optionPill: { minWidth: 74, minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.raised, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  optionPillActive: { borderColor: colors.brandBorder, backgroundColor: colors.brandDark },
-  optionText: { color: colors.text, fontSize: 13, fontWeight: '800' },
-  optionTextActive: { color: colors.brand },
-});
+  screen: {
+    flex: 1,
+  },
+  chatArea: {
+    flex: 1,
+  },
+  simpleTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  iconBoxBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerGuardWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 26,
+  },
+  guardCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  guardTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  guardDesc: {
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 22,
+  },
 
+  // Header 2 Filas
+  headerContainer: {
+    borderBottomWidth: 1,
+  },
+  headerRow1: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  headerLeadName: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  rowCenterGap6: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rowBetweenCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  phoneAndMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  copyPhoneBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  inlineMicroChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  metaAdsInlineWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flexShrink: 1,
+  },
+  metaAdsPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  fbVideoLinkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  headerActionStrip: {
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+    gap: 6,
+    alignItems: 'center',
+  },
+  headerActionBtn: {
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  headerActionText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+
+  // SLA 24h & Meraki Gold Window Bars
+  slaBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderTopWidth: 1,
+  },
+  slaBannerText: {
+    flex: 1,
+    fontSize: 10.5,
+    fontWeight: '700',
+    lineHeight: 14,
+  },
+  slaActionCta: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  slaActionCtaText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  windowStatusBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderTopWidth: 1,
+  },
+  merakiWindowOpenPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  windowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  windowTemplateCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 7,
+  },
+
+  // Lista de mensajes
+  messageListContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  centerSpinner: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  loadOlderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  emptyMessagesWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: 20,
+  },
+
+  // Muro de Privacidad
+  privacyBannerCard: {
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 4,
+  },
+  privacyMiniBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  assignedDividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginVertical: 4,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  assignedDividerPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+
+  // Burbujas
+  systemRow: {
+    alignItems: 'center',
+    marginVertical: 4,
+  },
+  systemPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: '88%',
+  },
+  bubbleOuterWrap: {
+    gap: 2,
+  },
+  alignEnd: {
+    alignSelf: 'flex-end',
+    alignItems: 'flex-end',
+  },
+  alignStart: {
+    alignSelf: 'flex-start',
+    alignItems: 'flex-start',
+  },
+  senderCaption: {
+    fontSize: 10,
+    fontWeight: '600',
+    paddingHorizontal: 4,
+  },
+  bubbleRowWithAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  chatBubbleBox: {
+    borderRadius: 16,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  stickerBubbleBox: {
+    padding: 0,
+  },
+  bubbleBodyText: {
+    fontSize: 13.5,
+    lineHeight: 19,
+  },
+  unavailableMediaPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  reactionFloatingPill: {
+    position: 'absolute',
+    bottom: -9,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    elevation: 2,
+  },
+  quickSmileBtn: {
+    padding: 4,
+    opacity: 0.7,
+  },
+  metaTimestampRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  failureReasonBox: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 2,
+  },
+  routePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 1,
+  },
+
+  // Media en Burbujas
+  stickerMediaSize: {
+    width: 124,
+    height: 124,
+  },
+  imageMediaBox: {
+    width: 216,
+    height: 230,
+    maxWidth: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  zoomHintPill: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inlineVideoBox: {
+    width: 228,
+    height: 270,
+    maxWidth: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+  },
+  documentMediaCard: {
+    minWidth: 210,
+    maxWidth: 256,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 11,
+    borderWidth: 1,
+  },
+  docIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceNoteWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 196,
+    paddingVertical: 2,
+  },
+  voicePlayBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceBarsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    height: 22,
+  },
+  speedChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+  },
+
+  // AdReferralCard
+  adReferralCard: {
+    borderRadius: 13,
+    borderWidth: 1,
+    padding: 11,
+    marginBottom: 4,
+    maxWidth: 340,
+  },
+  adReferralHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 7,
+    borderBottomWidth: 1,
+  },
+  adVideoContainer: {
+    marginTop: 9,
+    height: 220,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+  },
+  adImageContainer: {
+    marginTop: 9,
+    height: 168,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#09090b',
+    position: 'relative',
+  },
+  adPlayOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adPlayCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adFacebookBtn: {
+    marginTop: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+
+  // Compositor & Grabadora de Voz
+  composerNoticeBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+  },
+  composerNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  closedFooterBox: {
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+  },
+  closedFooterBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 11,
+    marginTop: 2,
+  },
+  composerContainer: {
+    borderTopWidth: 1,
+  },
+  composerErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 10,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 9,
+    borderWidth: 1,
+  },
+  pendingAttachmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  uploadTrack: {
+    flex: 1,
+    height: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  pendingThumb: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+  },
+  pendingFileIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  composerInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 7,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  composerSquareBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 9,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 1,
+  },
+  composerTextInput: {
+    flex: 1,
+    minHeight: 38,
+    maxHeight: 120,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingTop: 9,
+    paddingBottom: 9,
+    fontSize: 13.5,
+  },
+  merakiSendCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 1,
+  },
+  channelToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 4,
+  },
+  channelSegmentedWrap: {
+    flexDirection: 'row',
+    padding: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 2,
+  },
+  channelSegmentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+
+  // VoiceRecorder Bar
+  voiceRecorderContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+  },
+  voiceTrashBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceWaveformPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 18,
+  },
+  recordingPulseDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+  },
+  liveWaveformRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 24,
+  },
+  voiceTimerText: {
+    fontSize: 12,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    minWidth: 38,
+    textAlign: 'right',
+  },
+  voiceStopBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewPlayCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewProgressBar: {
+    height: 3,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+
+  // Bottom Sheets (Adjuntos y Portafolio)
+  sheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  bottomSheetCard: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 1,
+  },
+  portfolioSheet: {
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderTopWidth: 1,
+    maxHeight: '80%',
+  },
+  sheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+  },
+  attachActionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  attachIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  portfolioFolderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  portfolioImageThumb: {
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+  },
+
+  // TemplatePickerModal
+  tplHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+  },
+  tplLineBar: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  tplSearchWrap: {
+    padding: 12,
+    borderBottomWidth: 1,
+  },
+  tplSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    height: 40,
+    borderRadius: 11,
+    borderWidth: 1,
+  },
+  tplListItem: {
+    padding: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  tplVarsCard: {
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 11,
+  },
+  tplVarInput: {
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    fontSize: 13,
+  },
+  whatsappPreviewBubble: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 13,
+    gap: 8,
+  },
+  tplPreviewBtnRow: {
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  tplFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  tplSendBtn: {
+    height: 42,
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+
+  // Reaction Picker
+  reactionBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  reactionPopupCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minWidth: 268,
+    maxWidth: 340,
+    gap: 8,
+  },
+  emojiBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+  },
+  emojiOptionBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  copyMsgActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingTop: 9,
+    paddingBottom: 2,
+    borderTopWidth: 1,
+  },
+
+  // Lightbox Fullscreen
+  lightboxRoot: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.96)',
+  },
+  lightboxTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  lightboxActionBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lightboxScrollCenter: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+  },
+  lightboxFullImage: {
+    width: '100%',
+    height: '82%',
+  },
+});

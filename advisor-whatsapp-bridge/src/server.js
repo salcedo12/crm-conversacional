@@ -14,6 +14,12 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const PORT = Number(process.env.PORT || 3333);
+// En la VPS el CRM entra por nginx (HTTPS) → basta escuchar en 127.0.0.1 para no
+// exponer el puerto 3333 a internet. Por defecto se mantiene 0.0.0.0 (local/ngrok).
+const HOST = process.env.HOST || '0.0.0.0';
+// Tiempo máximo por intento al webhook del CRM: sin esto un fetch colgado
+// bloqueaba el reflejo de mensajes de esa sesión indefinidamente.
+const CRM_POST_TIMEOUT_MS = Number(process.env.CRM_POST_TIMEOUT_MS || 60000);
 const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY || '';
 const CRM_WEBHOOK_URL = process.env.CRM_WEBHOOK_URL || '';
 const CRM_WEBHOOK_SECRET = process.env.CRM_WEBHOOK_SECRET || '';
@@ -23,6 +29,15 @@ const SESSION_DIR = process.env.SESSION_DIR || './data/sessions';
 // que 20 MB de binario ≈ 27 MB de payload, que entra con margen. Videos más
 // grandes necesitarían subida por URL (pendiente).
 const MAX_MIRROR_MEDIA_BYTES = Number(process.env.MAX_MIRROR_MEDIA_MB || 20) * 1024 * 1024;
+// Pausa mínima entre envíos de una misma sesión (+ jitter aleatorio). Ráfagas de
+// envíos desde un cliente no oficial es lo que más dispara bloqueos de WhatsApp.
+const SEND_MIN_GAP_MS = Number(process.env.SEND_MIN_GAP_MS || 1500);
+const SEND_JITTER_MS = Number(process.env.SEND_JITTER_MS || 1500);
+// Reconexión con backoff exponencial: 2s, 4s, 8s ... hasta 5 min.
+const RECONNECT_BASE_MS = 2000;
+const RECONNECT_MAX_MS = 5 * 60 * 1000;
+// Mensajes recientes por sesión para responder reintentos de cifrado (getMessage).
+const MESSAGE_CACHE_SIZE = 300;
 
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const app = express();
@@ -64,6 +79,10 @@ function isChatJid(jid) {
   return String(jid || '').endsWith('@s.whatsapp.net') || String(jid || '').endsWith('@lid');
 }
 
+function isPnJid(jid) {
+  return String(jid || '').endsWith('@s.whatsapp.net');
+}
+
 function phoneToJid(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
   if (!digits) return '';
@@ -102,34 +121,134 @@ async function saveLidMaps(companyId, advisorId, record) {
   }, null, 2));
 }
 
+// Registra un par LID↔teléfono en el mapa propio (persistido en disco). Ignora
+// pares inválidos o que apunten al número del propio asesor.
+function rememberLid(companyId, advisorId, record, lid, phone) {
+  if (!String(lid || '').endsWith('@lid') || !phone || isOwnNumber(phone, record)) return false;
+  if (record.lidPhoneMap.get(lid) === phone) return false;
+  record.lidPhoneMap.set(lid, phone);
+  record.phoneLidMap.set(phone, lid);
+  return true;
+}
+
+function persistLidMaps(companyId, advisorId, record) {
+  saveLidMaps(companyId, advisorId, record).catch((err) =>
+    log.warn({ err, companyId, advisorId }, 'No se pudo guardar mapa LID'));
+}
+
 // WhatsApp migró los chats 1-a-1 a IDs de privacidad `@lid` que NO llevan el
-// número. Los contactos de Baileys sí traen ambos (`id` = número @s.whatsapp.net
-// y `lid` = @lid), así que aprendemos ese mapeo aquí para poder resolver el
-// teléfono de mensajes `@lid` — sobre todo los SALIENTES (fromMe), cuya key no
-// incluye `senderPn`. Sin esto se perdían (log "Mensaje sin telefono asociado").
+// número. Los contactos traen ambos (v7: `id`/`lid` + `phoneNumber`; v6: `id` =
+// número y `lid`), así que aprendemos el mapeo aquí además del almacén nativo de
+// Baileys, para resolver el teléfono de mensajes `@lid` (sobre todo SALIENTES).
 function learnLidFromContacts(companyId, advisorId, record, contacts) {
   let changed = false;
   for (const contact of contacts || []) {
-    const lid = contact?.lid ? String(contact.lid) : '';
-    const pnJid = contact?.id ? String(contact.id) : '';
-    if (!lid.endsWith('@lid') || !pnJid.endsWith('@s.whatsapp.net')) continue;
-    const phone = jidToPhone(pnJid);
-    if (!phone) continue;
-    if (record.lidPhoneMap?.get(lid) !== phone) {
-      record.lidPhoneMap?.set(lid, phone);
-      record.phoneLidMap?.set(phone, lid);
-      changed = true;
+    const ids = [contact?.id, contact?.lid, contact?.phoneNumber].map((v) => String(v || ''));
+    const lid = ids.find((v) => v.endsWith('@lid'));
+    const pnJid = ids.find(isPnJid);
+    if (!lid || !pnJid) continue;
+    if (rememberLid(companyId, advisorId, record, lid, jidToPhone(pnJid))) changed = true;
+  }
+  if (changed) persistLidMaps(companyId, advisorId, record);
+}
+
+// Resuelve el teléfono del CLIENTE de un mensaje. Orden:
+// 1) remoteJid ya es un número (@s.whatsapp.net).
+// 2) `remoteJidAlt` (Baileys v7): dirección alterna del chat, vale para entrantes
+//    y salientes.
+// 3) Almacén LID nativo de Baileys (signalRepository.lidMapping).
+// 4) `senderPn` (solo entrantes: en salientes es el número del asesor).
+// 5) Mapa propio persistido (contactos y mensajes previos).
+async function resolveCustomerPhone(companyId, advisorId, record, message) {
+  const key = message.key || {};
+  const remoteJid = key.remoteJid || '';
+  const fromMe = !!key.fromMe;
+
+  if (!remoteJid.endsWith('@lid')) return jidToPhone(remoteJid);
+
+  const candidates = [];
+  if (isPnJid(key.remoteJidAlt)) candidates.push(jidToPhone(key.remoteJidAlt));
+  try {
+    const pn = await record.sock?.signalRepository?.lidMapping?.getPNForLID(remoteJid);
+    if (isPnJid(pn)) candidates.push(jidToPhone(pn));
+  } catch (err) {
+    log.debug({ err, remoteJid }, 'lidMapping.getPNForLID fallo');
+  }
+  if (!fromMe && key.senderPn) candidates.push(jidToPhone(key.senderPn));
+
+  const resolved = candidates.find((phone) => phone && !isOwnNumber(phone, record));
+  if (resolved) {
+    if (rememberLid(companyId, advisorId, record, remoteJid, resolved)) persistLidMaps(companyId, advisorId, record);
+    return resolved;
+  }
+
+  const mapped = record.lidPhoneMap.get(remoteJid) || '';
+  if (mapped && isOwnNumber(mapped, record)) {
+    // Sanear entradas envenenadas por un bug anterior (mapeadas al número propio).
+    record.lidPhoneMap.delete(remoteJid);
+    persistLidMaps(companyId, advisorId, record);
+    return '';
+  }
+  return mapped;
+}
+
+function unwrapMessage(content) {
+  let cur = content;
+  while (cur) {
+    if (cur.ephemeralMessage?.message) {
+      cur = cur.ephemeralMessage.message;
+    } else if (cur.viewOnceMessage?.message) {
+      cur = cur.viewOnceMessage.message;
+    } else if (cur.viewOnceMessageV2?.message) {
+      cur = cur.viewOnceMessageV2.message;
+    } else if (cur.viewOnceMessageV2Extension?.message) {
+      cur = cur.viewOnceMessageV2Extension.message;
+    } else if (cur.documentWithCaptionMessage?.message) {
+      cur = cur.documentWithCaptionMessage.message;
+    } else {
+      break;
     }
   }
-  if (changed) {
-    saveLidMaps(companyId, advisorId, record).catch((err) =>
-      log.warn({ err, companyId, advisorId }, 'No se pudo guardar mapa LID desde contactos'));
-  }
+  return cur;
 }
 
 function extractText(message) {
-  const content = message?.message;
+  const content = unwrapMessage(message?.message);
   if (!content) return '';
+
+  if (content.reactionMessage) {
+    const emoji = content.reactionMessage.text?.trim();
+    return emoji ? `Reaccionó con ${emoji}` : 'Quitó su reacción';
+  }
+
+  if (content.locationMessage) {
+    const loc = content.locationMessage;
+    const name = loc.name || loc.address;
+    const coords = `${loc.degreesLatitude}, ${loc.degreesLongitude}`;
+    return `📍 Ubicación: ${name ? `${name} (${coords})` : coords}`;
+  }
+
+  if (content.liveLocationMessage) {
+    return '📍 Ubicación en tiempo real compartida';
+  }
+
+  if (content.contactMessage) {
+    return `👤 Contacto compartido: ${content.contactMessage.displayName || 'Contacto'}`;
+  }
+
+  if (content.contactsArrayMessage) {
+    return `👤 Contactos compartidos (${content.contactsArrayMessage.contacts?.length || 0})`;
+  }
+
+  if (content.pollCreationMessage || content.pollCreationMessageV2 || content.pollCreationMessageV3) {
+    const poll = content.pollCreationMessage || content.pollCreationMessageV2 || content.pollCreationMessageV3;
+    return `📊 Encuesta: ${poll.name || 'Encuesta'}`;
+  }
+
+  if (content.protocolMessage?.type === 0 || content.protocolMessage?.type === 'REVOKE') {
+    return '🚫 Mensaje eliminado';
+  }
+
   return (
     content.conversation ||
     content.extendedTextMessage?.text ||
@@ -143,11 +262,12 @@ function extractText(message) {
 }
 
 function mediaKindFromContent(message) {
-  const content = message?.message;
+  const content = unwrapMessage(message?.message);
   if (!content) return {};
   if (content.imageMessage) return { mediaType: content.imageMessage.mimetype || 'image/jpeg', mediaKind: 'image', node: content.imageMessage, downloadType: 'image' };
   if (content.videoMessage) return { mediaType: content.videoMessage.mimetype || 'video/mp4', mediaKind: 'video', node: content.videoMessage, downloadType: 'video' };
   if (content.audioMessage) return { mediaType: content.audioMessage.mimetype || 'audio/ogg', mediaKind: 'audio', node: content.audioMessage, downloadType: 'audio' };
+  if (content.ptvMessage) return { mediaType: content.ptvMessage.mimetype || 'video/mp4', mediaKind: 'video', node: content.ptvMessage, downloadType: 'video' };
   if (content.stickerMessage) return { mediaType: content.stickerMessage.mimetype || 'image/webp', mediaKind: 'sticker', node: content.stickerMessage, downloadType: 'sticker' };
   if (content.documentMessage) {
     return {
@@ -228,6 +348,7 @@ async function postToCrm(payload) {
           'X-Advisor-Whatsapp-Secret': CRM_WEBHOOK_SECRET,
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(CRM_POST_TIMEOUT_MS),
       });
 
       if (response.ok) return;
@@ -253,6 +374,15 @@ async function postToCrm(payload) {
   throw lastError || new Error('CRM webhook fallo tras reintentos');
 }
 
+function cacheMessage(record, message) {
+  const id = message?.key?.id;
+  if (!id || !message.message) return;
+  record.messageCache.set(id, message.message);
+  if (record.messageCache.size > MESSAGE_CACHE_SIZE) {
+    record.messageCache.delete(record.messageCache.keys().next().value);
+  }
+}
+
 async function handleMessages(companyId, advisorId, record, event) {
   if (event.type && event.type !== 'notify') {
     log.debug({ companyId, advisorId, type: event.type, count: event.messages?.length || 0 }, 'Lote de mensajes ignorado');
@@ -263,7 +393,7 @@ async function handleMessages(companyId, advisorId, record, event) {
     const remoteJid = message.key?.remoteJid || '';
     if (remoteJid === 'status@broadcast') continue;
     if (!isChatJid(remoteJid)) {
-      log.info({ companyId, advisorId, remoteJid, key: message.key }, 'Mensaje ignorado por JID no soportado');
+      log.debug({ companyId, advisorId, remoteJid }, 'Mensaje ignorado por JID no soportado');
       continue;
     }
 
@@ -273,34 +403,9 @@ async function handleMessages(companyId, advisorId, record, event) {
     }
 
     const fromMe = !!message.key?.fromMe;
-    let phone = '';
-    if (remoteJid.endsWith('@lid')) {
-      // ENTRANTE: el `senderPn` es el teléfono del CLIENTE — lo aprendemos.
-      // SALIENTE (fromMe): el `senderPn` es el del PROPIO asesor, así que NO se
-      // usa; el destinatario (cliente) se resuelve por el mapa LID↔teléfono
-      // (poblado desde contactos y entrantes previos).
-      if (!fromMe) {
-        const senderPhone = jidToPhone(message.key?.senderPn);
-        if (senderPhone && !isOwnNumber(senderPhone, record)) {
-          record.lidPhoneMap?.set(remoteJid, senderPhone);
-          record.phoneLidMap?.set(senderPhone, remoteJid);
-          saveLidMaps(companyId, advisorId, record).catch((err) => log.warn({ err, companyId, advisorId }, 'No se pudo guardar mapa LID'));
-          phone = senderPhone;
-        }
-      }
-      if (!phone) {
-        const mapped = record.lidPhoneMap?.get(remoteJid) || '';
-        // Sanear entradas envenenadas por el bug anterior (mapeadas al número propio).
-        if (mapped && isOwnNumber(mapped, record)) {
-          record.lidPhoneMap?.delete(remoteJid);
-          saveLidMaps(companyId, advisorId, record).catch(() => undefined);
-        } else {
-          phone = mapped;
-        }
-      }
-    } else {
-      phone = jidToPhone(remoteJid);
-    }
+    if (fromMe) cacheMessage(record, message);
+
+    const phone = await resolveCustomerPhone(companyId, advisorId, record, message);
 
     // Nunca reflejar contra el número PROPIO del asesor (evita leads fantasma).
     if (phone && isOwnNumber(phone, record)) {
@@ -316,6 +421,7 @@ async function handleMessages(companyId, advisorId, record, event) {
     const media = await extractMedia(message);
     const externalMessageId = message.key?.id;
     if (!externalMessageId) continue;
+    const finalContent = content || (media?.mediaType ? '' : '[Reacción o mensaje no compatible]');
 
     try {
       await postToCrm({
@@ -323,8 +429,8 @@ async function handleMessages(companyId, advisorId, record, event) {
         advisorId,
         phone,
         advisorPhone: record.phone || undefined,
-        direction: message.key?.fromMe ? 'outbound' : 'inbound',
-        content,
+        direction: fromMe ? 'outbound' : 'inbound',
+        content: finalContent,
         externalMessageId,
         ...(message.pushName ? { customerName: message.pushName } : {}),
         createdAt: Number(message.messageTimestamp || 0) * 1000 || Date.now(),
@@ -335,7 +441,7 @@ async function handleMessages(companyId, advisorId, record, event) {
         advisorId,
         phone,
         remoteJid,
-        direction: message.key?.fromMe ? 'outbound' : 'inbound',
+        direction: fromMe ? 'outbound' : 'inbound',
         externalMessageId,
       }, 'Mensaje reflejado en CRM');
     } catch (err) {
@@ -388,18 +494,39 @@ async function handleMessageStatusUpdates(companyId, advisorId, record, updates)
   }
 }
 
-async function startSession(companyId, advisorId) {
-  const key = sessionKey(companyId, advisorId);
-  const existing = sessions.get(key);
-  if (existing?.sock) return existing;
+function notifyCrmStatus(companyId, advisorId, record) {
+  postToCrm({
+    eventType: 'status',
+    companyId,
+    advisorId,
+    status: record.status,
+    advisorPhone: record.phone || undefined,
+    error: record.error || undefined,
+    createdAt: Date.now(),
+  }).catch((err) => log.warn({ err, companyId, advisorId }, 'No se pudo notificar estado al CRM'));
+}
 
-  await mkdir(sessionPath(companyId, advisorId), { recursive: true });
-  const lidMaps = await loadLidMaps(companyId, advisorId);
-  const { state, saveCreds } = await useMultiFileAuthState(sessionPath(companyId, advisorId));
-  const { version } = await fetchLatestBaileysVersion();
+// Cierres DEFINITIVOS: reintentar no sirve (y con 403 insistir empeora el bloqueo).
+// Se borran las credenciales para que el siguiente QR arranque limpio.
+const TERMINAL_CLOSES = {
+  [DisconnectReason.loggedOut]: {
+    status: 'disconnected',
+    error: 'WhatsApp cerro la sesion vinculada. Debe volver a escanear el QR.',
+  },
+  [DisconnectReason.forbidden]: {
+    status: 'error',
+    error: 'WhatsApp rechazo esta cuenta (403): posible restriccion o bloqueo del numero. Revisa el WhatsApp del asesor antes de reconectar.',
+  },
+  [DisconnectReason.multideviceMismatch]: {
+    status: 'disconnected',
+    error: 'Sesion incompatible con WhatsApp multidispositivo. Debe volver a escanear el QR.',
+  },
+};
 
-  const record = {
+function newRecord(lidMaps) {
+  return {
     status: 'qr_pending',
+    error: '',
     qrCode: '',
     qrCodeDataUrl: '',
     phone: '',
@@ -408,87 +535,215 @@ async function startSession(companyId, advisorId) {
     expiresAt: '',
     lidPhoneMap: lidMaps.lidPhoneMap,
     phoneLidMap: lidMaps.phoneLidMap,
+    messageCache: new Map(),
+    sendChain: Promise.resolve(),
+    lastSendAt: 0,
+    reconnectAttempts: 0,
+    reconnectTimer: null,
+    starting: null,
     sock: null,
   };
-  sessions.set(key, record);
+}
 
-  const sock = makeWASocket({
-    auth: state,
-    version,
-    browser: Browsers.macOS('Meraki CRM'),
-    printQRInTerminal: false,
-    logger: pino({ level: 'silent' }),
+function releaseSocket(record) {
+  const sock = record.sock;
+  record.sock = null;
+  if (!sock) return;
+  // Sin esto cada reconexión dejaba vivo el socket viejo con sus listeners
+  // (fuga de memoria: el proceso llegaba a ~1.6 GB).
+  try { sock.ev.removeAllListeners(); } catch { /* noop */ }
+  try { sock.end?.(undefined); } catch { /* noop */ }
+}
+
+async function startSession(companyId, advisorId) {
+  const key = sessionKey(companyId, advisorId);
+  let record = sessions.get(key);
+  if (record?.sock) return record;
+  if (record?.starting) return record.starting;
+
+  if (!record) {
+    await mkdir(sessionPath(companyId, advisorId), { recursive: true });
+    record = newRecord(await loadLidMaps(companyId, advisorId));
+    sessions.set(key, record);
+  }
+  if (record.reconnectTimer) {
+    clearTimeout(record.reconnectTimer);
+    record.reconnectTimer = null;
+  }
+
+  record.starting = (async () => {
+    await mkdir(sessionPath(companyId, advisorId), { recursive: true });
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath(companyId, advisorId));
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+    const wasRegistered = !!state.creds?.me?.id;
+    if (!wasRegistered) record.status = 'qr_pending';
+    record.error = '';
+
+    const sock = makeWASocket({
+      auth: state,
+      ...(version ? { version } : {}),
+      browser: Browsers.macOS('Meraki CRM'),
+      logger: pino({ level: 'silent' }),
+      // No marcar "en línea" al conectar: el celular del asesor sigue recibiendo
+      // notificaciones y la sesión se parece menos a un bot.
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
+      // Responder reintentos de cifrado con el mensaje original (evita el
+      // "Esperando este mensaje" del lado del cliente).
+      getMessage: async (msgKey) => record.messageCache.get(msgKey.id) || undefined,
+    });
+    record.sock = sock;
+
+    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('messages.upsert', (event) => {
+      handleMessages(companyId, advisorId, record, event)
+        .catch((err) => log.error({ err, companyId, advisorId }, 'Error procesando mensajes'));
+    });
+    // Acuses de entrega (enviado → entregado → leído / falló) de mensajes salientes.
+    sock.ev.on('messages.update', (updates) => handleMessageStatusUpdates(companyId, advisorId, record, updates));
+    // Aprender el mapeo LID↔teléfono para resolver los chats `@lid`.
+    sock.ev.on('lid-mapping.update', ({ lid, pn }) => {
+      if (rememberLid(companyId, advisorId, record, lid, jidToPhone(pn))) persistLidMaps(companyId, advisorId, record);
+    });
+    sock.ev.on('contacts.upsert', (contacts) => learnLidFromContacts(companyId, advisorId, record, contacts));
+    sock.ev.on('contacts.update', (contacts) => learnLidFromContacts(companyId, advisorId, record, contacts));
+    sock.ev.on('messaging-history.set', ({ contacts }) => learnLidFromContacts(companyId, advisorId, record, contacts));
+    sock.ev.on('connection.update', (update) => {
+      handleConnectionUpdate(companyId, advisorId, record, sock, update)
+        .catch((err) => log.error({ err, companyId, advisorId }, 'Error en connection.update'));
+    });
+
+    return record;
+  })();
+
+  try {
+    return await record.starting;
+  } finally {
+    record.starting = null;
+  }
+}
+
+function scheduleReconnect(companyId, advisorId, record, immediate = false) {
+  if (record.reconnectTimer) return;
+  const delay = immediate
+    ? 500
+    : Math.min(RECONNECT_BASE_MS * 2 ** record.reconnectAttempts, RECONNECT_MAX_MS);
+  record.reconnectAttempts += 1;
+  log.info({ companyId, advisorId, delay, attempt: record.reconnectAttempts }, 'Reconexion programada');
+  record.reconnectTimer = setTimeout(() => {
+    record.reconnectTimer = null;
+    startSession(companyId, advisorId).catch((err) => {
+      log.error({ err, companyId, advisorId }, 'Reconnect fallido');
+      scheduleReconnect(companyId, advisorId, record);
+    });
+  }, delay);
+}
+
+async function handleConnectionUpdate(companyId, advisorId, record, sock, update) {
+  // Eventos tardíos de un socket ya reemplazado: ignorar.
+  if (record.sock !== sock) return;
+
+  if (update.qr) {
+    record.status = 'qr_pending';
+    record.qrCode = update.qr;
+    record.qrCodeDataUrl = await QRCode.toDataURL(update.qr, { margin: 1, width: 320 });
+    record.expiresAt = new Date(Date.now() + 45_000).toISOString();
+    log.info({ companyId, advisorId }, 'QR generado');
+  }
+
+  if (update.connection === 'open') {
+    record.status = 'connected';
+    record.error = '';
+    record.qrCode = '';
+    record.qrCodeDataUrl = '';
+    record.reconnectAttempts = 0;
+    record.phone = jidToPhone(sock.user?.id);
+    record.displayName = sock.user?.name || '';
+    record.lastSeenAt = new Date().toISOString();
+    // Sanear el mapa LID: quitar entradas envenenadas por un bug anterior que
+    // mapeaban chats de clientes al número PROPIO del asesor.
+    let poisoned = 0;
+    for (const [lid, ph] of record.lidPhoneMap) {
+      if (isOwnNumber(ph, record)) {
+        record.lidPhoneMap.delete(lid);
+        record.phoneLidMap.delete(normalizePhone(ph));
+        poisoned += 1;
+      }
+    }
+    if (poisoned > 0) {
+      persistLidMaps(companyId, advisorId, record);
+      log.info({ companyId, advisorId, poisoned }, 'Mapa LID saneado (entradas al numero propio)');
+    }
+    log.info({ companyId, advisorId, phone: record.phone }, 'WhatsApp conectado');
+    notifyCrmStatus(companyId, advisorId, record);
+  }
+
+  if (update.connection !== 'close') return;
+
+  const statusCode = new Boom(update.lastDisconnect?.error).output.statusCode;
+  const wasConnected = record.status === 'connected';
+  const neverLinked = !sock.authState?.creds?.me?.id;
+  releaseSocket(record);
+  record.qrCode = '';
+  record.qrCodeDataUrl = '';
+  log.warn({ companyId, advisorId, statusCode, wasConnected }, 'WhatsApp desconectado');
+
+  const terminal = TERMINAL_CLOSES[statusCode];
+  if (terminal) {
+    record.status = terminal.status;
+    record.error = terminal.error;
+    record.reconnectAttempts = 0;
+    await rm(sessionPath(companyId, advisorId), { recursive: true, force: true }).catch(() => undefined);
+    log.warn({ companyId, advisorId, statusCode }, 'Sesion cerrada definitivamente; se requiere QR nuevo');
+    notifyCrmStatus(companyId, advisorId, record);
+    return;
+  }
+
+  if (statusCode === DisconnectReason.connectionReplaced) {
+    record.status = 'stale';
+    record.error = 'La sesion se abrio en otro lugar. Genera el QR de nuevo si quieres usarla aqui.';
+    notifyCrmStatus(companyId, advisorId, record);
+    return;
+  }
+
+  // QR mostrado y nadie lo escaneó: parar. Antes se regeneraba para siempre
+  // (un QR cada 20 s, día y noche). El asesor pide uno nuevo desde el CRM.
+  if (neverLinked && statusCode !== DisconnectReason.restartRequired) {
+    record.status = 'disconnected';
+    record.error = 'El QR expiro sin escanearse. Genera uno nuevo.';
+    record.reconnectAttempts = 0;
+    await rm(sessionPath(companyId, advisorId), { recursive: true, force: true }).catch(() => undefined);
+    log.info({ companyId, advisorId, statusCode }, 'QR expirado sin escanear; sesion detenida');
+    return;
+  }
+
+  // 515 llega justo después de escanear el QR: hay que reconectar ya.
+  if (statusCode === DisconnectReason.restartRequired) {
+    scheduleReconnect(companyId, advisorId, record, true);
+    return;
+  }
+
+  record.status = 'stale';
+  record.error = 'WhatsApp se desconecto. El puente intentara reconectar.';
+  // Avisar solo en la transición conectado → caído, no en cada reintento.
+  if (wasConnected) notifyCrmStatus(companyId, advisorId, record);
+  scheduleReconnect(companyId, advisorId, record);
+}
+
+// Serializa los envíos de una sesión y los espacia (gap + jitter).
+function enqueueSend(record, task) {
+  const run = record.sendChain.then(async () => {
+    const gap = SEND_MIN_GAP_MS + Math.floor(Math.random() * SEND_JITTER_MS);
+    const wait = record.lastSendAt + gap - Date.now();
+    if (wait > 0) await sleep(wait);
+    try {
+      return await task();
+    } finally {
+      record.lastSendAt = Date.now();
+    }
   });
-  record.sock = sock;
-
-  sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('messages.upsert', (event) => handleMessages(companyId, advisorId, record, event));
-  // Acuses de entrega (enviado → entregado → leído / falló) de mensajes salientes.
-  sock.ev.on('messages.update', (updates) => handleMessageStatusUpdates(companyId, advisorId, record, updates));
-  // Aprender el mapeo LID↔teléfono desde los contactos (sincronización inicial y
-  // actualizaciones) para resolver los chats `@lid`.
-  sock.ev.on('contacts.upsert', (contacts) => learnLidFromContacts(companyId, advisorId, record, contacts));
-  sock.ev.on('contacts.update', (contacts) => learnLidFromContacts(companyId, advisorId, record, contacts));
-  sock.ev.on('messaging-history.set', ({ contacts }) => learnLidFromContacts(companyId, advisorId, record, contacts));
-  sock.ev.on('connection.update', async (update) => {
-    if (update.qr) {
-      record.status = 'qr_pending';
-      record.qrCode = update.qr;
-      record.qrCodeDataUrl = await QRCode.toDataURL(update.qr, { margin: 1, width: 320 });
-      record.expiresAt = new Date(Date.now() + 45_000).toISOString();
-      log.info({ companyId, advisorId }, 'QR generado');
-    }
-
-    if (update.connection === 'open') {
-      record.status = 'connected';
-      record.qrCode = '';
-      record.qrCodeDataUrl = '';
-      record.phone = jidToPhone(sock.user?.id);
-      record.displayName = sock.user?.name || '';
-      record.lastSeenAt = new Date().toISOString();
-      // Sanear el mapa LID: quitar entradas envenenadas por el bug anterior que
-      // mapeaban chats de clientes al número PROPIO del asesor (se conocía solo
-      // hasta ahora). Sin esto, los entrantes reales de esos clientes seguirían
-      // resolviéndose mal.
-      let poisoned = 0;
-      for (const [lid, ph] of record.lidPhoneMap || []) {
-        if (isOwnNumber(ph, record)) {
-          record.lidPhoneMap.delete(lid);
-          record.phoneLidMap?.delete(normalizePhone(ph));
-          poisoned += 1;
-        }
-      }
-      if (poisoned > 0) {
-        saveLidMaps(companyId, advisorId, record).catch(() => undefined);
-        log.info({ companyId, advisorId, poisoned }, 'Mapa LID saneado (entradas al numero propio)');
-      }
-      log.info({ companyId, advisorId, phone: record.phone }, 'WhatsApp conectado');
-    }
-
-    if (update.connection === 'close') {
-      const statusCode = new Boom(update.lastDisconnect?.error).output.statusCode;
-      record.sock = null;
-      record.status = statusCode === DisconnectReason.loggedOut ? 'disconnected' : 'stale';
-      log.warn({ companyId, advisorId, statusCode }, 'WhatsApp desconectado');
-      postToCrm({
-        eventType: 'status',
-        companyId,
-        advisorId,
-        status: record.status,
-        advisorPhone: record.phone || undefined,
-        error: statusCode === DisconnectReason.loggedOut
-          ? 'WhatsApp cerro la sesion. Debe volver a escanear QR.'
-          : 'WhatsApp se desconecto. El puente intentara reconectar.',
-        createdAt: Date.now(),
-      }).catch((err) => log.warn({ err, companyId, advisorId }, 'No se pudo notificar desconexion al CRM'));
-      if (statusCode !== DisconnectReason.loggedOut && statusCode !== 401) {
-        sessions.delete(key);
-        setTimeout(() => startSession(companyId, advisorId).catch((err) => log.error({ err }, 'Reconnect fallido')), 2000);
-      }
-    }
-  });
-
-  return record;
+  record.sendChain = run.catch(() => undefined);
+  return run;
 }
 
 function publicSession(record) {
@@ -500,11 +755,19 @@ function publicSession(record) {
     displayName: record.displayName || undefined,
     lastSeenAt: record.lastSeenAt || undefined,
     expiresAt: record.expiresAt || undefined,
+    error: record.error || undefined,
   };
 }
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, sessions: sessions.size });
+  const byStatus = {};
+  for (const record of sessions.values()) byStatus[record.status] = (byStatus[record.status] || 0) + 1;
+  res.json({
+    ok: true,
+    sessions: sessions.size,
+    byStatus,
+    rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+  });
 });
 
 app.post('/advisor-whatsapp/session/qr', requireBridgeKey, async (req, res) => {
@@ -541,11 +804,23 @@ app.post('/advisor-whatsapp/session/status', requireBridgeKey, async (req, res) 
 
 app.post('/advisor-whatsapp/session/disconnect', requireBridgeKey, async (req, res) => {
   const { companyId, advisorId } = req.body || {};
+  if (!companyId || !advisorId) {
+    res.status(400).json({ message: 'companyId y advisorId son requeridos' });
+    return;
+  }
   const key = sessionKey(companyId, advisorId);
   const record = sessions.get(key);
-  if (record?.sock) {
-    await record.sock.logout().catch(() => undefined);
-    record.sock.end?.(undefined);
+  if (record) {
+    if (record.reconnectTimer) clearTimeout(record.reconnectTimer);
+    // Guardar la referencia: logout() dispara 'close' y el handler deja
+    // record.sock en null (antes eso tumbaba el proceso con "reading 'end'").
+    const sock = record.sock;
+    if (sock) {
+      try { sock.ev.removeAllListeners(); } catch { /* noop */ }
+      await sock.logout().catch(() => undefined);
+      try { sock.end?.(undefined); } catch { /* noop */ }
+    }
+    record.sock = null;
   }
   sessions.delete(key);
   await rm(sessionPath(companyId, advisorId), { recursive: true, force: true });
@@ -559,38 +834,43 @@ app.post('/advisor-whatsapp/message/send', requireBridgeKey, async (req, res) =>
     return;
   }
 
-  const key = sessionKey(companyId, advisorId);
-  const record = sessions.get(key) || await startSession(companyId, advisorId);
-  if (record.status !== 'connected' || !record.sock) {
+  const record = sessions.get(sessionKey(companyId, advisorId));
+  if (!record || record.status !== 'connected' || !record.sock) {
     res.status(409).json({ message: 'El WhatsApp del asesor no esta conectado.' });
     return;
   }
 
   const normalizedTo = normalizePhone(to);
-  const jid = record.phoneLidMap?.get(normalizedTo) || phoneToJid(to);
+  const jid = record.phoneLidMap.get(normalizedTo) || phoneToJid(to);
   if (!jid) {
     res.status(400).json({ message: 'Numero destino invalido.' });
     return;
   }
 
+  let payload;
+  if (mediaUrl && mediaType?.startsWith('image/')) {
+    payload = { image: { url: mediaUrl }, caption: content || undefined };
+  } else if (mediaUrl && mediaType?.startsWith('video/')) {
+    payload = { video: { url: mediaUrl }, caption: content || undefined };
+  } else if (mediaUrl && mediaType?.startsWith('audio/')) {
+    payload = { audio: { url: mediaUrl }, mimetype: mediaType };
+  } else if (mediaUrl) {
+    payload = {
+      document: { url: mediaUrl },
+      mimetype: mediaType || 'application/octet-stream',
+      fileName: fileName || 'archivo',
+      caption: content || undefined,
+    };
+  } else {
+    payload = { text: content };
+  }
+
   try {
-    let sent;
-    if (mediaUrl && mediaType?.startsWith('image/')) {
-      sent = await record.sock.sendMessage(jid, { image: { url: mediaUrl }, caption: content || undefined });
-    } else if (mediaUrl && mediaType?.startsWith('video/')) {
-      sent = await record.sock.sendMessage(jid, { video: { url: mediaUrl }, caption: content || undefined });
-    } else if (mediaUrl && mediaType?.startsWith('audio/')) {
-      sent = await record.sock.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: mediaType });
-    } else if (mediaUrl) {
-      sent = await record.sock.sendMessage(jid, {
-        document: { url: mediaUrl },
-        mimetype: mediaType || 'application/octet-stream',
-        fileName: fileName || 'archivo',
-        caption: content || undefined,
-      });
-    } else {
-      sent = await record.sock.sendMessage(jid, { text: content });
-    }
+    const sent = await enqueueSend(record, () => {
+      if (!record.sock) throw new Error('El WhatsApp del asesor se desconecto.');
+      return record.sock.sendMessage(jid, payload);
+    });
+    if (sent) cacheMessage(record, sent);
 
     log.info({ companyId, advisorId, to, jid, phone: record.phone, externalMessageId: sent?.key?.id }, 'Mensaje enviado desde WhatsApp asesor');
     res.json({ id: sent?.key?.id, status: 'sent', phone: record.phone || undefined });
@@ -600,11 +880,13 @@ app.post('/advisor-whatsapp/message/send', requireBridgeKey, async (req, res) =>
   }
 });
 
-app.listen(PORT, () => {
-  log.info({ port: PORT }, 'Puente WhatsApp de asesor escuchando');
+const server = app.listen(PORT, HOST, () => {
+  log.info({ port: PORT, host: HOST }, 'Puente WhatsApp de asesor escuchando');
   restoreSessions().catch((err) => log.error({ err }, 'No se pudieron restaurar sesiones'));
 });
 
+// Solo se restauran sesiones ya vinculadas (creds registradas). Carpetas vacías o
+// de QR nunca escaneados se ignoran: antes reabrían QRs infinitos en cada reinicio.
 async function restoreSessions() {
   await mkdir(SESSION_DIR, { recursive: true });
   const dirs = await readdir(SESSION_DIR, { withFileTypes: true });
@@ -613,8 +895,45 @@ async function restoreSessions() {
     if (dir.name.includes('.bak')) continue;
     const [companyId, advisorId] = dir.name.split('__');
     if (!companyId || !advisorId) continue;
+
+    let registered = false;
+    try {
+      const creds = JSON.parse(await readFile(path.join(SESSION_DIR, dir.name, 'creds.json'), 'utf8'));
+      registered = !!creds?.registered || !!creds?.me?.id;
+    } catch { /* sin creds */ }
+    if (!registered) {
+      log.info({ companyId, advisorId }, 'Sesion sin vincular; no se restaura');
+      continue;
+    }
+
     startSession(companyId, advisorId)
       .then(() => log.info({ companyId, advisorId }, 'Sesion restaurada'))
       .catch((err) => log.error({ err, companyId, advisorId }, 'No se pudo restaurar sesion'));
   }
 }
+
+// Apagado limpio (pm2 restart/stop): cerrar sockets SIN logout para conservar
+// las sesiones vinculadas.
+function shutdown(signal) {
+  log.info({ signal }, 'Apagando puente');
+  for (const record of sessions.values()) {
+    if (record.reconnectTimer) clearTimeout(record.reconnectTimer);
+    releaseSocket(record);
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Una promesa rechazada sin capturar (p. ej. dentro de un evento de Baileys) no
+// debe tumbar el proceso y con él TODAS las sesiones: se registra y se sigue.
+process.on('unhandledRejection', (reason) => {
+  log.error({ err: reason }, 'Promesa rechazada sin capturar');
+});
+// Una excepción síncrona deja el proceso en estado incierto: registrar y salir
+// para que pm2 lo reinicie limpio (las sesiones vinculadas se restauran solas).
+process.on('uncaughtException', (err) => {
+  log.fatal({ err }, 'Excepcion no capturada; reiniciando');
+  setTimeout(() => process.exit(1), 500).unref();
+});

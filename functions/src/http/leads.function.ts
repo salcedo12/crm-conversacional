@@ -4,10 +4,10 @@ import { leadsRepository } from '../modules/leads/leads.repository';
 import { requireAuth, assertCompany, ADMIN_ROLES } from '../lib/authContext';
 
 const LeadStatusSchema = z.enum(['new', 'active', 'qualified', 'scheduled', 'lost', 'closed']);
-const LeadSourceSchema = z.enum(['whatsapp', 'manual', 'web', 'facebook', 'instagram', 'meta_ads']);
+const LeadSourceSchema = z.enum(['whatsapp', 'manual', 'web', 'facebook', 'instagram', 'meta_ads', 'google_ads']);
 
 export const listLeadsPage = onCall(
-  { region: 'us-central1', timeoutSeconds: 30, memory: '256MiB' },
+  { region: 'us-central1', timeoutSeconds: 30, memory: '512MiB' },
   async (request) => {
     const ctx = requireAuth(request);
     const data = z.object({

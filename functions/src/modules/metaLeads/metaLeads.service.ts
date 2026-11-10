@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import { db } from '../../lib/admin';
 import { leadsRepository } from '../leads/leads.repository';
 import { assignLead } from '../leads/leadAssignment.service';
+import { evaluateExclusivityOnReentry } from '../leads/leadExclusivity.service';
 import { messagesRepository } from '../messages/messages.repository';
 import { templatesRepository } from '../templates/templates.repository';
 import { sendTemplateToLead } from '../messages/templateSender.service';
@@ -272,6 +273,7 @@ export async function processLeadgenEvent(value: LeadgenValue): Promise<void> {
       name: name ?? (phone ? `Lead ${phone}` : 'Lead de formulario'),
       status: 'new',
       source: 'meta_ads',
+      fuenteUbicacion: attribution.metaCampaignName || attribution.metaAdName || 'PAUTA WHATSAPP 317',
       ...(sourceMeta ? { sourceMeta } : {}),
       inboxProvider: 'ycloud',
       aiEnabled: true,
@@ -290,9 +292,14 @@ export async function processLeadgenEvent(value: LeadgenValue): Promise<void> {
       await leadsRepository.update(companyId, lead.id, { pendingFirstContact: false });
     }
   } else {
+    const exclusivityResult = await evaluateExclusivityOnReentry(companyId, lead, 'meta_ads_leadgen');
+    if (exclusivityResult.reallocated) {
+      lead.assignedTo = exclusivityResult.currentAdvisorId || undefined;
+    }
     await leadsRepository.update(companyId, lead.id, {
       metadata: { ...lead.metadata, ...metadata },
       ...(name && (!lead.name || lead.name.startsWith('Lead ')) ? { name } : {}),
+      ...(lead.status === 'lost' ? { status: 'active', pipelineStage: 'prospecto', pipelineStageLabel: 'Prospecto' } : {}),
     });
     logger.info('[MetaLeads] Formulario asociado a lead existente', { leadId: lead.id, leadgenId });
   }

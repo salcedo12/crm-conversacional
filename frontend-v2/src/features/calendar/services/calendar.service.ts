@@ -21,9 +21,16 @@ export interface CalendarEvent {
   end:      number;  // millis
   allDay:   boolean;
   meetLink: string | null;
-  source:   'google' | 'crm';
+  source:   'google' | 'crm' | 'reminder';
   status?:  string;
+  leadId?:  string;
   leadName?: string | null;
+  leadPhone?: string;
+  project?: string;
+  nextAction?: string;
+  advisorId?: string;
+  postCitaStatus?: string;
+  attended?: boolean;
 }
 
 export interface CreateEventInput {
@@ -85,9 +92,74 @@ export async function bookAppointmentManual(companyId: string, input: BookAppoin
   return r.data;
 }
 
+export interface ReportAppointmentFichaInput {
+  appointmentId?:  string;
+  leadId?:         string;
+  actionType?:     'cita_reunion' | 'llamada' | 'envio_informacion' | 'visita_terreno' | 'seguimiento_general';
+  result?:         string;
+  attended?:       boolean;
+  evidenceUrl?:    string;
+  nextAction:      string;
+  nextActionDate?: string;
+  notes?:          string;
+  pipelineStage?:  string;
+  inviteReferralProgram?: boolean;
+  project?:        string;
+}
+
+export interface ReportAppointmentFichaResult {
+  ok: boolean;
+  appointmentId: string | null;
+  leadId?: string;
+  reminderScheduled?: boolean;
+  googleSync?: {
+    synced: boolean;
+    eventId: string | null;
+    meetLink: string | null;
+    htmlLink: string | null;
+    directCalendarUrl: string;
+  };
+}
+
+const _reportAppointmentFicha = httpsCallable<
+  { companyId: string } & ReportAppointmentFichaInput,
+  ReportAppointmentFichaResult
+>(functions, 'reportAppointmentFicha');
+
+export async function reportAppointmentFicha(companyId: string, input: ReportAppointmentFichaInput) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await _reportAppointmentFicha({ companyId, ...input });
+      return r.data;
+    } catch (err: any) {
+      lastError = err;
+      const isTransient =
+        err?.code === 'internal' ||
+        err?.code === 'unavailable' ||
+        err?.code === 'deadline-exceeded' ||
+        err?.message?.includes('network') ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.message?.includes('500');
+
+      if (!isTransient || attempt === 3) {
+        throw err;
+      }
+      console.warn(`[reportAppointmentFicha] Intento ${attempt} falló por microcorte, reintentando en ${attempt * 700}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+    }
+  }
+  throw lastError;
+}
+
 const _listCalendarEvents  = httpsCallable<{ companyId: string; fromISO: string; toISO: string }, { connected: boolean; events: CalendarEvent[] }>(functions, 'listCalendarEvents');
 const _createCalendarEvent = httpsCallable<{ companyId: string } & CreateEventInput, { eventId: string | null; meetLink: string | null }>(functions, 'createCalendarEvent');
 const _deleteCalendarEvent = httpsCallable<{ companyId: string; eventId: string }, { ok: boolean }>(functions, 'deleteCalendarEvent');
+const _completeLeadFollowUp = httpsCallable<{ companyId: string; leadId: string }, { ok: boolean }>(functions, 'completeLeadFollowUp');
+const _sendMorningAgendaSummaryNow = httpsCallable<
+  { companyId: string; advisorId?: string },
+  { ok: boolean; advisorsNotified: number; totalItems: number }
+>(functions, 'sendMorningAgendaSummaryNow');
 
 export async function listCalendarEvents(companyId: string, from: Date, to: Date) {
   const r = await _listCalendarEvents({ companyId, fromISO: from.toISOString(), toISO: to.toISOString() });
@@ -101,4 +173,13 @@ export async function createCalendarEvent(companyId: string, input: CreateEventI
 
 export async function deleteCalendarEvent(companyId: string, eventId: string): Promise<void> {
   await _deleteCalendarEvent({ companyId, eventId });
+}
+
+export async function completeLeadFollowUp(companyId: string, leadId: string): Promise<void> {
+  await _completeLeadFollowUp({ companyId, leadId });
+}
+
+export async function sendMorningAgendaSummaryNow(companyId: string, advisorId?: string) {
+  const r = await _sendMorningAgendaSummaryNow({ companyId, advisorId });
+  return r.data;
 }

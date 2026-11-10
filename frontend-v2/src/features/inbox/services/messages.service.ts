@@ -36,9 +36,13 @@ interface ReactInput {
 }
 const _reactToMessage = httpsCallable<ReactInput, { ok: boolean }>(functions, 'reactToMessage');
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Envía un mensaje manual desde el CRM al lead via WhatsApp.
  * Pasa por la Cloud Function (nunca directo a Twilio desde el frontend).
+ * Cuenta con reintento automático silencioso para proteger la experiencia del
+ * asesor ante micro-cortes de red o latencias en frío de la infraestructura.
  */
 export async function sendManualMessage(
   companyId: string,
@@ -49,8 +53,29 @@ export async function sendManualMessage(
   mediaType?: string,
   fileName?:  string
 ): Promise<string> {
-  const result = await _sendManualMessage({ companyId, leadId, content, deliveryChannel, mediaUrl, mediaType, fileName });
-  return result.data.messageId;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await _sendManualMessage({ companyId, leadId, content, deliveryChannel, mediaUrl, mediaType, fileName });
+      return result.data.messageId;
+    } catch (err: any) {
+      lastError = err;
+      const isTransient =
+        err?.code === 'internal' ||
+        err?.code === 'unavailable' ||
+        err?.code === 'deadline-exceeded' ||
+        err?.message?.includes('network') ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.message?.includes('500');
+
+      if (!isTransient || attempt === 3) {
+        throw err;
+      }
+      console.warn(`[sendManualMessage] Intento ${attempt} no completó, reintentando automáticamente en ${attempt * 700}ms...`);
+      await delay(attempt * 700);
+    }
+  }
+  throw lastError;
 }
 
 /** Pausa la IA para un lead */
@@ -74,4 +99,13 @@ export async function reactToMessage(
   emoji:     string
 ): Promise<void> {
   await _reactToMessage({ companyId, leadId, messageId, emoji });
+}
+
+const _retryFailedMessage = httpsCallable<{ companyId: string; leadId: string; messageId: string }, { ok: boolean }>(
+  functions, 'retryFailedMessage',
+);
+
+/** Reenvía un mensaje saliente que quedó "No entregado" (mismo texto o archivo). */
+export async function retryFailedMessage(companyId: string, leadId: string, messageId: string): Promise<void> {
+  await _retryFailedMessage({ companyId, leadId, messageId });
 }

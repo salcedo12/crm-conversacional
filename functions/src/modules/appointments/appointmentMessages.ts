@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import type { AppointmentModality } from './appointments.types';
 
 /**
  * Textos centralizados de las citas (confirmación, recordatorios y evento de
@@ -36,27 +37,39 @@ export function whenLabel(date: Date): string {
   return `el ${formatLongDate(date)}`;
 }
 
+/** "llamada telefónica" / "videollamada por Google Meet". */
+export function modalityLabel(modality?: AppointmentModality): string {
+  return modality === 'videollamada' ? 'videollamada por Google Meet' : 'llamada telefónica';
+}
+
+/** Qué pasa a la hora de la cita, según la modalidad. */
+function howItWorks(modality?: AppointmentModality): string {
+  return modality === 'videollamada'
+    ? 'Es una videollamada por Google Meet: te enviaremos el enlace unos minutos antes de la cita.'
+    : 'Es una llamada telefónica: tu asesor te llamará a este mismo número. Si prefieres videollamada por Google Meet, solo dímelo.';
+}
+
 // ── Confirmación (cuando la IA acaba de agendar) ────────────────────────────
 // El enlace de Google Meet NO se envía aquí: se manda en el recordatorio de
 // 30 min antes (ver buildReminder30m), para no duplicarlo.
-export function buildConfirmation(businessName: string, name: string | undefined, start: Date): string {
+export function buildConfirmation(businessName: string, name: string | undefined, start: Date, modality?: AppointmentModality): string {
   const first = friendlyFirstName(name);
   const hi    = first ? `¡Listo, ${first}!` : '¡Listo!';
   return (
     `✅ ${hi} Tu cita con ${businessName} quedó agendada para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
-    `Te enviaremos el enlace para conectarte unos minutos antes de la cita.\n\n` +
+    `${howItWorks(modality)}\n\n` +
     `¡Te esperamos! 😊`
   );
 }
 
 // ── Reprogramación (cuando la IA mueve una cita existente) ──────────────────
 // Igual que la confirmación: el enlace va en el recordatorio de 30 min antes.
-export function buildReschedule(businessName: string, name: string | undefined, start: Date): string {
+export function buildReschedule(businessName: string, name: string | undefined, start: Date, modality?: AppointmentModality): string {
   const first = friendlyFirstName(name);
   const hi    = first ? `¡Listo, ${first}!` : '¡Listo!';
   return (
     `✅ ${hi} Reprogramé tu cita con ${businessName} para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
-    `Te enviaremos el enlace para conectarte unos minutos antes de la cita.\n\n` +
+    `${howItWorks(modality)}\n\n` +
     `¡Te esperamos! 😊`
   );
 }
@@ -82,19 +95,27 @@ export function buildReminder24h(businessName: string, name: string | undefined,
   );
 }
 
-export function buildReminder2h(businessName: string, name: string | undefined, start: Date): string {
+export function buildReminder2h(businessName: string, name: string | undefined, start: Date, modality?: AppointmentModality): string {
   const first = friendlyFirstName(name);
   const hi    = first ? `¡Hola, ${first}! 👋` : '¡Hola! 👋';
   return (
     `${hi}\n\n` +
     `Tu cita con ${businessName} es hoy a las ${formatTime(start)}. ⏰\n\n` +
-    `En un momento te enviaremos el enlace para que te conectes a la videollamada. 😊`
+    (modality === 'videollamada'
+      ? `Unos minutos antes te enviaremos el enlace de Google Meet para la videollamada. 😊`
+      : `Tu asesor te llamará a este número. ¡Ten tu teléfono a la mano! 📞`)
   );
 }
 
-export function buildReminder30m(name: string | undefined, meetLink?: string): string {
+export function buildReminder30m(name: string | undefined, meetLink?: string, modality?: AppointmentModality): string {
   const first = friendlyFirstName(name);
   const who   = first ? `${first}, tu` : 'Tu';
+  if (modality !== 'videollamada') {
+    return (
+      `📞 ¡${who} cita es en unos minutos!\n\n` +
+      `Tu asesor te llamará a este número. ¡Ten tu teléfono a la mano! 😊`
+    );
+  }
   if (meetLink) {
     return (
       `🎥 ¡${who} cita es en unos minutos!\n\n` +

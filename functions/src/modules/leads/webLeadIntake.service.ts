@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase-admin/firestore';
+import { db } from '../../lib/admin';
 import { logger } from '../../utils/logger';
 import { leadsRepository } from './leads.repository';
 import { assignLead } from './leadAssignment.service';
@@ -7,7 +8,7 @@ import { templatesRepository } from '../templates/templates.repository';
 import { sendTemplateToLead } from '../messages/templateSender.service';
 import { toNormalizedPhone, phoneTail } from '../../utils/phone';
 import { webAttributionToMetadata } from './webAttribution';
-import type { Lead } from './leads.types';
+import type { Lead, AttributionTouch } from './leads.types';
 
 export interface WebLeadInput {
   companyId:        string;
@@ -93,6 +94,18 @@ export async function ingestWebLead(input: WebLeadInput): Promise<WebLeadResult>
     : null;
   let created = false;
 
+  const attrib = input.attribution || {};
+  const touchpointData: AttributionTouch = {
+    source: (attrib.utm_source as any) || 'web',
+    channel: 'web_form',
+    campaign: attrib.utm_campaign || null,
+    adName: attrib.utm_content || null,
+    gclid: attrib.gclid || null,
+    fbclid: attrib.fbclid || null,
+    project: input.source || null,
+    timestamp: now,
+  };
+
   if (!lead) {
     lead = await leadsRepository.create(companyId, {
       companyId,
@@ -102,8 +115,15 @@ export async function ingestWebLead(input: WebLeadInput): Promise<WebLeadResult>
       name:            input.name || (phone ? `Lead ${phone}` : 'Lead de formulario web'),
       status:          'new',
       source:          'web',
+      fuenteUbicacion: attrib.utm_campaign || 'Página Web',
+      inbox:           'central_317',
       inboxProvider:   'ycloud',
       aiEnabled:       true,
+      isArchived:      false,
+      reactivationCount: 0,
+      ...(input.source ? { projectInterest: [input.source] } : {}),
+      firstTouch:      touchpointData,
+      lastTouch:       touchpointData,
       tags:            [],
       metadata,
       createdAt:       now,
@@ -113,11 +133,31 @@ export async function ingestWebLead(input: WebLeadInput): Promise<WebLeadResult>
     logger.info('[WebLead] Lead de formulario web creado', { companyId, leadId: lead.id, hasPhone: !!phone });
     lead.assignedTo = (await assignLead(companyId, lead.id)) ?? undefined;
   } else {
+    const existingReactivations = (lead as any).reactivationCount ?? 0;
+    const wasArchived = (lead as any).isArchived ?? false;
+
     await leadsRepository.update(companyId, lead.id, {
       metadata: { ...lead.metadata, ...metadata },
+      lastTouch: touchpointData,
+      isArchived: false,
+      ...(wasArchived ? { reactivationCount: existingReactivations + 1 } : {}),
       ...(input.name && (!lead.name || lead.name.startsWith('Lead ')) ? { name: input.name } : {}),
     });
     logger.info('[WebLead] Formulario web asociado a lead existente', { companyId, leadId: lead.id });
+  }
+
+  // Registrar touchpoint en subcolección
+  try {
+    await db.collection('companies').doc(companyId)
+      .collection('leads').doc(lead.id)
+      .collection('touchpoints').add({
+        ...touchpointData,
+        referrer: attrib.referrer || null,
+        landing: attrib.landing || null,
+        createdAt: now,
+      });
+  } catch (tpErr) {
+    logger.warn('[WebLead] No se pudo guardar touchpoint', { error: String(tpErr) });
   }
 
   // Dejar constancia del formulario en el hilo del chat (mensaje de sistema, no dispara IA).

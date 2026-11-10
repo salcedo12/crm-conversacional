@@ -1,8 +1,20 @@
 import type { Timestamp } from 'firebase/firestore';
 
 export type LeadStatus  = 'new' | 'active' | 'qualified' | 'scheduled' | 'lost' | 'closed';
-export type LeadSource  = 'whatsapp' | 'manual' | 'web' | 'facebook' | 'instagram' | 'meta_ads' | 'advisor_whatsapp';
+export type LeadSource  = 'whatsapp' | 'manual' | 'web' | 'facebook' | 'instagram' | 'meta_ads' | 'advisor_whatsapp' | 'google_ads';
 export type InboxProvider = 'ycloud' | 'twilio';
+export type LeadInboxType = 'central_317' | 'advisor_direct' | 'web_form';
+
+export interface AttributionTouch {
+  source: string;
+  channel: string;
+  campaign?: string | null;
+  adName?: string | null;
+  gclid?: string | null;
+  fbclid?: string | null;
+  project?: string | null;
+  timestamp: Timestamp;
+}
 
 /** Canal de mensajería del lead. Ausente = 'whatsapp' (leads creados antes de esta migración). */
 export type LeadChannel = 'whatsapp' | 'messenger' | 'instagram';
@@ -11,8 +23,11 @@ export type LeadChannel = 'whatsapp' | 'messenger' | 'instagram';
 export interface LeadSourceMeta {
   adId?:      string;
   headline?:  string;
+  body?:      string;
   sourceUrl?: string;
   mediaType?: string;
+  imageUrl?:  string;
+  videoUrl?:  string;
   ctwaClid?:  string;
 }
 
@@ -23,8 +38,17 @@ export interface Lead {
   /** E.164 para WhatsApp. Sentinel '' para Messenger/Instagram (ver `channel`/`externalId`). */
   phone:            string;
   normalizedPhone:  string;
+  phoneTail?:       string;
   status:           LeadStatus;
   source:           LeadSource;
+  /** Fuente de ubicación o captación comercial específica (ej. 'Trabajo de campo', 'PAUTA WHATSAPP 317', 'Referidos', etc.) */
+  fuenteUbicacion?: string;
+  inbox?:           LeadInboxType;
+  isArchived?:      boolean;
+  reactivationCount?: number;
+  projectInterest?: string[];
+  firstTouch?:      AttributionTouch;
+  lastTouch?:       AttributionTouch;
   /** Detalle del anuncio de Meta que originó el lead (solo si source = 'meta_ads') */
   sourceMeta?:      LeadSourceMeta;
   /** Número de negocio (E.164) que recibió esta conversación */
@@ -36,10 +60,22 @@ export interface Lead {
   /** PSID (Messenger) o IGSID (Instagram). Solo si channel !== 'whatsapp'. */
   externalId?:      string;
   assignedTo?:      string;
+  /** Inicio del tiempo de asignación del asesor actual (o momento de reasignación). */
+  advisorAssignedAt?: Timestamp;
+  /** Asesor anterior si el lead fue reasignado (para muro de privacidad). */
+  previousAdvisorId?: string | null;
+  lastAutoReassignedAt?: Timestamp;
+  advisorReassignmentCount?: number;
+  /** Momento en que caducó la exclusividad por abandono (>30 días sin contacto). */
+  exclusivityExpiredAt?: Timestamp;
   /** true = asesor fijado manualmente; bloquea la reasignacion automatica. */
   assignmentLocked?: boolean;
   aiEnabled:        boolean;
   takeoverBy?:      string;
+  /** Momento exacto en que el asesor apagó la IA manualmente (inicio del SLA de 24h). */
+  aiDisabledAt?:    Timestamp;
+  /** Estado del SLA de 24h tras apagar la IA. */
+  aiTakeoverSlaStatus?: 'pending' | 'compliant' | 'overdue';
   lastMessageText?: string;
   lastMessageAt?:   Timestamp;
   /** Primer mensaje humano enviado por un asesor. Bloquea la reasignacion automatica por falta de contacto. */
@@ -49,6 +85,11 @@ export interface Lead {
   /** Ultimo mensaje humano enviado por un asesor. */
   lastAdvisorMessageAt?:  Timestamp;
   lastInboundAt?:   Timestamp;
+  nextFollowUpDate?: string | null;
+  nextFollowUpAction?: string | null;
+  lastFollowUpAt?:  Timestamp;
+  lastFollowUpAction?: string;
+  pipelineStage?:   string;
   readBy?:          Record<string, Timestamp>;
   createdAt:        Timestamp;
   updatedAt:        Timestamp;

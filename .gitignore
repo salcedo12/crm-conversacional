@@ -20,3 +20,81 @@ advisor-whatsapp-bridge/.env
 functions/lib/
 frontend/.next/
 frontend/out/
+
+# Emuladores locales de Firebase
+.emu-tmp/
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
+
+# Reportes con datos de clientes (no versionar)
+reportes/
+
+# Llave de DocuBlock (nunca al repositorio)
+functions/.docublock-key.txt
+functions/.secret.local
+functions/.emu-scripts/
+
+# Copias de .env con llaves (el patrón *.env no cubre .env.backup-*, .env.demo-*)
+.env.*
+!.env.example
+functions/.env.*
+!functions/.env.example
+
+# Respaldos y exportes con datos de clientes / chats
+backups/
+*.xlsx
+Auditoria_*
+export_leads.js
+
+# Builds y paquetes para Hostinger / Play Store
+*.zip
+*.aab
+*.apk
+frontend-v2/mobile-app/releases/
+*.tsbuildinfo
+.vite/
+
+# Archivos temporales de trabajo
+.docx-qa/
+scratch/
+scratch_out/
+temp_*.txt
+clean_text.txt
+doc_text.txt
+frontend-v2/mobile-app/findstr_results.txt
+frontend-v2/mobile-app/search_events.txt
+frontend-v2/.codex-smarthome-project-summary.json
+
+# Volcados con datos de clientes y scripts con tokens
+scripts/smarthome_sales_dump.json
+scripts/test_meta_token.js
+
+# Scripts puntuales con teléfonos de clientes (no versionar en repo público)
+scripts/unify_fabio_leads.js
+scripts/remove_internal_ghost_leads.js
+scripts/inspect_claudia_and_team.js
+scripts/contracts/render-promesa-sample.cjs
+scripts/clean_luis_carlos_ghost_lead.js
+scripts/delete_specific_4_leads.js
+scripts/clean_luisa_ghost_lead.js
+scripts/clean_juana_ghost_lead.js
+scripts/clean_jhon_toledo_ghost_lead.js
+scripts/check_juan.js
+scripts/clean_camilo_ghost_lead.js
+scripts/test_compiled.js
+scripts/clean_edwin_ghost_leads.js
+scripts/clean_claudia_ghost_lead.js
+scripts/test_selection_real.js
+scripts/check_all_team_leads.js
+scripts/test_history.js
+scripts/test_selection.js
+scripts/resend_alexander_voice_note.js
+scripts/contracts/render-preventa-sample.cjs
+scripts/test_keys.js
+scripts/contracts/moderno/muestras/promesa-moderno-muestra.pdf
+scripts/patch_lead_lists.js
+scripts/audit_meta_vs_crm.js
+scripts/extract_line_317.js
+scripts/contracts/moderno/muestras/preventa-moderno-muestra.pdf
+scripts/clean_adriana_ghost_lead.js

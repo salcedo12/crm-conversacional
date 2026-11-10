@@ -5,6 +5,8 @@ import { db }                    from '../lib/admin';
 import { logger }                from '../utils/logger';
 import { leadsRepository }       from '../modules/leads/leads.repository';
 import { messagesRepository }    from '../modules/messages/messages.repository';
+import { humanHandoffPatch }     from '../modules/ai/aiRollout';
+import { unlockAdvisorIfCompliant } from '../modules/appointments/appointmentSla.service';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 
 const LeadActionSchema = z.object({
@@ -44,10 +46,14 @@ export const pauseLeadAi = onCall(
     }
     if (!lead.aiEnabled) return { aiEnabled: false }; // ya estaba pausada
 
+    const now = Timestamp.now();
     await leadDocRef(companyId, leadId).update({
-      aiEnabled:  false,
-      takeoverBy: advisorId,
-      updatedAt:  Timestamp.now(),
+      aiEnabled:           false,
+      takeoverBy:          advisorId,
+      aiDisabledAt:        now,
+      aiTakeoverSlaStatus: 'pending',
+      updatedAt:           now,
+      ...humanHandoffPatch(lead),
     });
 
     await messagesRepository.create({
@@ -95,10 +101,14 @@ export const resumeLeadAi = onCall(
     if (lead.aiEnabled) return { aiEnabled: true }; // ya estaba activa
 
     await leadDocRef(companyId, leadId).update({
-      aiEnabled:  true,
-      takeoverBy: FieldValue.delete(), // elimina el campo en lugar de poner undefined
-      updatedAt:  Timestamp.now(),
+      aiEnabled:           true,
+      takeoverBy:          FieldValue.delete(), // elimina el campo en lugar de poner undefined
+      aiDisabledAt:        FieldValue.delete(),
+      aiTakeoverSlaStatus: FieldValue.delete(),
+      updatedAt:           Timestamp.now(),
     });
+
+    await unlockAdvisorIfCompliant(companyId, advisorId).catch(() => {});
 
     await messagesRepository.create({
       companyId,

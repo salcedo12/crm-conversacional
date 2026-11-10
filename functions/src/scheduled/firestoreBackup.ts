@@ -24,7 +24,7 @@ export const scheduledFirestoreBackup = onSchedule(
     timeZone:       'America/Bogota',
     region:         'us-central1',
     timeoutSeconds: 540,
-    memory:         '256MiB',
+    memory:         '512MiB',
   },
   async () => {
     const adminClient = new v1.FirestoreAdminClient();

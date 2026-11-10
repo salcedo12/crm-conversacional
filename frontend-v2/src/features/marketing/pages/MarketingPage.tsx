@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Megaphone, Flame, TrendingUp, CalendarCheck, Trophy, DollarSign, Info, Radio, ArrowUpCircle, PauseCircle, AlertTriangle, Lightbulb } from 'lucide-react';
+import { Megaphone, Flame, TrendingUp, CalendarCheck, Trophy, DollarSign, Info, Radio, ArrowUpCircle, PauseCircle, AlertTriangle, Lightbulb, Users } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { Spinner } from '@/shared/components/Spinner';
-import { getMarketingMetrics, type MarketingMetrics, type AdRow, type AdStatus, type Insight, type InsightKind, type MarketingRange } from '../services/marketing.service';
+import { AdContactsModal } from '../components/AdContactsModal';
+import { DateRangePicker, formatDayRange } from '../components/DateRangePicker';
+import { getMarketingMetrics, type MarketingMetrics, type AdRow, type AdStatus, type Insight, type InsightKind, type MarketingRange, type MarketingWindow } from '../services/marketing.service';
 
-const RANGE_LABEL: Record<MarketingRange, string> = {
+type PresetRange = Exclude<MarketingRange, 'custom'>;
+
+const RANGE_LABEL: Record<PresetRange, string> = {
   all: 'Todo', '7d': '7 días', '30d': '30 días', '90d': '90 días',
 };
+
+function windowLabel(w: MarketingWindow): string {
+  if (w.range === 'custom' && w.from && w.to) return formatDayRange(w.from, w.to);
+  return RANGE_LABEL[w.range as PresetRange] ?? 'Todo';
+}
 
 const INSIGHT_META: Record<InsightKind, { icon: typeof Info; cls: string; ring: string }> = {
   scale:  { icon: ArrowUpCircle, cls: 'text-emerald-300', ring: 'border-emerald-500/25 bg-emerald-500/[0.07]' },
@@ -36,6 +45,15 @@ const LOSS_LABEL: Record<string, string> = {
 
 type AdSort = 'quality' | 'volume' | 'conversion' | 'cpc' | 'spend';
 
+/** Qué contactos abre el modal "Ver contactos": un anuncio o un grupo (campaña/filtro). */
+interface ContactsTarget { adKeys: string[]; title: string; subtitle: string | null; multiAd: boolean }
+
+/** Nombre mostrable del anuncio (los titulares de plantilla de catálogo no sirven). */
+function adTitle(ad: AdRow): string {
+  const isTemplate = !ad.headline || ad.headline.includes('{{') || ad.headline.includes('product.name');
+  return (isTemplate ? null : ad.headline) || (ad.adId ? `Anuncio ${ad.adId}` : 'Sin identificar');
+}
+
 const money = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
 const fmtMoney = (v: number | null) => (v === null || v === undefined ? '—' : money.format(v));
 
@@ -52,14 +70,15 @@ export function MarketingPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [campaignFilter, setCampaignFilter] = useState<string>('all');
   const [ticket, setTicket] = useState<string>('');   // ticket promedio para ROAS (opcional)
-  const [range, setRange] = useState<MarketingRange>('all');
+  const [win, setWin] = useState<MarketingWindow>({ range: 'all' });
+  const [contactsTarget, setContactsTarget] = useState<ContactsTarget | null>(null);
 
   const load = async () => {
     if (!companyId) return;
     setLoading(true);
     setError(null);
     try {
-      setData(await getMarketingMetrics(companyId, range));
+      setData(await getMarketingMetrics(companyId, win));
     } catch (err) {
       console.error('[Marketing] error:', err);
       setError('No se pudieron cargar las métricas de marketing.');
@@ -68,7 +87,7 @@ export function MarketingPage() {
     }
   };
 
-  useEffect(() => { load(); }, [companyId, range]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [companyId, win]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const showCosts = !!data?.spendAvailable;
 
@@ -84,6 +103,20 @@ export function MarketingPage() {
     if (adSort === 'spend')      rows.sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0));
     return rows;
   }, [data, adSort, statusFilter, campaignFilter]);
+
+  const visibleLeads = useMemo(() => sortedAds.reduce((n, r) => n + r.leads, 0), [sortedAds]);
+
+  const openGroupContacts = () => {
+    const keys = sortedAds.filter((r) => r.leads > 0).map((r) => r.key);
+    if (keys.length === 0) return;
+    const statusTxt = statusFilter === 'active' ? 'anuncios activos' : statusFilter === 'paused' ? 'anuncios pausados' : 'todos los anuncios';
+    setContactsTarget({
+      adKeys: keys,
+      title: campaignFilter !== 'all' ? campaignFilter : 'Contactos de anuncios',
+      subtitle: `${keys.length} anuncios con leads · ${statusTxt} · ${windowLabel(win)}`,
+      multiAd: true,
+    });
+  };
 
   const summary = useMemo(() => {
     if (!data) return null;
@@ -107,25 +140,33 @@ export function MarketingPage() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-zinc-950">
-      <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
         <div>
           <h1 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
             <Megaphone size={17} className="text-violet-400" /> Marketing
           </h1>
-          <p className="mt-0.5 text-xs text-zinc-500">Qué anuncios y fuentes traen los mejores leads</p>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Qué anuncios y fuentes traen los mejores leads
+            {win.range === 'custom' && <span className="text-violet-300"> · {windowLabel(win)}</span>}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-0.5 rounded-lg border border-zinc-800 p-0.5">
-            {(['all', '7d', '30d', '90d'] as MarketingRange[]).map((r) => (
+            {(['all', '7d', '30d', '90d'] as PresetRange[]).map((r) => (
               <button
                 key={r}
-                onClick={() => setRange(r)}
-                className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${range === r ? 'bg-violet-600/25 text-violet-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                onClick={() => setWin({ range: r })}
+                className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${win.range === r ? 'bg-violet-600/25 text-violet-300' : 'text-zinc-500 hover:text-zinc-300'}`}
               >
                 {RANGE_LABEL[r]}
               </button>
             ))}
           </div>
+          <DateRangePicker
+            value={win.range === 'custom' && win.from && win.to ? { from: win.from, to: win.to } : null}
+            onApply={(from, to) => setWin({ range: 'custom', from, to })}
+            onClear={() => setWin({ range: 'all' })}
+          />
           <button
             onClick={load}
             className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-700"
@@ -242,6 +283,17 @@ export function MarketingPage() {
                 <span className="text-[11px] text-zinc-600">{sortedAds.length} anuncios</span>
               </div>
             )}
+            {visibleLeads > 0 && (
+              <div className="-mt-1 mb-4">
+                <button
+                  onClick={openGroupContacts}
+                  className="flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-[11px] text-violet-300 transition-colors hover:bg-violet-500/20"
+                >
+                  <Users size={13} />
+                  {campaignFilter !== 'all' ? 'Ver contactos de la campaña' : 'Ver contactos de estos anuncios'} ({visibleLeads})
+                </button>
+              </div>
+            )}
 
             {sortedAds.length === 0 ? (
               <div className="py-8 text-center">
@@ -275,10 +327,11 @@ export function MarketingPage() {
                       {showCosts && <th className="px-3 py-2 text-right font-semibold">C/Calif.</th>}
                       {showCosts && <th className="px-3 py-2 text-right font-semibold">C/Cierre</th>}
                       <th className="px-3 py-2 font-semibold">Pérdida top</th>
+                      <th className="px-3 py-2 font-semibold">Contactos</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedAds.map((ad, i) => <AdRowView key={ad.key} ad={ad} rank={i + 1} showCosts={showCosts} showStatus={data.statusAvailable} />)}
+                    {sortedAds.map((ad, i) => <AdRowView key={ad.key} ad={ad} rank={i + 1} showCosts={showCosts} showStatus={data.statusAvailable} onViewContacts={() => setContactsTarget({ adKeys: [ad.key], title: adTitle(ad), subtitle: [ad.campaignName, ad.adsetName].filter(Boolean).join(' · ') || null, multiAd: false })} />)}
                   </tbody>
                 </table>
               </div>
@@ -347,12 +400,24 @@ export function MarketingPage() {
           </p>
         </div>
       ) : null}
+
+      {contactsTarget && companyId && (
+        <AdContactsModal
+          companyId={companyId}
+          win={win}
+          adKeys={contactsTarget.adKeys}
+          title={contactsTarget.title}
+          subtitle={contactsTarget.subtitle}
+          multiAd={contactsTarget.multiAd}
+          onClose={() => setContactsTarget(null)}
+        />
+      )}
     </div>
   );
 }
 
-function AdRowView({ ad, rank, showCosts, showStatus }: { ad: AdRow; rank: number; showCosts: boolean; showStatus: boolean }) {
-  const title = ad.headline || (ad.adId ? `Anuncio ${ad.adId}` : 'Sin identificar');
+function AdRowView({ ad, rank, showCosts, showStatus, onViewContacts }: { ad: AdRow; rank: number; showCosts: boolean; showStatus: boolean; onViewContacts: () => void }) {
+  const title = adTitle(ad);
   const medal = rank === 1 ? 'text-amber-400' : rank === 2 ? 'text-zinc-300' : rank === 3 ? 'text-orange-400' : 'text-zinc-600';
   const st = ad.status ? STATUS_META[ad.status] : null;
   return (
@@ -388,6 +453,16 @@ function AdRowView({ ad, rank, showCosts, showStatus }: { ad: AdRow; rank: numbe
           <span className="rounded-full border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-300">
             {LOSS_LABEL[ad.topLoss] ?? ad.topLoss}
           </span>
+        ) : <span className="text-[10px] text-zinc-600">—</span>}
+      </td>
+      <td className="px-3 py-2.5">
+        {ad.leads > 0 ? (
+          <button
+            onClick={onViewContacts}
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-violet-500/50 hover:text-violet-300"
+          >
+            <Users size={12} /> Ver ({ad.leads})
+          </button>
         ) : <span className="text-[10px] text-zinc-600">—</span>}
       </td>
     </tr>

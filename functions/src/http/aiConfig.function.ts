@@ -1,9 +1,10 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { Timestamp }          from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { z }                  from 'zod';
 import { db }                 from '../lib/admin';
 import { logger }             from '../utils/logger';
 import { getAiConfig }        from '../modules/ai/aiConfig.repository';
+import { VICTORIA_BASE_PROMPT } from '../modules/ai/defaultPrompt';
 import { buildOpenAiMessages } from '../modules/ai/aiContext.service';
 import { getOpenAIClient }    from '../integrations/openai/openai.client';
 import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/authContext';
@@ -15,8 +16,9 @@ const configRef = (companyId: string) =>
 
 // ─── Schema de validación ────────────────────────────────────────────────────
 const FollowUpStepSchema = z.object({
-  delayMinutes: z.number().int().min(1).max(10_080), // máx 1 semana
+  delayMinutes: z.number().int().min(1).max(30_000),
   enabled:      z.boolean(),
+  templateName: z.string().optional(),
 });
 
 const SaveAiConfigSchema = z.object({
@@ -33,6 +35,26 @@ const SaveAiConfigSchema = z.object({
   blockedTopics:      z.array(z.string().max(60)).max(30),
   followUpSequence:   z.array(FollowUpStepSchema).max(5),
   quoteMode:          z.enum(['off', 'on_request', 'proactive']).default('off'),
+  // Opcionales: si no vienen, se conserva lo guardado.
+  agentProfile:        z.enum(['legacy', 'consultive']).optional(),
+  model:               z.string().trim().min(1).max(60).optional(),
+  voiceEnabled:        z.boolean().optional(),
+  sobreMontanasQuotes: z.boolean().optional(),
+  advertisedPrice:     z.number().int().min(1_000_000).max(5_000_000_000).optional(),
+  quoteBonusBase:      z.number().int().min(0).max(500_000_000).optional(),
+  quoteBonusMax:       z.number().int().min(0).max(500_000_000).optional(),
+  priceReference:      z.number().int().min(1_000_000).max(5_000_000_000).optional(),
+  priceReferenceArea:  z.number().int().min(1).max(1_000_000).optional(),
+  priceWithBonusFrom:  z.number().int().min(1_000_000).max(5_000_000_000).optional(),
+  bonusRangeMin:       z.number().int().min(0).max(500_000_000).optional(),
+  separationAmount:    z.number().int().min(0).max(500_000_000).optional(),
+  paymentPlanExample:  z.string().max(300).optional(),
+  // null = sin piloto (atiende a todos los leads con IA activa).
+  rollout: z.object({
+    testPhones: z.array(z.string().trim().min(7).max(30)).max(50).default([]),
+    startAt:    z.number().int().positive().nullable().optional(),
+    sources:    z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  }).nullable().optional(),
 });
 
 // ─── getAiConfig ─────────────────────────────────────────────────────────────
@@ -52,8 +74,12 @@ export const getAiConfigCallable = onCall(
     const config = await getAiConfig(companyId);
 
     // Convertir Timestamp a millis para que el cliente pueda deserializarlo
+    const startAt = config.rollout?.startAt as Timestamp | undefined;
     return {
       ...config,
+      rollout: config.rollout
+        ? { testPhones: config.rollout.testPhones ?? [], sources: config.rollout.sources ?? [], startAt: startAt?.toMillis?.() ?? null }
+        : null,
       updatedAt: config.updatedAt ? (config.updatedAt as Timestamp).toMillis() : null,
     };
   }
@@ -76,14 +102,31 @@ export const saveAiConfigCallable = onCall(
       throw new HttpsError('invalid-argument', 'Datos inválidos: ' + parse.error.message);
     }
 
-    const { companyId, ...fields } = parse.data;
+    const { companyId, rollout, ...fields } = parse.data;
     assertCompany(ctx, companyId);
+    if (fields.quoteBonusBase !== undefined && fields.quoteBonusMax !== undefined && fields.quoteBonusMax < fields.quoteBonusBase) {
+      throw new HttpsError('invalid-argument', 'El bono máximo no puede ser menor que el bono base.');
+    }
 
+    // merge: conserva los campos que no vienen en la petición.
     await configRef(companyId).set({
       ...fields,
       companyId,
       updatedAt: Timestamp.now(),
-    });
+    }, { merge: true });
+
+    // El piloto se reemplaza completo (update), para que quitar la fecha o los orígenes sí se borre.
+    if (rollout !== undefined) {
+      await configRef(companyId).update({
+        rollout: rollout === null
+          ? FieldValue.delete()
+          : {
+            testPhones: rollout.testPhones,
+            sources:    rollout.sources,
+            ...(rollout.startAt ? { startAt: Timestamp.fromMillis(rollout.startAt) } : {}),
+          },
+      });
+    }
 
     logger.info('[AiConfig] Config guardada', { companyId });
     return { ok: true };
@@ -93,7 +136,9 @@ export const saveAiConfigCallable = onCall(
 // ─── resetAiConfig ────────────────────────────────────────────────────────────
 
 /**
- * Callable: elimina el doc de Firestore → el backend vuelve al prompt de Victoria hardcodeado.
+ * Callable: restaura SOLO las instrucciones (basePrompt) a las del código. No toca si la
+ * IA está encendida, el piloto, los precios ni nada más: antes borraba todo el documento
+ * y la empresa quedaba con la configuración por defecto.
  */
 export const resetAiConfigCallable = onCall(
   { region: 'us-central1', timeoutSeconds: 30 },
@@ -104,9 +149,9 @@ export const resetAiConfigCallable = onCall(
       .parse(request.data);
     assertCompany(ctx, companyId);
 
-    await configRef(companyId).delete();
+    await configRef(companyId).set({ basePrompt: VICTORIA_BASE_PROMPT, updatedAt: Timestamp.now() }, { merge: true });
 
-    logger.info('[AiConfig] Config reseteada a defaults', { companyId });
+    logger.info('[AiConfig] Instrucciones restauradas', { companyId });
     return { ok: true };
   }
 );

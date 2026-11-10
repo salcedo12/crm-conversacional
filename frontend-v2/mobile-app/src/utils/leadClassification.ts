@@ -12,12 +12,13 @@ export const ADVISOR_WHATSAPP_LABEL = 'WhatsApp asesor';
  * (esta última cubre los leads creados antes de introducir la fuente). Espejo del
  * predicado del backend: functions/src/modules/leads/leadClassification.ts.
  */
-export function isDirectAdvisorLead(lead: Pick<Lead, 'source' | 'metadata'>): boolean {
-  return lead.source === ADVISOR_WHATSAPP_SOURCE
+export function isDirectAdvisorLead(lead: Pick<Lead, 'source' | 'metadata' | 'inbox'>): boolean {
+  return lead.inbox === 'advisor_direct'
+    || lead.source === ADVISOR_WHATSAPP_SOURCE
     || lead.metadata?.advisorWhatsappMirror === 'true';
 }
 
 /** ¿Cuenta como dato del negocio? (para estadísticas del tablero). */
-export function countsAsBusinessLead(lead: Pick<Lead, 'source' | 'metadata'>): boolean {
+export function countsAsBusinessLead(lead: Pick<Lead, 'source' | 'metadata' | 'inbox'>): boolean {
   return !isDirectAdvisorLead(lead);
 }

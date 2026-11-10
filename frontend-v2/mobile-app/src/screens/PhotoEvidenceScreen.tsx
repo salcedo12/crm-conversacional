@@ -20,7 +20,7 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useAuth } from '../providers/AuthProvider';
-import { colors } from '../theme/colors';
+import { useTheme } from '../providers/ThemeProvider';
 import {
   searchLeadForPhotoEvidence,
   uploadEvidencePhoto,
@@ -28,7 +28,6 @@ import {
   listRecentPhotoEvidences,
 } from '../services/photoEvidence';
 import type {
-  Lead,
   PhotoEvidenceItem,
   RootStackParams,
   SearchedLeadData,
@@ -77,6 +76,25 @@ function formatDisplayDate(ms: number | null) {
   }).format(new Date(ms));
 }
 
+function buildQuickDates(): { value: string; label: string }[] {
+  const base = new Date();
+  return Array.from({ length: 14 }, (_, i) => {
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+    const val = formatDateInput(d.getTime());
+    const label =
+      i === 0
+        ? `Hoy (${val})`
+        : i === 1
+        ? `Mañana (${val})`
+        : new Intl.DateTimeFormat('es-CO', {
+            weekday: 'short',
+            day: '2-digit',
+            month: 'short',
+          }).format(d);
+    return { value: val, label };
+  });
+}
+
 interface SelectedPhoto {
   uri: string;
   name?: string;
@@ -86,12 +104,15 @@ interface SelectedPhoto {
 export function PhotoEvidenceScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParams>>();
   const route = useRoute<RouteProp<RootStackParams, 'PhotoEvidence'>>();
-  const { companyId, profile } = useAuth();
+  const { companyId } = useAuth();
+  const { palette } = useTheme();
 
   const [activeTab, setActiveTab] = useState<'register' | 'gallery'>('register');
 
   // Search state
-  const [phoneNumber, setPhoneNumber] = useState(route.params?.phone || route.params?.lead?.phone || '');
+  const [phoneNumber, setPhoneNumber] = useState(
+    route.params?.phone || route.params?.lead?.phone || ''
+  );
   const [searching, setSearching] = useState(false);
   const [leadData, setLeadData] = useState<SearchedLeadData | null>(null);
   const [canUpload, setCanUpload] = useState(true);
@@ -116,13 +137,12 @@ export function PhotoEvidenceScreen() {
   const [galleryItems, setGalleryItems] = useState<PhotoEvidenceItem[]>([]);
   const [loadingGallery, setLoadingGallery] = useState(false);
 
-  // Lightbox
+  // Lightbox & picker
   const [lightboxItem, setLightboxItem] = useState<PhotoEvidenceItem | null>(null);
+  const [activePicker, setActivePicker] = useState<'action' | 'context' | 'date' | 'time' | null>(
+    null
+  );
 
-  // Active picker sheet
-  const [activePicker, setActivePicker] = useState<'action' | 'context' | 'time' | null>(null);
-
-  // Initial load if lead was passed
   useEffect(() => {
     if (route.params?.lead) {
       const l = route.params.lead;
@@ -132,25 +152,23 @@ export function PhotoEvidenceScreen() {
         phone: l.phone,
         status: l.status,
         assignedTo: l.assignedTo ?? null,
-        assignedAdvisorName: 'Asesor',
-        smartHomeCustomerId: null,
+        assignedAdvisorName: l.assignedAdvisorName || 'Asesor',
+        smartHomeCustomerId: l.smartHomeCustomerId ?? null,
         smartHomeSyncError: null,
       });
       if (companyId) {
-        // Fetch existing evidences for this lead
         listRecentPhotoEvidences(companyId, l.id, 20).then(setLeadEvidences).catch(() => {});
       }
     } else if (phoneNumber.trim() && companyId) {
-      doSearch(phoneNumber.trim());
+      void doSearch(phoneNumber.trim());
     }
-  }, [route.params?.lead, companyId]);
+  }, [route.params?.lead, companyId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load gallery when switching to gallery tab
   useEffect(() => {
     if (activeTab === 'gallery' && companyId) {
-      loadGallery();
+      void loadGallery();
     }
-  }, [activeTab, companyId]);
+  }, [activeTab, companyId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadGallery = async () => {
     if (!companyId) return;
@@ -185,7 +203,10 @@ export function PhotoEvidenceScreen() {
         setLeadEvidences([]);
       }
     } catch (err: any) {
-      const msg = err?.message && !err.message.includes('NOT_FOUND') ? err.message : 'No se pudo encontrar el cliente con ese número.';
+      const msg =
+        err?.message && !err.message.includes('NOT_FOUND')
+          ? err.message
+          : 'No se pudo encontrar el cliente con ese número.';
       Alert.alert('Búsqueda de cliente', msg);
       setLeadData(null);
     } finally {
@@ -196,7 +217,10 @@ export function PhotoEvidenceScreen() {
   const pickFromCamera = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permiso requerido', 'Meraki CRM necesita acceso a la cámara para tomar fotografías de evidencia.');
+      Alert.alert(
+        'Permiso requerido',
+        'Meraki CRM necesita acceso a la cámara para tomar fotografías de evidencia.'
+      );
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -232,7 +256,7 @@ export function PhotoEvidenceScreen() {
         }));
         setSelectedPhotos((prev) => [...prev, ...newItems]);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.warn('Gallery pick error:', err);
       Alert.alert('Error', 'No se pudo abrir el selector de fotos.');
     }
@@ -248,11 +272,17 @@ export function PhotoEvidenceScreen() {
       return;
     }
     if (selectedPhotos.length === 0) {
-      Alert.alert('Atención', 'Debes tomar o seleccionar al menos una fotografía de evidencia.');
+      Alert.alert(
+        'Atención',
+        'Debes tomar o seleccionar al menos una fotografía de evidencia.'
+      );
       return;
     }
     if (!canUpload) {
-      Alert.alert('Sin autorización', permissionMessage || 'No tienes permisos para registrar bitácora en este cliente.');
+      Alert.alert(
+        'Sin autorización',
+        permissionMessage || 'No tienes permisos para registrar bitácora en este cliente.'
+      );
       return;
     }
 
@@ -267,7 +297,7 @@ export function PhotoEvidenceScreen() {
         const { downloadUrl, storagePath } = await uploadEvidencePhoto(
           companyId,
           leadData.id,
-          photo,
+          { uri: photo.uri, fileName: photo.name, mimeType: photo.mimeType },
           (pct) => {
             const overall = Math.round(((i + pct / 100) / total) * 100);
             setUploadProgress(overall);
@@ -288,17 +318,24 @@ export function PhotoEvidenceScreen() {
         });
       }
 
-      Alert.alert('¡Éxito!', `${total} ${total === 1 ? 'evidencia registrada' : 'evidencias registradas'} y enviadas a la bitácora de SmartHome con éxito.`);
+      Alert.alert(
+        '¡Éxito!',
+        `${total} ${
+          total === 1 ? 'evidencia registrada' : 'evidencias registradas'
+        } y enviadas a la bitácora de SmartHome con éxito.`
+      );
       setSelectedPhotos([]);
       setNotes('');
       setIsEvent(false);
 
-      // Refresh lead evidences
       const refetch = await listRecentPhotoEvidences(companyId, leadData.id, 20);
       setLeadEvidences(refetch);
     } catch (err: any) {
       console.warn('[PhotoEvidenceScreen] submit error:', err);
-      Alert.alert('Error al guardar evidencia', err?.message || 'Ocurrió un error al guardar la evidencia fotográfica.');
+      Alert.alert(
+        'Error al guardar evidencia',
+        err?.message || 'Ocurrió un error al guardar la evidencia fotográfica.'
+      );
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -306,39 +343,63 @@ export function PhotoEvidenceScreen() {
     }
   };
 
+  const quickDates = buildQuickDates();
+
   return (
-    <SafeAreaView edges={['top']} style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bgCanvas }]}>
       <ScreenHeader
         title="Evidencia Fotográfica"
-        subtitle="Registro de evidencias en bitácora"
+        subtitle="Registro de evidencias en bitácora SmartHome"
+        onBack={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Main'))}
       />
 
       {/* Selector de pestañas */}
-      <View style={styles.tabsRow}>
+      <View
+        style={[
+          styles.tabsRow,
+          { backgroundColor: palette.bgSurface, borderColor: palette.border },
+        ]}
+      >
         <Pressable
           onPress={() => setActiveTab('register')}
-          style={[styles.tabButton, activeTab === 'register' && styles.tabButtonActive]}
+          style={[
+            styles.tabButton,
+            activeTab === 'register' && { backgroundColor: palette.brand },
+          ]}
         >
           <Ionicons
             name="camera-outline"
             size={16}
-            color={activeTab === 'register' ? '#fff' : colors.muted}
+            color={activeTab === 'register' ? '#ffffff' : palette.textMuted}
           />
-          <Text style={[styles.tabText, activeTab === 'register' && styles.tabTextActive]}>
+          <Text
+            style={[
+              styles.tabText,
+              { color: activeTab === 'register' ? '#ffffff' : palette.textMuted },
+            ]}
+          >
             Registrar
           </Text>
         </Pressable>
 
         <Pressable
           onPress={() => setActiveTab('gallery')}
-          style={[styles.tabButton, activeTab === 'gallery' && styles.tabButtonActive]}
+          style={[
+            styles.tabButton,
+            activeTab === 'gallery' && { backgroundColor: palette.brand },
+          ]}
         >
           <Ionicons
             name="images-outline"
             size={16}
-            color={activeTab === 'gallery' ? '#fff' : colors.muted}
+            color={activeTab === 'gallery' ? '#ffffff' : palette.textMuted}
           />
-          <Text style={[styles.tabText, activeTab === 'gallery' && styles.tabTextActive]}>
+          <Text
+            style={[
+              styles.tabText,
+              { color: activeTab === 'gallery' ? '#ffffff' : palette.textMuted },
+            ]}
+          >
             Galería
           </Text>
         </Pressable>
@@ -347,27 +408,36 @@ export function PhotoEvidenceScreen() {
       {activeTab === 'register' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {/* Buscador por teléfono */}
-          <View style={styles.searchBox}>
-            <Ionicons name="search" size={18} color={colors.muted} />
+          <View
+            style={[
+              styles.searchBox,
+              { backgroundColor: palette.bgSurface, borderColor: palette.border },
+            ]}
+          >
+            <Ionicons name="search" size={18} color={palette.textMuted} />
             <TextInput
               value={phoneNumber}
               onChangeText={setPhoneNumber}
               placeholder="Número de teléfono (ej. 3001234567)"
-              placeholderTextColor={colors.faint}
+              placeholderTextColor={palette.textPlaceholder}
               keyboardType="phone-pad"
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: palette.textPrimary }]}
               onSubmitEditing={() => doSearch(phoneNumber)}
               returnKeyType="search"
             />
             {phoneNumber.length > 0 && (
               <Pressable onPress={() => setPhoneNumber('')} style={styles.iconBtn}>
-                <Ionicons name="close-circle" size={18} color={colors.faint} />
+                <Ionicons name="close-circle" size={18} color={palette.textSubtle} />
               </Pressable>
             )}
             <Pressable
               onPress={() => doSearch(phoneNumber)}
               disabled={searching || !phoneNumber.trim()}
-              style={[styles.searchBtn, (!phoneNumber.trim() || searching) && styles.btnDisabled]}
+              style={[
+                styles.searchBtn,
+                { backgroundColor: palette.brand },
+                (!phoneNumber.trim() || searching) && styles.btnDisabled,
+              ]}
             >
               {searching ? (
                 <ActivityIndicator size="small" color="#fff" />
@@ -379,35 +449,52 @@ export function PhotoEvidenceScreen() {
 
           {/* Tarjeta del cliente si fue encontrado */}
           {leadData ? (
-            <View style={styles.leadCard}>
+            <View
+              style={[
+                styles.leadCard,
+                { backgroundColor: palette.bgSurface, borderColor: palette.border },
+              ]}
+            >
               <View style={styles.leadHeader}>
-                <View style={styles.leadAvatar}>
-                  <Ionicons name="person" size={18} color={colors.brand} />
+                <View style={[styles.leadAvatar, { backgroundColor: palette.brandBg }]}>
+                  <Ionicons name="person" size={18} color={palette.brandText} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.leadName}>{leadData.name || 'Sin nombre'}</Text>
-                  <Text style={styles.leadPhone}>{leadData.phone}</Text>
+                  <Text style={[styles.leadName, { color: palette.textPrimary }]}>
+                    {leadData.name || 'Sin nombre'}
+                  </Text>
+                  <Text style={[styles.leadPhone, { color: palette.textMuted }]}>
+                    {leadData.phone}
+                  </Text>
                 </View>
-                <View style={styles.leadBadge}>
-                  <Text style={styles.leadBadgeText}>{leadData.status.toUpperCase()}</Text>
+                <View style={[styles.leadBadge, { backgroundColor: palette.brandBg }]}>
+                  <Text style={[styles.leadBadgeText, { color: palette.brandText }]}>
+                    {leadData.status.toUpperCase()}
+                  </Text>
                 </View>
               </View>
 
-              <View style={styles.advisorRow}>
-                <Ionicons name="briefcase-outline" size={14} color={colors.muted} />
-                <Text style={styles.advisorLabel}>
+              <View style={[styles.advisorRow, { borderTopColor: palette.border }]}>
+                <Ionicons name="briefcase-outline" size={14} color={palette.textMuted} />
+                <Text style={[styles.advisorLabel, { color: palette.textMuted }]}>
                   Asesor asignado:{' '}
-                  <Text style={styles.advisorValue}>
+                  <Text style={[styles.advisorValue, { color: palette.textPrimary }]}>
                     {leadData.smartHomeAdvisor || leadData.assignedAdvisorName || 'Sin asignar'}
                   </Text>
                 </Text>
               </View>
 
               {!canUpload && (
-                <View style={styles.permWarn}>
-                  <Ionicons name="alert-circle-outline" size={16} color={colors.amber} />
-                  <Text style={styles.permWarnText}>
-                    {permissionMessage || 'Solo el asesor asignado o un administrador puede registrar bitácora.'}
+                <View
+                  style={[
+                    styles.permWarn,
+                    { backgroundColor: palette.amberBg, borderColor: palette.amberBorder },
+                  ]}
+                >
+                  <Ionicons name="alert-circle-outline" size={16} color={palette.amberText} />
+                  <Text style={[styles.permWarnText, { color: palette.amberText }]}>
+                    {permissionMessage ||
+                      'Solo el asesor asignado o un administrador puede registrar bitácora.'}
                   </Text>
                 </View>
               )}
@@ -415,14 +502,25 @@ export function PhotoEvidenceScreen() {
           ) : null}
 
           {/* Formulario de Fotos y Bitácora */}
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>FOTOGRAFÍAS DE EVIDENCIA</Text>
+          <View
+            style={[
+              styles.formSection,
+              { backgroundColor: palette.bgSurface, borderColor: palette.border },
+            ]}
+          >
+            <Text style={[styles.sectionTitle, { color: palette.textSubtle }]}>
+              FOTOGRAFÍAS DE EVIDENCIA
+            </Text>
 
             <View style={styles.mediaButtonsRow}>
               <Pressable
                 onPress={pickFromCamera}
-                disabled={uploading || (leadData && !canUpload)}
-                style={[styles.mediaActionBtn, (uploading || (leadData && !canUpload)) && styles.btnDisabled]}
+                disabled={uploading || Boolean(leadData && !canUpload)}
+                style={[
+                  styles.mediaActionBtn,
+                  { backgroundColor: palette.brand },
+                  (uploading || Boolean(leadData && !canUpload)) && styles.btnDisabled,
+                ]}
               >
                 <Ionicons name="camera" size={20} color="#fff" />
                 <Text style={styles.mediaActionText}>Tomar foto</Text>
@@ -430,24 +528,32 @@ export function PhotoEvidenceScreen() {
 
               <Pressable
                 onPress={pickFromGallery}
-                disabled={uploading || (leadData && !canUpload)}
-                style={[styles.mediaActionBtnSecondary, (uploading || (leadData && !canUpload)) && styles.btnDisabled]}
+                disabled={uploading || Boolean(leadData && !canUpload)}
+                style={[
+                  styles.mediaActionBtnSecondary,
+                  {
+                    backgroundColor: palette.brandBg,
+                    borderColor: palette.brandBorder,
+                  },
+                  (uploading || Boolean(leadData && !canUpload)) && styles.btnDisabled,
+                ]}
               >
-                <Ionicons name="images" size={20} color={colors.brand} />
-                <Text style={styles.mediaActionSecondaryText}>Galería</Text>
+                <Ionicons name="images" size={20} color={palette.brandText} />
+                <Text style={[styles.mediaActionSecondaryText, { color: palette.brandText }]}>
+                  Galería
+                </Text>
               </Pressable>
             </View>
 
-            {/* Cuadrícula de fotos seleccionadas */}
             {selectedPhotos.length > 0 && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoList}>
                 {selectedPhotos.map((photo, index) => (
                   <View key={`${photo.uri}-${index}`} style={styles.photoThumbWrap}>
-                    <Image source={{ uri: photo.uri }} style={styles.photoThumb} />
-                    <Pressable
-                      onPress={() => removePhoto(index)}
-                      style={styles.photoRemoveBtn}
-                    >
+                    <Image
+                      source={{ uri: photo.uri }}
+                      style={[styles.photoThumb, { borderColor: palette.border }]}
+                    />
+                    <Pressable onPress={() => removePhoto(index)} style={styles.photoRemoveBtn}>
                       <Ionicons name="close" size={14} color="#fff" />
                     </Pressable>
                   </View>
@@ -455,7 +561,9 @@ export function PhotoEvidenceScreen() {
               </ScrollView>
             )}
 
-            <Text style={[styles.sectionTitle, { marginTop: 16 }]}>DATOS DE BITÁCORA</Text>
+            <Text style={[styles.sectionTitle, { color: palette.textSubtle, marginTop: 12 }]}>
+              DATOS DE BITÁCORA
+            </Text>
 
             <TextInput
               value={notes}
@@ -463,74 +571,115 @@ export function PhotoEvidenceScreen() {
               multiline
               numberOfLines={3}
               placeholder="Observación de la visita o gestión (se enviará a SmartHome)..."
-              placeholderTextColor={colors.faint}
-              style={styles.notesInput}
+              placeholderTextColor={palette.textPlaceholder}
+              style={[
+                styles.notesInput,
+                {
+                  backgroundColor: palette.bgInput,
+                  borderColor: palette.borderStrong,
+                  color: palette.textPrimary,
+                },
+              ]}
               editable={!uploading}
             />
 
-            {/* Selectores de Etiqueta y Contexto */}
             <View style={styles.selectorRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Etiqueta</Text>
+                <Text style={[styles.inputLabel, { color: palette.textMuted }]}>Etiqueta</Text>
                 <Pressable
                   onPress={() => setActivePicker('action')}
                   disabled={uploading}
-                  style={styles.pickerTrigger}
+                  style={[
+                    styles.pickerTrigger,
+                    { backgroundColor: palette.bgInput, borderColor: palette.borderStrong },
+                  ]}
                 >
-                  <Ionicons name="pricetag-outline" size={15} color={colors.brand} />
-                  <Text style={styles.pickerValue} numberOfLines={1}>
+                  <Ionicons name="pricetag-outline" size={15} color={palette.brandText} />
+                  <Text
+                    style={[styles.pickerValue, { color: palette.textPrimary }]}
+                    numberOfLines={1}
+                  >
                     {actionLabel}
                   </Text>
-                  <Ionicons name="chevron-down" size={14} color={colors.faint} />
+                  <Ionicons name="chevron-down" size={14} color={palette.textSubtle} />
                 </Pressable>
               </View>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Contexto</Text>
+                <Text style={[styles.inputLabel, { color: palette.textMuted }]}>Contexto</Text>
                 <Pressable
                   onPress={() => setActivePicker('context')}
                   disabled={uploading}
-                  style={styles.pickerTrigger}
+                  style={[
+                    styles.pickerTrigger,
+                    { backgroundColor: palette.bgInput, borderColor: palette.borderStrong },
+                  ]}
                 >
-                  <Ionicons name="folder-outline" size={15} color={colors.brand} />
-                  <Text style={styles.pickerValue} numberOfLines={1}>
+                  <Ionicons name="folder-outline" size={15} color={palette.brandText} />
+                  <Text
+                    style={[styles.pickerValue, { color: palette.textPrimary }]}
+                    numberOfLines={1}
+                  >
                     {context}
                   </Text>
-                  <Ionicons name="chevron-down" size={14} color={colors.faint} />
+                  <Ionicons name="chevron-down" size={14} color={palette.textSubtle} />
                 </Pressable>
               </View>
             </View>
 
-            {/* Switch de evento */}
             <View style={styles.switchRow}>
               <Switch
                 value={isEvent}
                 onValueChange={setIsEvent}
-                trackColor={{ false: colors.border, true: colors.sky }}
-                thumbColor="#fff"
+                trackColor={{ false: palette.borderStrong, true: palette.brand }}
+                thumbColor="#ffffff"
               />
-              <Text style={styles.switchLabel}>Registrar también como evento con fecha y hora</Text>
+              <Text style={[styles.switchLabel, { color: palette.textMuted }]}>
+                Registrar también como evento con fecha y hora
+              </Text>
             </View>
 
             {isEvent && (
-              <View style={styles.eventTimeRow}>
-                <Text style={styles.eventTimeLabel}>Hora del evento:</Text>
+              <View
+                style={[
+                  styles.eventTimeRow,
+                  { backgroundColor: palette.skyBg, borderColor: palette.skyBorder },
+                ]}
+              >
+                <Pressable
+                  onPress={() => setActivePicker('date')}
+                  style={[
+                    styles.timeTrigger,
+                    { backgroundColor: palette.bgSurface, borderColor: palette.skyBorder },
+                  ]}
+                >
+                  <Ionicons name="calendar-outline" size={15} color={palette.skyText} />
+                  <Text style={[styles.timeValue, { color: palette.textPrimary }]}>
+                    {eventDate}
+                  </Text>
+                </Pressable>
+
                 <Pressable
                   onPress={() => setActivePicker('time')}
-                  style={styles.timeTrigger}
+                  style={[
+                    styles.timeTrigger,
+                    { backgroundColor: palette.bgSurface, borderColor: palette.skyBorder },
+                  ]}
                 >
-                  <Ionicons name="time-outline" size={15} color={colors.sky} />
-                  <Text style={styles.timeValue}>{eventTime}</Text>
+                  <Ionicons name="time-outline" size={15} color={palette.skyText} />
+                  <Text style={[styles.timeValue, { color: palette.textPrimary }]}>
+                    {eventTime}
+                  </Text>
                 </Pressable>
               </View>
             )}
 
-            {/* Botón de Enviar */}
             <Pressable
               onPress={handleSaveEvidence}
               disabled={uploading || selectedPhotos.length === 0 || !leadData || !canUpload}
               style={[
                 styles.submitBtn,
+                { backgroundColor: palette.brand },
                 (uploading || selectedPhotos.length === 0 || !leadData || !canUpload) &&
                   styles.btnDisabled,
               ]}
@@ -545,9 +694,7 @@ export function PhotoEvidenceScreen() {
               ) : (
                 <View style={styles.uploadingRow}>
                   <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
-                  <Text style={styles.submitBtnText}>
-                    Guardar evidencia en SmartHome
-                  </Text>
+                  <Text style={styles.submitBtnText}>Guardar evidencia en SmartHome</Text>
                 </View>
               )}
             </Pressable>
@@ -555,33 +702,52 @@ export function PhotoEvidenceScreen() {
 
           {/* Historial de evidencias previas del cliente */}
           {leadEvidences.length > 0 && (
-            <View style={styles.historySection}>
-              <Text style={styles.sectionTitle}>
+            <View
+              style={[
+                styles.historySection,
+                { backgroundColor: palette.bgSurface, borderColor: palette.border },
+              ]}
+            >
+              <Text style={[styles.sectionTitle, { color: palette.textSubtle }]}>
                 HISTORIAL DE EVIDENCIAS ({leadEvidences.length})
               </Text>
               {leadEvidences.map((item) => (
                 <Pressable
                   key={item.id}
                   onPress={() => setLightboxItem(item)}
-                  style={styles.historyCard}
+                  style={[styles.historyCard, { borderBottomColor: palette.border }]}
                 >
-                  <Image source={{ uri: item.photoUrl }} style={styles.historyThumb} />
+                  <Image
+                    source={{ uri: item.photoUrl }}
+                    style={[styles.historyThumb, { backgroundColor: palette.bgElevated }]}
+                  />
                   <View style={styles.historyMeta}>
                     <View style={styles.historyRow}>
-                      <Text style={styles.historyAction}>{item.actionLabel}</Text>
+                      <Text style={[styles.historyAction, { color: palette.textPrimary }]}>
+                        {item.actionLabel}
+                      </Text>
                       {item.smartHomeSynced ? (
                         <View style={styles.syncedBadge}>
-                          <Ionicons name="checkmark-circle" size={12} color={colors.emerald} />
-                          <Text style={styles.syncedText}>SmartHome</Text>
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={12}
+                            color={palette.emeraldText}
+                          />
+                          <Text style={[styles.syncedText, { color: palette.emeraldText }]}>
+                            SmartHome
+                          </Text>
                         </View>
                       ) : null}
                     </View>
                     {item.notes ? (
-                      <Text style={styles.historyNotes} numberOfLines={2}>
+                      <Text
+                        style={[styles.historyNotes, { color: palette.textMuted }]}
+                        numberOfLines={2}
+                      >
                         {item.notes}
                       </Text>
                     ) : null}
-                    <Text style={styles.historyAuthor}>
+                    <Text style={[styles.historyAuthor, { color: palette.textSubtle }]}>
                       {item.authorName} · {formatDisplayDate(item.createdAt)}
                     </Text>
                   </View>
@@ -591,21 +757,21 @@ export function PhotoEvidenceScreen() {
           )}
         </ScrollView>
       ) : (
-        /* Pestaña de Galería general */
-        <ScrollView
-          contentContainerStyle={styles.galleryContent}
-          keyboardShouldPersistTaps="handled"
-        >
+        <ScrollView contentContainerStyle={styles.galleryContent} keyboardShouldPersistTaps="handled">
           {loadingGallery ? (
             <View style={styles.loadingBox}>
-              <ActivityIndicator size="large" color={colors.brand} />
-              <Text style={styles.loadingText}>Cargando evidencias recientes...</Text>
+              <ActivityIndicator size="large" color={palette.brand} />
+              <Text style={[styles.loadingText, { color: palette.textMuted }]}>
+                Cargando evidencias recientes...
+              </Text>
             </View>
           ) : galleryItems.length === 0 ? (
             <View style={styles.emptyBox}>
-              <Ionicons name="images-outline" size={44} color={colors.faint} />
-              <Text style={styles.emptyTitle}>Sin evidencias registradas</Text>
-              <Text style={styles.emptySubtitle}>
+              <Ionicons name="images-outline" size={44} color={palette.textSubtle} />
+              <Text style={[styles.emptyTitle, { color: palette.textPrimary }]}>
+                Sin evidencias registradas
+              </Text>
+              <Text style={[styles.emptySubtitle, { color: palette.textMuted }]}>
                 Las fotografías registradas por los asesores aparecerán aquí.
               </Text>
             </View>
@@ -615,7 +781,10 @@ export function PhotoEvidenceScreen() {
                 <Pressable
                   key={item.id}
                   onPress={() => setLightboxItem(item)}
-                  style={styles.galleryItem}
+                  style={[
+                    styles.galleryItem,
+                    { backgroundColor: palette.bgSurface, borderColor: palette.border },
+                  ]}
                 >
                   <Image source={{ uri: item.photoUrl }} style={styles.galleryImage} />
                   <View style={styles.galleryItemOverlay}>
@@ -633,7 +802,7 @@ export function PhotoEvidenceScreen() {
         </ScrollView>
       )}
 
-      {/* Lightbox Modal para ver foto completa */}
+      {/* Lightbox Modal */}
       <Modal
         visible={!!lightboxItem}
         transparent
@@ -641,10 +810,7 @@ export function PhotoEvidenceScreen() {
         onRequestClose={() => setLightboxItem(null)}
       >
         <View style={styles.lightboxBackdrop}>
-          <Pressable
-            onPress={() => setLightboxItem(null)}
-            style={styles.lightboxCloseBtn}
-          >
+          <Pressable onPress={() => setLightboxItem(null)} style={styles.lightboxCloseBtn}>
             <Ionicons name="close" size={26} color="#fff" />
           </Pressable>
 
@@ -655,17 +821,20 @@ export function PhotoEvidenceScreen() {
                 style={styles.lightboxImage}
                 resizeMode="contain"
               />
-              <View style={styles.lightboxDetails}>
-                <Text style={styles.lightboxTitle}>
-                  {lightboxItem.leadName || 'Cliente'} ({lightboxItem.leadPhone || ''})
+              <View style={[styles.lightboxDetails, { backgroundColor: palette.bgSurface }]}>
+                <Text style={[styles.lightboxTitle, { color: palette.textPrimary }]}>
+                  {lightboxItem.leadName || 'Cliente'}{' '}
+                  {lightboxItem.leadPhone ? `(${lightboxItem.leadPhone})` : ''}
                 </Text>
-                <Text style={styles.lightboxAction}>
+                <Text style={[styles.lightboxAction, { color: palette.brandText }]}>
                   {lightboxItem.actionLabel} · {lightboxItem.context}
                 </Text>
                 {lightboxItem.notes ? (
-                  <Text style={styles.lightboxNotes}>{lightboxItem.notes}</Text>
+                  <Text style={[styles.lightboxNotes, { color: palette.textSecondary }]}>
+                    {lightboxItem.notes}
+                  </Text>
                 ) : null}
-                <Text style={styles.lightboxAuthor}>
+                <Text style={[styles.lightboxAuthor, { color: palette.textSubtle }]}>
                   Registrado por {lightboxItem.authorName} ·{' '}
                   {formatDisplayDate(lightboxItem.createdAt)}
                 </Text>
@@ -675,7 +844,7 @@ export function PhotoEvidenceScreen() {
         </View>
       </Modal>
 
-      {/* Modal Picker para Etiqueta, Contexto u Hora */}
+      {/* Modal Picker para Etiqueta, Contexto, Fecha u Hora */}
       <Modal
         visible={!!activePicker}
         transparent
@@ -683,56 +852,110 @@ export function PhotoEvidenceScreen() {
         onRequestClose={() => setActivePicker(null)}
       >
         <Pressable style={styles.sheetOverlay} onPress={() => setActivePicker(null)} />
-        <SafeAreaView edges={['bottom']} style={styles.sheet}>
+        <SafeAreaView
+          edges={['bottom']}
+          style={[
+            styles.sheet,
+            { backgroundColor: palette.bgSurface, borderTopColor: palette.border },
+          ]}
+        >
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>
+            <Text style={[styles.sheetTitle, { color: palette.textPrimary }]}>
               {activePicker === 'action'
                 ? 'Seleccionar Etiqueta'
                 : activePicker === 'context'
                 ? 'Seleccionar Contexto'
+                : activePicker === 'date'
+                ? 'Fecha del evento'
                 : 'Hora del evento'}
             </Text>
             <Pressable onPress={() => setActivePicker(null)} style={styles.iconBtn}>
-              <Ionicons name="close" size={22} color={colors.text} />
+              <Ionicons name="close" size={22} color={palette.textPrimary} />
             </Pressable>
           </View>
 
           <ScrollView style={{ maxHeight: 320 }}>
             <View style={styles.optionsWrap}>
-              {(activePicker === 'action'
-                ? ACTION_LABELS
-                : activePicker === 'context'
-                ? CONTEXT_LABELS
-                : timeOptions
-              ).map((opt) => {
-                const isSelected =
-                  activePicker === 'action'
-                    ? opt === actionLabel
+              {activePicker === 'date'
+                ? quickDates.map((d) => {
+                    const isSelected = d.value === eventDate;
+                    return (
+                      <Pressable
+                        key={d.value}
+                        onPress={() => {
+                          setEventDate(d.value);
+                          setActivePicker(null);
+                        }}
+                        style={[
+                          styles.optionPill,
+                          {
+                            backgroundColor: isSelected ? palette.brandBg : palette.bgElevated,
+                            borderColor: isSelected ? palette.brandBorder : palette.border,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionText,
+                            {
+                              color: isSelected ? palette.brandText : palette.textPrimary,
+                              fontWeight: isSelected ? '700' : '500',
+                            },
+                          ]}
+                        >
+                          {d.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })
+                : (activePicker === 'action'
+                    ? ACTION_LABELS
                     : activePicker === 'context'
-                    ? opt === context
-                    : opt === eventTime;
-                return (
-                  <Pressable
-                    key={opt}
-                    onPress={() => {
-                      if (activePicker === 'action') setActionLabel(opt);
-                      else if (activePicker === 'context') setContext(opt);
-                      else setEventTime(opt);
-                      setActivePicker(null);
-                    }}
-                    style={[styles.optionPill, isSelected && styles.optionPillActive]}
-                  >
-                    <Text style={[styles.optionText, isSelected && styles.optionTextActive]}>
-                      {opt}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+                    ? CONTEXT_LABELS
+                    : timeOptions
+                  ).map((opt) => {
+                    const isSelected =
+                      activePicker === 'action'
+                        ? opt === actionLabel
+                        : activePicker === 'context'
+                        ? opt === context
+                        : opt === eventTime;
+                    return (
+                      <Pressable
+                        key={opt}
+                        onPress={() => {
+                          if (activePicker === 'action') setActionLabel(opt);
+                          else if (activePicker === 'context') setContext(opt);
+                          else setEventTime(opt);
+                          setActivePicker(null);
+                        }}
+                        style={[
+                          styles.optionPill,
+                          {
+                            backgroundColor: isSelected ? palette.brandBg : palette.bgElevated,
+                            borderColor: isSelected ? palette.brandBorder : palette.border,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionText,
+                            {
+                              color: isSelected ? palette.brandText : palette.textPrimary,
+                              fontWeight: isSelected ? '700' : '500',
+                            },
+                          ]}
+                        >
+                          {opt}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
             </View>
           </ScrollView>
         </SafeAreaView>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -740,18 +963,15 @@ const { width } = Dimensions.get('window');
 const gridItemSize = (width - 32 - 12) / 2;
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
+  safe: { flex: 1 },
   content: { padding: 16, paddingBottom: 40 },
   galleryContent: { padding: 16, paddingBottom: 40 },
-
   tabsRow: {
     flexDirection: 'row',
     marginHorizontal: 16,
     marginVertical: 10,
-    backgroundColor: colors.surface,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border,
     padding: 3,
   },
   tabButton: {
@@ -763,38 +983,26 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     borderRadius: 6,
   },
-  tabButtonActive: {
-    backgroundColor: colors.brand,
-  },
   tabText: {
-    color: colors.muted,
     fontSize: 12,
     fontWeight: '700',
   },
-  tabTextActive: {
-    color: '#fff',
-  },
-
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: 8,
     paddingHorizontal: 12,
     height: 48,
   },
   searchInput: {
     flex: 1,
-    color: colors.text,
     fontSize: 13,
     height: '100%',
   },
   iconBtn: { padding: 4 },
   searchBtn: {
-    backgroundColor: colors.sky,
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 6,
@@ -802,15 +1010,12 @@ const styles = StyleSheet.create({
   searchBtnText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   btnDisabled: { opacity: 0.5 },
-
   leadCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.border,
     padding: 14,
     marginTop: 14,
     gap: 10,
@@ -824,76 +1029,61 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.brandDark,
     alignItems: 'center',
     justifyContent: 'center',
   },
   leadName: {
-    color: colors.text,
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   leadPhone: {
-    color: colors.muted,
     fontSize: 12,
     marginTop: 1,
   },
   leadBadge: {
-    backgroundColor: colors.raised,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   leadBadgeText: {
-    color: colors.brand,
     fontSize: 10,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   advisorRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
     paddingTop: 8,
   },
   advisorLabel: {
-    color: colors.muted,
     fontSize: 11,
   },
   advisorValue: {
-    color: colors.text,
     fontWeight: '700',
   },
   permWarn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-    borderRadius: 6,
+    borderRadius: 8,
     padding: 10,
   },
   permWarnText: {
-    color: colors.amber,
     fontSize: 11,
     flex: 1,
   },
-
   formSection: {
-    backgroundColor: colors.surface,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.border,
     padding: 14,
     marginTop: 14,
     gap: 12,
   },
   sectionTitle: {
-    color: colors.faint,
     fontSize: 10,
-    fontWeight: '800',
+    fontWeight: '700',
     letterSpacing: 0.5,
   },
   mediaButtonsRow: {
@@ -903,7 +1093,6 @@ const styles = StyleSheet.create({
   mediaActionBtn: {
     flex: 1,
     height: 44,
-    backgroundColor: colors.brand,
     borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
@@ -913,14 +1102,12 @@ const styles = StyleSheet.create({
   mediaActionText: {
     color: '#fff',
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   mediaActionBtnSecondary: {
     flex: 1,
     height: 44,
-    backgroundColor: colors.raised,
     borderWidth: 1,
-    borderColor: colors.brandBorder,
     borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
@@ -928,11 +1115,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   mediaActionSecondaryText: {
-    color: colors.brand,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
   },
-
   photoList: {
     flexDirection: 'row',
     paddingVertical: 6,
@@ -946,13 +1131,12 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border,
   },
   photoRemoveBtn: {
     position: 'absolute',
     top: -6,
     right: -6,
-    backgroundColor: colors.red,
+    backgroundColor: '#ef4444',
     width: 22,
     height: 22,
     borderRadius: 11,
@@ -961,34 +1145,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#fff',
   },
-
   notesInput: {
-    backgroundColor: colors.raised,
     borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: 8,
     padding: 12,
-    color: colors.text,
     fontSize: 13,
-    minHeight: 70,
+    minHeight: 74,
     textAlignVertical: 'top',
   },
-
   selectorRow: {
     flexDirection: 'row',
     gap: 10,
   },
   inputLabel: {
-    color: colors.muted,
-    fontSize: 10,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '600',
     marginBottom: 4,
   },
   pickerTrigger: {
     height: 40,
-    backgroundColor: colors.raised,
     borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
@@ -997,10 +1173,8 @@ const styles = StyleSheet.create({
   },
   pickerValue: {
     flex: 1,
-    color: colors.text,
     fontSize: 12,
   },
-
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1008,45 +1182,35 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   switchLabel: {
-    color: colors.muted,
     fontSize: 12,
     flex: 1,
   },
   eventTimeRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 10,
-    backgroundColor: 'rgba(14, 165, 233, 0.08)',
     padding: 10,
-    borderRadius: 6,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(14, 165, 233, 0.2)',
-  },
-  eventTimeLabel: {
-    color: colors.sky,
-    fontSize: 12,
-    fontWeight: '700',
   },
   timeTrigger: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    backgroundColor: colors.surface,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: colors.sky,
   },
   timeValue: {
-    color: colors.text,
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
-
   submitBtn: {
     height: 48,
-    backgroundColor: colors.brand,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1055,19 +1219,16 @@ const styles = StyleSheet.create({
   submitBtnText: {
     color: '#fff',
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: '700',
   },
   uploadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-
   historySection: {
-    backgroundColor: colors.surface,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.border,
     padding: 14,
     marginTop: 14,
     gap: 12,
@@ -1077,13 +1238,11 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   historyThumb: {
     width: 60,
     height: 60,
     borderRadius: 6,
-    backgroundColor: colors.raised,
   },
   historyMeta: {
     flex: 1,
@@ -1096,9 +1255,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   historyAction: {
-    color: colors.text,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   syncedBadge: {
     flexDirection: 'row',
@@ -1106,20 +1264,15 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   syncedText: {
-    color: colors.emerald,
     fontSize: 10,
     fontWeight: '700',
   },
   historyNotes: {
-    color: colors.muted,
     fontSize: 11,
   },
   historyAuthor: {
-    color: colors.faint,
     fontSize: 10,
   },
-
-  // Gallery
   loadingBox: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -1127,7 +1280,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   loadingText: {
-    color: colors.muted,
     fontSize: 13,
   },
   emptyBox: {
@@ -1137,12 +1289,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   emptyTitle: {
-    color: colors.text,
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   emptySubtitle: {
-    color: colors.muted,
     fontSize: 12,
     textAlign: 'center',
     maxWidth: 240,
@@ -1157,10 +1307,8 @@ const styles = StyleSheet.create({
     height: gridItemSize,
     borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: colors.surface,
     position: 'relative',
     borderWidth: 1,
-    borderColor: colors.border,
   },
   galleryImage: {
     width: '100%',
@@ -1171,21 +1319,19 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.72)',
     padding: 6,
   },
   galleryItemName: {
     color: '#fff',
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   galleryItemDate: {
-    color: colors.muted,
+    color: '#d4d4d8',
     fontSize: 9,
     marginTop: 1,
   },
-
-  // Lightbox
   lightboxBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.92)',
@@ -1218,38 +1364,29 @@ const styles = StyleSheet.create({
   lightboxDetails: {
     marginTop: 14,
     width: '100%',
-    backgroundColor: colors.surface,
     padding: 14,
-    borderRadius: 8,
+    borderRadius: 10,
     gap: 4,
   },
   lightboxTitle: {
-    color: '#fff',
     fontSize: 15,
-    fontWeight: '800',
-  },
-  lightboxAction: {
-    color: colors.sky,
-    fontSize: 12,
     fontWeight: '700',
   },
+  lightboxAction: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
   lightboxNotes: {
-    color: colors.muted,
     fontSize: 12,
     marginTop: 4,
   },
   lightboxAuthor: {
-    color: colors.faint,
     fontSize: 10,
     marginTop: 4,
   },
-
-  // Sheet
-  sheetOverlay: { flex: 1, backgroundColor: '#00000088' },
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
-    backgroundColor: colors.surface,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 20,
@@ -1261,9 +1398,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   sheetTitle: {
-    color: colors.text,
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   optionsWrap: {
     flexDirection: 'row',
@@ -1273,22 +1409,10 @@ const styles = StyleSheet.create({
   optionPill: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 100,
-    backgroundColor: colors.raised,
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
-  },
-  optionPillActive: {
-    backgroundColor: colors.brandDark,
-    borderColor: colors.brand,
   },
   optionText: {
-    color: colors.text,
     fontSize: 12,
-    fontWeight: '600',
-  },
-  optionTextActive: {
-    color: colors.brand,
-    fontWeight: '800',
   },
 });

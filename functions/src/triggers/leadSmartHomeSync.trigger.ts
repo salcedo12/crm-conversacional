@@ -2,10 +2,11 @@ import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
 import { syncLeadToSmartHome } from '../modules/smarthome/smarthomeSync.service';
+import { isDirectAdvisorLead, countsAs317LineLead } from '../modules/leads/leadClassification';
 import type { Lead } from '../modules/leads/leads.types';
 
 /** Fuentes cuyos leads se envían a SmartHome (conversacionales; excluye cargas manuales masivas). */
-const SYNC_SOURCES = new Set(['whatsapp', 'meta_ads', 'messenger', 'instagram', 'facebook', 'web']);
+const SYNC_SOURCES = new Set(['whatsapp', 'meta_ads', 'messenger', 'instagram', 'facebook', 'web', 'google_ads']);
 
 /**
  * Crea automáticamente cada lead nuevo (ya asignado a un asesor) en SmartHome.
@@ -22,6 +23,7 @@ export const onLeadSmartHomeSync = onDocumentWritten(
     const before = event.data?.before.data() as Lead | undefined;
 
     // Solo cuando ya hay primer contacto humano, asesor, no se ha sincronizado y es una fuente elegible.
+    if (isDirectAdvisorLead(after) || !countsAs317LineLead(after)) return;
     if (!after.advisorFirstContactAt || !after.advisorFirstContactBy) return;
     if (!after.assignedTo) return;
     if (after.smartHomeCustomerId) return;

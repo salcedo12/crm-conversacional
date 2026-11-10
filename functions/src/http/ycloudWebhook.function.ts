@@ -8,11 +8,14 @@ import { toNormalizedPhone, phoneTail } from '../utils/phone';
 import { leadsRepository }    from '../modules/leads/leads.repository';
 import { normalizeBusinessNumber } from '../modules/whatsapp/inbox';
 import { assignLead }         from '../modules/leads/leadAssignment.service';
-import { parseWebRefTag, webAttributionToMetadata } from '../modules/leads/webAttribution';
+import { evaluateExclusivityOnReentry } from '../modules/leads/leadExclusivity.service';
+import { parseWebRefTag, webAttributionToMetadata, isGoogleAdsWhatsAppText } from '../modules/leads/webAttribution';
 import { messagesRepository } from '../modules/messages/messages.repository';
 import { callsRepository }    from '../modules/calls/calls.repository';
 import { updateBroadcastDeliveryStatus } from '../modules/broadcasts/broadcastStatus.service';
 import { resolveCompanyIdForChannel, getAdvisorLine } from '../modules/companies/companyRouting';
+import { isCompanyTeamPhone } from '../modules/companies/teamPhones';
+import { pauseAiForAdvisorMessage } from '../modules/ai/aiRollout';
 import { ADVISOR_WHATSAPP_SOURCE } from '../modules/leads/leadClassification';
 import { getYcloudConfigForCompany } from '../modules/companies/channelCredentials.repository';
 // ycloud client disponible para envíos futuros desde este webhook
@@ -83,7 +86,9 @@ interface YcloudSmbMessageEcho {
   id:       string;   // ID interno ycloud
   wamid:    string;   // WhatsApp message ID (para idempotencia)
   from:     string;   // número de negocio con +
-  to:       string;   // número del cliente con +
+  to?:      string;   // número del cliente con + (puede ser opcional si el usuario es enmascarado por Meta)
+  toUserId?: string;  // ID de usuario encriptado de Meta CTWA (BSUID como CO.xxxx)
+  customerProfile?: { name?: string; username?: string };
   type:     string;   // text | image | video | audio | document | sticker
   status?:  string;
   // Motivo del fallo cuando status === 'failed' (p.ej. límite de marketing 131049).
@@ -248,6 +253,7 @@ export const ycloudWebhook = onRequest(
     timeoutSeconds: 60,
     memory:         '1GiB',
     invoker:        'public',
+    minInstances:   1,
   },
   async (req, res) => {
     if (req.method !== 'POST') { res.sendStatus(405); return; }
@@ -409,6 +415,17 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
     return;
   }
 
+  // Si el remitente es un asesor o una línea interna de la empresa, NO se debe
+  // registrar como prospecto ni repartir a un asesor de ventas.
+  if (hasPhone && (await isCompanyTeamPhone(companyId, normPhone || phone))) {
+    logger.info('[ycloud] Mensaje de miembro interno o línea corporativa omitido (no es lead)', {
+      companyId,
+      phone: normPhone || phone,
+      msgId,
+    });
+    return;
+  }
+
   // Idempotencia
   const idempotencyRef = db
     .collection('companies').doc(companyId)
@@ -517,7 +534,10 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
   // PRIMER mensaje (lead nuevo, sin referral de Meta) coincide con esa frase,
   // el lead se atribuye a la página web en vez de "WhatsApp directo".
   const webButton = !msg.referral ? detectWebWhatsAppButton(msg.text?.body) : null;
-  const leadSource: LeadSource = webButton ? 'web' : refSource;
+  // Anuncio de Google Ads con botón de WhatsApp: llega directo al chat (sin web ni
+  // referral); solo lo delata el texto precargado "vi su anuncio en Google".
+  const googleAd = !msg.referral && !webButton && isGoogleAdsWhatsAppText(msg.text?.body);
+  const leadSource: LeadSource = webButton ? 'web' : googleAd ? 'google_ads' : refSource;
   // El botón de WhatsApp de la web añade un tag `[meraki-ref:…]` con la atribución
   // (UTM/fbclid) cuando el visitante llegó de una pauta. Lo parseamos para NO perder
   // el origen y lo quitamos del texto para no ensuciar el chat.
@@ -529,7 +549,9 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
         ...(webButton.area ? { webArea: webButton.area } : {}),
         ...webAttributionToMetadata(webRef.attribution),
       }
-    : {};
+    : googleAd
+      ? { googleAdsOrigin: 'whatsapp_message_asset', webCameFrom: 'Google' }
+      : {};
 
   // El mensaje "completé el formulario … Phone number: +X" que manda Meta al dar
   // "enviar por WhatsApp" TRAE el número en el texto, aunque WhatsApp oculte el
@@ -544,6 +566,11 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
   let lead = hasPhone
     ? await leadsRepository.findByNormalizedPhone(companyId, normPhone)
     : await leadsRepository.findByExternalId(companyId, 'whatsapp', userId);
+  // 1b) Si tiene teléfono pero NO se encontró por teléfono y viene con BSUID de Meta,
+  // buscar si ya existía como lead enmascarado (para no duplicarlo y enlazarle el número real)
+  if (!lead && hasPhone && userId) {
+    lead = await leadsRepository.findByWhatsappUserId(companyId, userId);
+  }
   // 2) Si es usuario oculto pero el texto trae el número, buscar por ese número.
   if (!lead && !hasPhone && textNorm) {
     lead = await leadsRepository.findByNormalizedPhone(companyId, textNorm);
@@ -572,6 +599,11 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
     logger.info('[ycloud] Mensaje unido a lead existente (anti-duplicado)', {
       leadId: lead.id, via: hasPhone ? 'from' : (textNorm ? 'texto' : 'bsuid'), tail,
     });
+  }
+
+  // Protocolo Meraki: verificar caducidad de exclusividad (>30 días de abandono) si el lead escribe al 317
+  if (lead && !advisorLine) {
+    await evaluateExclusivityOnReentry(companyId, lead, 'whatsapp_inbound_317');
   }
 
   // Caso raro: usuario oculto y SIN número ni en remitente ni en texto. Si existe
@@ -615,12 +647,17 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
         // Línea de asesor → fuente propia (fuera de stats/reparto). Si no, la
         // atribución normal (pauta / web / whatsapp directo al 317).
         source:          advisorLine ? ADVISOR_WHATSAPP_SOURCE : leadSource,
+        fuenteUbicacion: advisorLine
+          ? 'WhatsApp Asesor Directo'
+          : (refMeta?.headline || (leadSource === 'meta_ads' ? 'PAUTA WHATSAPP 317'
+            : leadSource === 'google_ads' ? 'PAUTA GOOGLE 317' : 'Línea WhatsApp 317')),
         ...(!advisorLine && refMeta ? { sourceMeta: refMeta } : {}),
+        inbox:           advisorLine ? 'advisor_direct' : 'central_317',
         inboxProvider:   'ycloud',
         ...(inboxId ? { inboxId } : {}),
-        // Línea de asesor → se asigna SOLO a ese asesor (sin reparto) y la IA no
-        // responde (él chatea desde su celular).
-        ...(advisorLine ? { assignedTo: advisorLine.advisorId } : {}),
+        // Línea de asesor → se asigna SOLO a ese asesor (sin reparto ni reasignación)
+        // y la IA no responde (él chatea desde su celular).
+        ...(advisorLine ? { assignedTo: advisorLine.advisorId, pendingFirstContact: false, assignmentLocked: true } : {}),
         aiEnabled:       advisorLine ? false : true,
         tags:            dupTags,
         metadata: {
@@ -683,6 +720,7 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
       deliveryChannel: 'company_whatsapp',
       origin: 'company_whatsapp',
       ...(inboxId ? { businessPhone: inboxId } : {}),
+      ...(refMeta ? { referral: refMeta } : {}),
     },
   });
 
@@ -713,24 +751,36 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
 async function processYcloudEchoMessage(echo: YcloudSmbMessageEcho): Promise<void> {
   const companyId = await resolveCompanyIdForChannel('ycloud', echo.from);
 
-  // Algunos ecos (solo-estado / sin destinatario) llegan SIN `to`. Sin el número
-  // del cliente no hay a quién asociar el mensaje: se ignora en vez de reventar
-  // con "Cannot read properties of undefined (reading 'startsWith')".
-  if (!echo.to || typeof echo.to !== 'string') {
-    logger.info('[ycloud Echo] Eco sin destinatario (to) — ignorado', {
+  // El destinatario puede ser un número de teléfono (`to`), o un ID encriptado de Meta CTWA (`toUserId` / `CO.xxxx`)
+  let rawTo = (typeof echo.to === 'string' ? echo.to.trim() : '');
+  const toUserId = (echo.toUserId ?? '').trim();
+  let effectiveUserId = toUserId;
+
+  // Si `to` empieza con CO., es un ID encriptado de Meta, no un número de teléfono internacional
+  if (rawTo.startsWith('CO.')) {
+    effectiveUserId = rawTo;
+    rawTo = '';
+  }
+
+  // Sin número ni ID encriptado no hay a quién asociar el eco (e.g. eventos de solo-estado)
+  if (!rawTo && !effectiveUserId) {
+    logger.info('[ycloud Echo] Eco sin destinatario (ni to ni toUserId) — ignorado', {
       msgId: echo.wamid || echo.id, from: echo.from,
     });
     return;
   }
 
-  // El destinatario (to) es el cliente — con él buscamos el lead
-  // ycloud envía "to" con + ya incluido (e.g. "+573022911626")
-  const rawTo = echo.to.startsWith('+') ? echo.to.slice(1) : echo.to;
-  const phone     = `+${rawTo}`;
-  const normPhone = toNormalizedPhone(phone);
+  let phone = '';
+  let normPhone = '';
+  if (rawTo) {
+    const cleanTo = rawTo.startsWith('+') ? rawTo.slice(1) : rawTo;
+    phone = `+${cleanTo}`;
+    normPhone = toNormalizedPhone(phone);
+  }
 
   // Usar wamid para idempotencia (es el ID único de WhatsApp)
   const msgId = echo.wamid || echo.id || `echo_${Date.now()}`;
+  const targetId = phone || effectiveUserId;
 
   // El eco viene de la app nativa: `from` es la línea de negocio que envió. Si es
   // la línea personal de un asesor (coexistencia), sus leads nuevos son
@@ -749,7 +799,7 @@ async function processYcloudEchoMessage(echo: YcloudSmbMessageEcho): Promise<voi
     await idempotencyRef.create({
       messageId:   msgId,
       from:        echo.from,
-      to:          phone,
+      to:          targetId,
       processedAt: Timestamp.now(),
       expireAt:    webhookEventExpireAt(),
       channel:     'ycloud_echo',
@@ -798,19 +848,35 @@ async function processYcloudEchoMessage(echo: YcloudSmbMessageEcho): Promise<voi
 
   const now = Timestamp.now();
 
-  // Buscar o crear lead por el teléfono del cliente (to)
-  let lead = await leadsRepository.findByNormalizedPhone(companyId, normPhone);
+  // 1) Buscar lead por teléfono normalizado (si hay teléfono)
+  let lead = normPhone ? await leadsRepository.findByNormalizedPhone(companyId, normPhone) : null;
+
+  // 2) Si no se encontró por teléfono (o no tiene teléfono) y hay ID encriptado de Meta, buscar por whatsappUserId
+  if (!lead && effectiveUserId) {
+    lead = await leadsRepository.findByWhatsappUserId(companyId, effectiveUserId);
+    // Si el lead existía enmascarado y este eco ya trae el teléfono real, enlazar el teléfono para siempre
+    if (lead && phone && !lead.phone) {
+      await leadsRepository.updatePhoneIdentity(companyId, lead.id, phone, normPhone, phoneTail(normPhone));
+      lead = { ...lead, phone, normalizedPhone: normPhone, phoneTail: phoneTail(normPhone) };
+    }
+  }
+
   if (!lead) {
+    const profileName = echo.customerProfile?.name || echo.customerProfile?.username;
+    const defaultName = profileName || (phone ? `Lead ${phone}` : `Lead ${effectiveUserId}`);
     lead = await leadsRepository.create(companyId, {
       companyId,
-      phone,
-      normalizedPhone: normPhone,
-      name:            `Lead ${phone}`,
+      phone:           phone || '',
+      normalizedPhone: normPhone || '',
+      ...(effectiveUserId ? { whatsappUserId: effectiveUserId, channelExternalId: `whatsapp:${effectiveUserId}` } : {}),
+      ...(echo.customerProfile?.username ? { username: echo.customerProfile.username } : {}),
+      name:            defaultName,
       status:          'new',
       source:          advisorLine ? ADVISOR_WHATSAPP_SOURCE : 'whatsapp',
+      inbox:           advisorLine ? 'advisor_direct' : 'central_317',
       inboxProvider:   'ycloud',
       ...(inboxId ? { inboxId } : {}),
-      ...(advisorLine ? { assignedTo: advisorLine.advisorId } : {}),
+      ...(advisorLine ? { assignedTo: advisorLine.advisorId, pendingFirstContact: false, assignmentLocked: true } : {}),
       aiEnabled:       advisorLine ? false : true,
       tags:            [],
       metadata:        advisorLine ? { advisorWhatsappMirror: 'true' } : {},
@@ -818,7 +884,7 @@ async function processYcloudEchoMessage(echo: YcloudSmbMessageEcho): Promise<voi
       updatedAt:       now,
     });
     logger.info('[ycloud Echo] Nuevo lead creado desde echo', {
-      leadId: lead.id, phone, advisorLine: advisorLine?.advisorId,
+      leadId: lead.id, phone: targetId, advisorLine: advisorLine?.advisorId,
     });
     if (advisorLine) lead.assignedTo = advisorLine.advisorId;   // sin reparto
     else lead.assignedTo = (await assignLead(companyId, lead.id)) ?? undefined;
@@ -861,8 +927,20 @@ async function processYcloudEchoMessage(echo: YcloudSmbMessageEcho): Promise<voi
       ...(inboxId && !lead.inboxId ? { inboxId } : {}),
       aiEnabled:           false,
       pendingFirstContact: false,
+      ...(lead.aiEnabled ? {
+        aiDisabledAt:        now,
+        takeoverBy:          advisorLine.advisorId,
+        aiTakeoverSlaStatus: 'pending',
+      } : {}),
     } : {}),
   });
+
+  // Eco de la app de la línea de la empresa: si la IA atendía este chat, se pausa.
+  if (!advisorLine) {
+    await pauseAiForAdvisorMessage(companyId, lead, undefined).catch((err) => {
+      logger.warn('[ycloud Echo] No se pudo pausar la IA', { leadId: lead?.id, err: String(err) });
+    });
+  }
 
   logger.info('[ycloud Echo] Mensaje de app guardado', {
     leadId: lead.id, msgId, type: echo.type, advisorLine: advisorLine?.advisorId,
@@ -908,14 +986,20 @@ async function processYcloudMessageUpdate(update: YcloudSmbMessageEcho): Promise
     }
   }
 
-  // El re-alojo de media sí necesita el teléfono del cliente y un tipo de media.
-  // Si la actualización no trae `to` (evento de solo-estado), termina aquí en vez
-  // de fallar con "Cannot read properties of undefined (reading 'startsWith')".
-  if (!update.to || !['image','video','audio','document','sticker'].includes(update.type)) return;
+  // El re-alojo de media sí necesita el destinatario del cliente y un tipo de media.
+  let rawTo = typeof update.to === 'string' ? update.to.trim() : '';
+  const toUserId = (update.toUserId ?? '').trim();
+  let effectiveUserId = toUserId;
+  if (rawTo.startsWith('CO.')) {
+    effectiveUserId = rawTo;
+    rawTo = '';
+  }
 
-  const rawTo     = update.to.startsWith('+') ? update.to.slice(1) : update.to;
-  const phone     = `+${rawTo}`;
-  const normPhone = toNormalizedPhone(phone);
+  if ((!rawTo && !effectiveUserId) || !['image','video','audio','document','sticker'].includes(update.type)) return;
+
+  const cleanTo   = rawTo.startsWith('+') ? rawTo.slice(1) : rawTo;
+  const phone     = cleanTo ? `+${cleanTo}` : '';
+  const normPhone = phone ? toNormalizedPhone(phone) : '';
 
   const mediaData = (update as unknown as Record<string, unknown>)[update.type] as {
     id?: string; link?: string; mime_type: string; caption?: string; filename?: string
@@ -923,9 +1007,12 @@ async function processYcloudMessageUpdate(update: YcloudSmbMessageEcho): Promise
 
   if (!mediaData || !msgId) return;
 
-  const lead = await leadsRepository.findByNormalizedPhone(companyId, normPhone);
+  let lead = normPhone ? await leadsRepository.findByNormalizedPhone(companyId, normPhone) : null;
+  if (!lead && effectiveUserId) {
+    lead = await leadsRepository.findByWhatsappUserId(companyId, effectiveUserId);
+  }
   if (!lead) {
-    logger.warn('[ycloud Update] Lead no encontrado para actualizar media', { msgId, phone });
+    logger.warn('[ycloud Update] Lead no encontrado para actualizar media', { msgId, phone: phone || effectiveUserId });
     return;
   }
 
@@ -1032,6 +1119,14 @@ async function processYcloudCallConnect(eventId: string, payload: YcloudCallingC
     const customerPhone = payload.from.startsWith('+') ? payload.from : `+${payload.from}`;
     const normPhone = toNormalizedPhone(customerPhone);
     const inboxId = normalizeBusinessNumber(payload.to);
+
+    if (await isCompanyTeamPhone(companyId, normPhone || customerPhone)) {
+      logger.info('[ycloud Calling] Llamada de miembro interno del equipo omitida (no es lead)', {
+        companyId,
+        phone: customerPhone,
+      });
+      return;
+    }
 
     let lead = await leadsRepository.findByNormalizedPhone(companyId, normPhone);
     const now = Timestamp.now();
@@ -1160,13 +1255,28 @@ async function processYcloudCallTerminate(eventId: string, payload: YcloudCallin
 // cuando el mensaje llega desde un anuncio "Click to WhatsApp" de Meta).
 function resolveLeadSource(referral?: YcloudReferral): { source: LeadSource; sourceMeta?: LeadSourceMeta } {
   if (!referral) return { source: 'whatsapp' };
+
+  // Validar si el video_url de Meta es un archivo reproducible real o un enlace web de Facebook (story.php, etc.)
+  const rawVideo = referral.video_url?.trim();
+  const isWebLink = rawVideo && (
+    rawVideo.includes('facebook.com/story.php') ||
+    rawVideo.includes('facebook.com/watch') ||
+    rawVideo.includes('facebook.com/posts') ||
+    rawVideo.includes('fb.me/')
+  );
+  const playableVideoUrl = rawVideo && !isWebLink ? rawVideo : undefined;
+  const fallbackSourceUrl = isWebLink ? rawVideo : undefined;
+
   return {
     source: 'meta_ads',
     sourceMeta: {
       ...(referral.source_id  && { adId: referral.source_id }),
       ...(referral.headline   && { headline: referral.headline }),
-      ...(referral.source_url && { sourceUrl: referral.source_url }),
+      ...(referral.body       && { body: referral.body }),
+      ...((referral.source_url || fallbackSourceUrl) && { sourceUrl: referral.source_url || fallbackSourceUrl }),
       ...(referral.media_type && { mediaType: referral.media_type }),
+      ...(referral.image_url  && { imageUrl: referral.image_url }),
+      ...(playableVideoUrl    && { videoUrl: playableVideoUrl }),
       ...(referral.ctwa_clid  && { ctwaClid: referral.ctwa_clid }),
     },
   };

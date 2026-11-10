@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet }  from 'react-router-dom';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import {
   LayoutDashboard, MessageSquare, Users, Phone, TrendingUp,
   FileText, LayoutTemplate, Megaphone, Calendar, Settings,
-  LogOut, Menu, Camera, type LucideIcon,
+  LogOut, Menu, Database, Layers, ClipboardCheck, AlertTriangle, type LucideIcon,
+  Handshake,
 } from 'lucide-react';
+import { db }               from '@/config/firebase';
 import { useAuth }          from '@/features/auth/hooks/useAuth';
 import { isAdminRole }      from '@/features/auth/types';
 import { CallOverlay }      from '@/features/calls/components/CallOverlay';
@@ -13,6 +16,9 @@ import { InboxNotifications } from '@/features/inbox/components/InboxNotificatio
 import { InstallPrompt } from '@/shared/components/InstallPrompt';
 import { useBranding } from '@/providers/BrandingProvider';
 import { listPlatformCompanies, type PlatformCompany } from '@/features/platform/services/platformCompanies.service';
+import { FichaTecnicaModal } from '@/features/calendar/components/FichaTecnicaModal';
+import { listLeadTransferRequests } from '@/features/inbox/services/contacts.service';
+import { ThemeToggle } from '@/shared/components/ThemeToggle';
 
 interface NavItem {
   to:        string;
@@ -25,17 +31,20 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { to: '/dashboard',                icon: LayoutDashboard, label: 'Resumen', end: true, primary: true },
-  { to: '/dashboard/inbox',          icon: MessageSquare,   label: 'Bandeja',    primary: true },
-  { to: '/dashboard/leads',          icon: Users,           label: 'Leads',      primary: true },
-  { to: '/dashboard/photo-evidence', icon: Camera,          label: 'Evidencia fotográfica' },
-  { to: '/dashboard/calls',          icon: Phone,           label: 'Llamadas IA' },
-  { to: '/dashboard/marketing',      icon: TrendingUp,      label: 'Marketing',  adminOnly: true },
-  { to: '/dashboard/reports',        icon: FileText,        label: 'Informes',   adminOnly: true },
-  { to: '/dashboard/templates',      icon: LayoutTemplate,  label: 'Plantillas', adminOnly: true },
-  { to: '/dashboard/broadcasts',     icon: Megaphone,       label: 'Masivos',   adminOnly: true },
-  { to: '/dashboard/calendar',       icon: Calendar,        label: 'Calendario', primary: true },
-  { to: '/dashboard/config',         icon: Settings,        label: 'Config'     },
+  { to: '/dashboard/inbox',                 icon: MessageSquare,   label: 'Bandeja',           primary: true },
+  { to: '/dashboard/commercial-management', icon: ClipboardCheck,  label: 'Gestión Comercial', primary: true },
+  { to: '/dashboard/pipeline',              icon: Layers,          label: 'Tablero / Embudo',  primary: true },
+  { to: '/dashboard',                       icon: LayoutDashboard, label: 'Resumen', end: true, primary: true },
+  { to: '/dashboard/leads',                 icon: Users,           label: 'Leads' },
+  { to: '/dashboard/deals',                 icon: Handshake,       label: 'Negocios' },
+  { to: '/dashboard/calendar',              icon: Calendar,        label: 'Calendario' },
+  { to: '/dashboard/database',              icon: Database,        label: 'Base de Datos',     adminOnly: true },
+  { to: '/dashboard/calls',                 icon: Phone,           label: 'Llamadas IA' },
+  { to: '/dashboard/marketing',             icon: TrendingUp,      label: 'Marketing',         adminOnly: true },
+  { to: '/dashboard/reports',               icon: FileText,        label: 'Informes',          adminOnly: true },
+  { to: '/dashboard/templates',             icon: LayoutTemplate,  label: 'Plantillas',        adminOnly: true },
+  { to: '/dashboard/broadcasts',            icon: Megaphone,       label: 'Masivos',           adminOnly: true },
+  { to: '/dashboard/config',                icon: Settings,        label: 'Config' },
 ];
 
 export function DashboardLayout() {
@@ -44,10 +53,19 @@ export function DashboardLayout() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [companies, setCompanies] = useState<PlatformCompany[]>([]);
   const [companiesError, setCompaniesError] = useState(false);
-  const visibleNavItems = navItems.filter((item) => !item.adminOnly || platformAdmin || isAdminRole(role));
+  const [showUnblockFichaModal, setShowUnblockFichaModal] = useState(false);
+  const [pendingTransfersCount, setPendingTransfersCount] = useState(0);
+  const isAdmin = platformAdmin || isAdminRole(role);
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
+  const isTester = profile?.email?.toLowerCase().includes('google.tester');
+  const canAccessDemo = isTester || platformAdmin;
+  const availableCompanies = useMemo(
+    () => companies.filter((company) => canAccessDemo || company.id !== 'empresa_demo'),
+    [companies, canAccessDemo]
+  );
   const activeCompany = useMemo(
-    () => companies.find((company) => company.id === companyId),
-    [companies, companyId]
+    () => availableCompanies.find((company) => company.id === companyId),
+    [availableCompanies, companyId]
   );
 
   useEffect(() => {
@@ -66,6 +84,50 @@ export function DashboardLayout() {
 
     return () => { cancelled = true; };
   }, [platformAdmin]);
+
+  // Bloqueo estricto de SLA para asesores desactivado temporalmente hasta su capacitación
+  const ENABLE_LIVE_SLA_BLOCK_BANNER = false;
+
+  // Escuchar en vivo las solicitudes de traslado pendientes (para Admin)
+  useEffect(() => {
+    if (!companyId || !isAdmin) {
+      setPendingTransfersCount(0);
+      return;
+    }
+    let active = true;
+    listLeadTransferRequests(companyId, 'pending')
+      .then((list) => {
+        if (active) setPendingTransfersCount(list.length);
+      })
+      .catch(() => {});
+
+    const q = query(
+      collection(db, 'companies', companyId, 'leadTransferRequests'),
+      where('status', '==', 'pending')
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        if (active) setPendingTransfersCount(snap.size);
+      },
+      () => {
+        // Si las reglas de Firestore restringen lectura directa, usamos el polling de la callable
+      }
+    );
+    const timer = window.setInterval(() => {
+      listLeadTransferRequests(companyId, 'pending')
+        .then((list) => {
+          if (active) setPendingTransfersCount(list.length);
+        })
+        .catch(() => {});
+    }, 30_000);
+
+    return () => {
+      active = false;
+      unsub();
+      window.clearInterval(timer);
+    };
+  }, [companyId, isAdmin]);
 
   // Móvil: 4 principales en la barra + el resto en la hoja "Más".
   const primaryItems = visibleNavItems.filter((item) => item.primary).slice(0, 4);
@@ -95,10 +157,10 @@ export function DashboardLayout() {
                 onChange={(event) => setActiveCompanyId(event.target.value)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-medium text-zinc-100 outline-none focus:border-emerald-500"
               >
-                {!companies.some((company) => company.id === companyId) && companyId && (
+                {!availableCompanies.some((company) => company.id === companyId) && companyId && (companyId !== 'empresa_demo' || canAccessDemo) && (
                   <option value={companyId}>{companyId}</option>
                 )}
-                {companies.map((company) => (
+                {availableCompanies.map((company) => (
                   <option key={company.id} value={company.id}>
                     {company.name}
                   </option>
@@ -131,19 +193,42 @@ export function DashboardLayout() {
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) => `
-                  flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors
+                  flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm transition-colors
                   ${isActive
                     ? 'bg-violet-600/20 text-violet-300 border border-violet-500/20'
                     : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60'
                   }
                 `}
               >
-                <Icon size={17} className="shrink-0" />
-                <span>{item.label}</span>
+                <span className="flex items-center gap-2.5 truncate">
+                  <Icon size={17} className="shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </span>
+                {isAdmin && pendingTransfersCount > 0 && (item.to === '/dashboard/leads' || item.to === '/dashboard/commercial-management') && (
+                  <span
+                    className="shrink-0 rounded-full bg-rose-500 px-1.5 py-0.2 text-[10px] font-bold text-white shadow-sm animate-pulse"
+                    title={`${pendingTransfersCount} solicitud(es) de traslado pendiente(s)`}
+                  >
+                    {pendingTransfersCount}
+                  </span>
+                )}
               </NavLink>
             );
           })}
         </nav>
+
+        {/* Selector de Tema Meraki (2 Opciones: Modo Oscuro vs Modo Claro) */}
+        <div className="px-3 py-2.5 border-t border-zinc-800">
+          <div className="mb-1.5 px-0.5 flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+              Tema Visual
+            </span>
+            <span className="text-[10px] font-mono text-amber-500/90 font-medium">
+              Meraki
+            </span>
+          </div>
+          <ThemeToggle className="w-full" />
+        </div>
 
         {/* User info + logout */}
         <div className="px-3 py-3 border-t border-zinc-800">
@@ -167,8 +252,73 @@ export function DashboardLayout() {
       <InstallPrompt />
 
       {/* ── Contenido ──────────────────────────────────────────────────────── */}
-      {/* pb-14 en móvil para no quedar tapado por la barra inferior */}
-      <main className="flex-1 overflow-hidden pb-14 pt-[env(safe-area-inset-top)] md:pb-0 md:pt-0">
+      {/* pb-[calc(3.5rem+env(safe-area-inset-bottom,0px))] y pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] para librar la Dynamic Island/Notch y Home Bar en iPhone PWA */}
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden pb-[calc(3.5rem+env(safe-area-inset-bottom,0px))] pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] md:pb-0 md:pt-0">
+        {ENABLE_LIVE_SLA_BLOCK_BANNER && profile?.isBlockedForLeads && (
+          <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-rose-950/95 via-amber-950/90 to-zinc-950 border-b border-rose-500/40 px-4 py-2.5 text-xs text-rose-100 shadow-md">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 animate-pulse" />
+              <p className="leading-snug">
+                <strong className="text-rose-300">
+                  {profile.receiveLeads === false
+                    ? '⚠️ Alerta de Mora de Seguimiento (SLA):'
+                    : '⚠️ Recepción de leads nuevos PAUSADA:'}
+                </strong>{' '}
+                {profile.blockedReason?.startsWith('SLA_TOMA_MANUAL')
+                  ? `Apagaste la IA hace más de 24h sin registrar Ficha Técnica${profile.unresolvedLeadName ? ` para ${profile.unresolvedLeadName}` : ''}.`
+                  : profile.blockedReason?.startsWith('SLA_POST_CITA')
+                  ? 'Tienes una cita finalizada pendiente de reporte en Ficha Técnica.'
+                  : 'Incumplimiento de SLA de contacto previo a cita.'}{' '}
+                <span className="text-amber-200/90">
+                  Diligencia la Ficha Técnica ahora para reactivarte automáticamente.
+                </span>
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {(profile.unresolvedLeadId || profile.unresolvedAppointmentId) && (
+                <button
+                  type="button"
+                  onClick={() => setShowUnblockFichaModal(true)}
+                  className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 px-3 py-1.5 rounded-lg font-bold text-xs transition-colors shadow-sm cursor-pointer"
+                >
+                  📝 Llenar Ficha Técnica Ahora ({profile.unresolvedLeadName || 'Autodesbloquear'})
+                </button>
+              )}
+              <NavLink
+                to="/dashboard/commercial-management"
+                className="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded-lg font-semibold text-xs transition-colors"
+              >
+                Ver Mis Pendientes
+              </NavLink>
+            </div>
+          </div>
+        )}
+        {showUnblockFichaModal && companyId && (
+          <FichaTecnicaModal
+            isOpen={showUnblockFichaModal}
+            onClose={() => setShowUnblockFichaModal(false)}
+            companyId={companyId}
+            lead={
+              profile?.unresolvedLeadId
+                ? {
+                    id: profile.unresolvedLeadId,
+                    name: profile.unresolvedLeadName || 'Prospecto Pendiente',
+                    advisorName: profile.displayName,
+                  }
+                : undefined
+            }
+            appointment={
+              profile?.unresolvedAppointmentId
+                ? {
+                    id: profile.unresolvedAppointmentId,
+                    leadId: profile.unresolvedLeadId || undefined,
+                    leadName: profile.unresolvedLeadName || 'Cita Pendiente',
+                    advisorName: profile.displayName,
+                  }
+                : undefined
+            }
+          />
+        )}
         <Outlet />
       </main>
 
@@ -217,6 +367,14 @@ export function DashboardLayout() {
                 <p className="truncate text-sm font-medium text-zinc-200">{profile?.displayName ?? profile?.email ?? '—'}</p>
                 <p className="truncate text-[10px] text-zinc-500">{profile?.role ?? ''}</p>
               </div>
+            </div>
+
+            {/* Selector de Modo Oscuro vs Modo Claro en Móvil */}
+            <div className="px-5 py-2 mb-2 border-b border-zinc-800/80">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 block mb-1.5">
+                Tema Visual Meraki
+              </span>
+              <ThemeToggle className="w-full" />
             </div>
 
             <div className="grid grid-cols-3 gap-1 px-3 pb-2">

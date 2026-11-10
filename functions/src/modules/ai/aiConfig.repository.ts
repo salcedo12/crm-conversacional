@@ -4,7 +4,8 @@ import type { AiConfig } from './ai.types';
 
 const DEFAULT_AI_CONFIG: Omit<AiConfig, 'updatedAt' | 'companyId'> = {
   id:                 'default',
-  enabled:            true,
+  // Apagada si la empresa no tiene configuración: nunca responder sin que alguien la encienda.
+  enabled:            false,
   assistantName:      'Victoria Sarmiento',
   businessName:       'Grupo Constructor Meraki',
   basePrompt:         VICTORIA_BASE_PROMPT,
@@ -12,11 +13,12 @@ const DEFAULT_AI_CONFIG: Omit<AiConfig, 'updatedAt' | 'companyId'> = {
   knowledgeBase:      '',
   fallbackMessage:    'En este momento no puedo procesar tu mensaje. Un asesor se comunicará contigo muy pronto. 🙏',
   maxContextMessages: 20,
-  transferKeywords:   ['asesor', 'humano', 'persona real', 'quiero hablar con alguien', 'con un agente'],
+  transferKeywords:   ['hablar con un asesor', 'hablar con asesor', 'quiero un asesor', 'necesito un asesor', 'hablar con un humano', 'hablar con una persona', 'persona real', 'quiero hablar con alguien', 'con un agente'],
   blockedTopics:      [],
   followUpSequence:   [
-    { delayMinutes: 20,   enabled: true },
-    { delayMinutes: 240,  enabled: true },
+    { delayMinutes: 1440,  enabled: true, templateName: 'seguimiento_inicial_prospecto' },
+    { delayMinutes: 4320,  enabled: true, templateName: 'opciones_proyectos_meraki' },
+    { delayMinutes: 11520, enabled: true, templateName: 'reactivacion_interes_meraki' },
   ],
   quoteMode:          'off',
 };

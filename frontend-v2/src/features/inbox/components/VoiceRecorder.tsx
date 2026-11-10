@@ -25,7 +25,7 @@ function LiveWaveform({ levels }: { levels: number[] }) {
         return (
           <div
             key={i}
-            className="rounded-full bg-violet-400 transition-none flex-shrink-0"
+            className="rounded-full bg-[#B7871C] transition-none flex-shrink-0"
             style={{
               width:   '3px',
               height:  `${height}px`,
@@ -48,7 +48,7 @@ function StaticWaveform({ levels }: { levels: number[] }) {
         return (
           <div
             key={i}
-            className="rounded-full bg-violet-500/70 flex-shrink-0"
+            className="rounded-full bg-[#B7871C]/80 flex-shrink-0"
             style={{ width: '3px', height: `${height}px` }}
           />
         );
@@ -81,26 +81,26 @@ export function VoiceRecorder({
   // ── Estado: grabando ────────────────────────────────────────────────────────
   if (state === 'recording') {
     return (
-      <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950 px-3 py-2.5 pb-[calc(env(safe-area-inset-bottom)+0.625rem)]">
+      <div className="flex items-center gap-2 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-3 py-2.5 pb-[calc(env(safe-area-inset-bottom)+0.625rem)]">
 
         {/* Botón cancelar */}
         <button
           onClick={onCancel}
-          className="shrink-0 p-1.5 rounded-full text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          className="shrink-0 p-1.5 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-500/10 transition-colors"
           title="Cancelar"
         >
           🗑
         </button>
 
         {/* Waveform animado */}
-        <div className="flex-1 flex items-center gap-2 bg-zinc-800/60 rounded-2xl px-3 py-1.5">
+        <div className="flex-1 flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800/60 rounded-2xl px-3 py-1.5">
           {/* Indicador rojo pulsante */}
           <span className="shrink-0 h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
 
           <LiveWaveform levels={audioLevels} />
 
           {/* Timer */}
-          <span className="shrink-0 text-xs font-mono text-zinc-300 tabular-nums min-w-[36px] text-right">
+          <span className="shrink-0 text-xs font-mono font-bold text-zinc-700 dark:text-zinc-300 tabular-nums min-w-[36px] text-right">
             {formatDuration(durationSec)}
           </span>
         </div>
@@ -108,8 +108,8 @@ export function VoiceRecorder({
         {/* Botón detener */}
         <button
           onClick={onStop}
-          className="shrink-0 h-10 w-10 rounded-full bg-violet-600 hover:bg-violet-500 text-white flex items-center justify-center transition-colors shadow-lg"
-          title="Detener y enviar"
+          className="shrink-0 h-10 w-10 rounded-full bg-[#B7871C] hover:bg-[#947018] text-white flex items-center justify-center transition-colors shadow-lg cursor-pointer"
+          title="Detener y revisar"
         >
           <span className="text-base">⏹</span>
         </button>
@@ -120,19 +120,19 @@ export function VoiceRecorder({
   // ── Estado: preview (grabación lista para enviar) ───────────────────────────
   if (state === 'stopped' && audioBlob) {
     return (
-      <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950 px-3 py-2.5 pb-[calc(env(safe-area-inset-bottom)+0.625rem)]">
+      <div className="flex items-center gap-2 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-3 py-2.5 pb-[calc(env(safe-area-inset-bottom)+0.625rem)]">
 
         {/* Botón descartar */}
         <button
           onClick={onCancel}
-          className="shrink-0 p-1.5 rounded-full text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          className="shrink-0 p-1.5 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-500/10 transition-colors"
           title="Descartar"
         >
           🗑
         </button>
 
         {/* Preview del audio */}
-        <div className="flex-1 flex items-center gap-2 bg-zinc-800/60 rounded-2xl px-3 py-1.5 min-w-0">
+        <div className="flex-1 flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800/60 rounded-2xl px-3 py-1.5 min-w-0">
           {/* Botón play nativo oculto — usamos el elemento audio para control */}
           <audio
             src={previewUrl ?? ''}
@@ -146,7 +146,7 @@ export function VoiceRecorder({
         <button
           onClick={onSend}
           disabled={sending}
-          className="shrink-0 h-10 w-10 rounded-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white flex items-center justify-center transition-colors shadow-lg"
+          className="shrink-0 h-10 w-10 rounded-full bg-[#B7871C] hover:bg-[#947018] disabled:opacity-50 text-white flex items-center justify-center transition-colors shadow-lg cursor-pointer"
           title="Enviar nota de voz"
         >
           {sending ? <Spinner size="sm" /> : <span className="text-base">↑</span>}
@@ -190,7 +190,7 @@ function AudioPreviewPlayer({
       {/* Play/Pause */}
       <button
         onClick={toggle}
-        className="shrink-0 h-7 w-7 rounded-full bg-violet-600/40 hover:bg-violet-600/60 text-violet-200 flex items-center justify-center transition-colors"
+        className="shrink-0 h-7 w-7 rounded-full bg-[#B7871C]/20 hover:bg-[#B7871C]/40 text-[#947018] dark:text-[#D9B545] flex items-center justify-center transition-colors cursor-pointer"
       >
         {playing ? '⏸' : '▶'}
       </button>
@@ -199,16 +199,16 @@ function AudioPreviewPlayer({
       <div className="flex-1 flex flex-col gap-0.5 min-w-0">
         <StaticWaveform levels={levels.length > 0 ? levels : Array(40).fill(0.3)} />
         {/* Barra de progreso */}
-        <div className="h-0.5 bg-zinc-700 rounded-full overflow-hidden">
+        <div className="h-0.5 bg-zinc-300 dark:bg-zinc-700 rounded-full overflow-hidden">
           <div
-            className="h-full bg-violet-500 transition-all duration-100"
+            className="h-full bg-[#B7871C] transition-all duration-100"
             style={{ width: `${(current / totalSec) * 100}%` }}
           />
         </div>
       </div>
 
       {/* Duración */}
-      <span className="shrink-0 text-xs font-mono text-zinc-400 tabular-nums">
+      <span className="shrink-0 text-xs font-mono text-zinc-600 dark:text-zinc-400 tabular-nums">
         {formatDuration(playing ? Math.round(current) : durationSec)}
       </span>
     </div>

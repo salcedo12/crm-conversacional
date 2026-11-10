@@ -1,13 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle }        from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
+import { AlertTriangle, ShieldAlert, ClipboardList } from 'lucide-react';
 import { Spinner }              from '@/shared/components/Spinner';
 import { EmptyState }           from '@/shared/components/EmptyState';
 import { useAuth }              from '@/features/auth/hooks/useAuth';
+import { isAdminRole }          from '@/features/auth/types';
 import { MessageBubble }        from './MessageBubble';
 import { ConversationHeader }   from './ConversationHeader';
 import { MessageComposer }      from './MessageComposer';
 import type { DeliveryChannel } from './MessageComposer';
 import { TemplatePickerModal }  from './TemplatePickerModal';
+import { FichaTecnicaModal }    from '@/features/calendar/components/FichaTecnicaModal';
+import { RequestLeadTransferModal } from '@/features/leads/components/RequestLeadTransferModal';
 import { isWindowOpen }         from '../utils/conversationWindow';
 import type { Lead }            from '../types';
 import type { MediaUploadResult } from '../services/media.service';
@@ -30,14 +33,43 @@ interface ChatWindowProps {
 }
 
 export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, onBack, onMarkedRead }: ChatWindowProps) {
-  const { user } = useAuth();
-  const { messages, loading, loadingMore, hasMore, loadMore } = useMessages(companyId, lead.id);
+  const { user, role, platformAdmin } = useAuth();
+  const isAdmin = platformAdmin || isAdminRole(role);
+  const isAssignedToOther = !isAdmin && !!lead.assignedTo && !!user?.uid && lead.assignedTo !== user.uid;
+  const { messages, loading, loadingMore, hasMore, loadMore } = useMessages(companyId, isAssignedToOther ? null : lead.id);
+
+  // Muro de Privacidad de Chats en Reasignaciones (Protocolo Meraki)
+  // Si el usuario es un asesor (no admin), y el lead fue asignado o reasignado, se ocultan los mensajes
+  // anteriores a la asignación para proteger la confidencialidad de la gestión previa.
+  const isReassigned = !isAdmin && !!lead.advisorAssignedAt;
+  const cutoffTime = isReassigned && lead.advisorAssignedAt ? lead.advisorAssignedAt.toMillis() : 0;
+
+  const { visibleMessages, hiddenCount } = useMemo(() => {
+    if (!cutoffTime) return { visibleMessages: messages, hiddenCount: 0 };
+    const visible: Message[] = [];
+    let hidden = 0;
+    for (const msg of messages) {
+      const msgMillis = msg.createdAt
+        ? (typeof msg.createdAt.toMillis === 'function'
+            ? msg.createdAt.toMillis()
+            : (msg.createdAt.seconds ? msg.createdAt.seconds * 1000 : 0))
+        : 0;
+      if (msgMillis >= cutoffTime) {
+        visible.push(msg);
+      } else {
+        hidden++;
+      }
+    }
+    return { visibleMessages: visible, hiddenCount: hidden };
+  }, [messages, cutoffTime]);
   const bottomRef             = useRef<HTMLDivElement>(null);
   const scrollRef             = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef   = useRef<number | null>(null);
   const loadingOlderRef       = useRef(false);
   const markedReadKeyRef      = useRef<string | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showFichaModal, setShowFichaModal] = useState(false);
+  const [showReassignModal, setShowReassignModal] = useState(false);
   const [advisorWhatsappAvailable, setAdvisorWhatsappAvailable] = useState(false);
   const [advisorWhatsappPhone, setAdvisorWhatsappPhone] = useState<string | null>(null);
   const [advisorWhatsappStatus, setAdvisorWhatsappStatus] = useState<AdvisorWhatsappStatus | null>(null);
@@ -53,7 +85,7 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
       return;
     }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [visibleMessages]);
 
   const handleLoadMore = () => {
     const el = scrollRef.current;
@@ -63,7 +95,7 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
   };
 
   useEffect(() => {
-    if (!companyId || !lead.lastInboundAt) return;
+    if (!companyId || !lead.lastInboundAt || isAssignedToOther) return;
     const readAtMillis = lead.lastInboundAt.toMillis();
     const markKey = `${companyId}:${lead.id}:${readAtMillis}`;
     if (markedReadKeyRef.current === markKey) return;
@@ -73,7 +105,7 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
     markLeadRead(companyId, lead.id, readAtMillis).catch((err) => {
       console.warn('[ChatWindow] No se pudo marcar el lead como leido:', err);
     });
-  }, [companyId, lead.id, lead.lastInboundAt, onMarkedRead]);
+  }, [companyId, lead.id, lead.lastInboundAt, onMarkedRead, isAssignedToOther]);
 
   const isWhatsapp = !lead.channel || lead.channel === 'whatsapp';
   // La ventana de 24h SOLO la abre un mensaje entrante real del lead. Un lead sin
@@ -174,6 +206,34 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
     }
   };
 
+  if (isAssignedToOther) {
+    const isTimeout = (lead.advisorReassignmentCount ?? 0) > 0 || !!lead.lastAutoReassignedAt;
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center p-8 bg-zinc-900 text-center">
+        <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-4 text-amber-500 text-3xl">
+          ⏱️
+        </div>
+        <h3 className="text-lg font-bold text-zinc-100 mb-2">
+          {isTimeout ? 'Prospecto reasignado por tiempo' : 'Prospecto no disponible'}
+        </h3>
+        <p className="text-sm text-zinc-400 max-w-md leading-relaxed mb-6">
+          {isTimeout
+            ? 'Este dato fue reasignado automáticamente porque no se realizó el primer contacto dentro de los 5 minutos reglamentarios. Por privacidad comercial entre asesores, la conversación ya no se encuentra accesible.'
+            : 'Este prospecto ya no está asignado a tu cuenta. Solo puedes acceder a las conversaciones de tus propios leads.'}
+        </p>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold transition shadow"
+          >
+            ← Volver a mi bandeja
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-900">
       {/* Header con indicador 24h */}
@@ -184,6 +244,8 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
         onResumeAi={handleResumeAi}
         onOpenTemplates={() => setShowTemplates(true)}
         onOpenLeadDetails={onOpenLeadDetails}
+        onOpenFicha={() => setShowFichaModal(true)}
+        onRequestReassign={!isAdmin ? () => setShowReassignModal(true) : undefined}
       />
 
       {/* Messages area */}
@@ -211,7 +273,30 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
           </div>
         )}
 
-        {!loading && messages.length === 0 && (
+        {hiddenCount > 0 && (
+          <div className="my-4 mx-auto max-w-md p-3.5 bg-zinc-900/90 border border-zinc-800 rounded-2xl text-center shadow-lg">
+            <div className="flex items-center justify-center gap-1.5 text-amber-400 font-medium text-xs mb-1">
+              <ShieldAlert className="w-4 h-4 shrink-0" />
+              <span>Gestión previa protegida por confidencialidad</span>
+            </div>
+            <p className="text-[11px] text-zinc-400 leading-relaxed mb-2.5">
+              {hiddenCount} mensaje(s) de gestiones anteriores están reservados por política de privacidad. 
+              Revisa la <strong>Ficha Técnica</strong> y el <strong>Resumen IA</strong> para conocer todos los antecedentes y acuerdos del cliente.
+            </p>
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => setShowFichaModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-semibold transition-colors"
+              >
+                <ClipboardList className="w-3.5 h-3.5" />
+                <span>Ver Ficha Técnica</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!loading && visibleMessages.length === 0 && (
           <EmptyState
             icon="💬"
             title="Sin mensajes aún"
@@ -219,7 +304,7 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
           />
         )}
 
-        {messages.map((msg) => (
+        {visibleMessages.map((msg) => (
           <MessageBubble
             key={msg.id}
             message={msg}
@@ -238,25 +323,25 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
       {canUseComposer ? (
         <>
           {companyLineBlocked && advisorWhatsappAvailable && (
-            <div className="flex shrink-0 items-start justify-between gap-3 border-t border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-t border-amber-500/30 bg-amber-50/90 dark:bg-amber-950/40 dark:border-amber-500/30 px-4 py-2 text-xs text-zinc-900 dark:text-zinc-100">
               <div className="flex min-w-0 items-start gap-2">
-                <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
                 <p>
-                  Ventana de 24h cerrada para {inboxLabel(lead.inboxId)}. Puedes responder desde Mi WhatsApp o enviar una plantilla por la linea oficial.
+                  <strong className="text-zinc-950 dark:text-white">Ventana de 24h cerrada</strong> para {inboxLabel(lead.inboxId)}. Puedes responder desde Mi WhatsApp o enviar una plantilla por la línea oficial.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowTemplates(true)}
-                className="shrink-0 font-medium text-amber-300 underline-offset-2 hover:underline"
+                className="shrink-0 font-bold text-[#B7871C] hover:text-[#947018] dark:text-amber-300 dark:hover:text-amber-200 underline underline-offset-2"
               >
                 Usar plantilla
               </button>
             </div>
           )}
           {isWhatsapp && advisorWhatsappNotice && leadHasPhone && (
-            <div className="flex shrink-0 items-start gap-2 border-t border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
-              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+            <div className="flex shrink-0 items-start gap-2 border-t border-amber-500/30 bg-amber-50/90 dark:bg-amber-950/40 dark:border-amber-500/30 px-4 py-2 text-xs text-zinc-900 dark:text-zinc-100">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
               <p>{advisorWhatsappNotice}</p>
             </div>
           )}
@@ -282,23 +367,23 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
         </>
       ) : (
         /* Ventana cerrada — solo se pueden enviar plantillas */
-        <div className="flex shrink-0 flex-col items-center gap-3 border-t border-zinc-800 bg-zinc-950 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
-          <div className="flex items-center gap-2 text-amber-400 text-xs">
-            <span className="h-2 w-2 rounded-full bg-amber-400" />
-            <span className="font-medium">Ventana de 24h cerrada</span>
+        <div className="flex shrink-0 flex-col items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
+          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-xs">
+            <span className="h-2 w-2 rounded-full bg-amber-500" />
+            <span className="font-bold">Ventana de 24h cerrada</span>
           </div>
-          <p className="text-xs text-zinc-500 text-center max-w-xs">
+          <p className="text-xs text-zinc-600 dark:text-zinc-400 text-center max-w-xs">
             Han pasado más de 24h desde el último mensaje del lead.
             Solo puedes enviar plantillas pre-aprobadas por Meta.
           </p>
           <button
             onClick={() => setShowTemplates(true)}
             className="
-              flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium
-              bg-violet-600 hover:bg-violet-500 text-white transition-colors shadow
+              flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold
+              bg-[#B7871C] hover:bg-[#947018] text-white transition-colors shadow-md cursor-pointer
             "
           >
-            📋 Enviar plantilla de WhatsApp
+            📋 Enviar plantilla oficial de WhatsApp
           </button>
         </div>
       )}
@@ -311,6 +396,38 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
           inboxId={lead.inboxId}
           onClose={() => setShowTemplates(false)}
           onSent={() => setShowTemplates(false)}
+        />
+      )}
+
+      {/* Modal de Ficha Técnica desde la Bandeja */}
+      {showFichaModal && (
+        <FichaTecnicaModal
+          isOpen={showFichaModal}
+          onClose={() => setShowFichaModal(false)}
+          companyId={companyId}
+          lead={{
+            id: lead.id,
+            name: lead.name,
+            phone: lead.phone,
+            project: lead.projectInterest?.[0] || lead.metadata?.project,
+            advisorName: lead.assignedTo ? advisorNames?.get(lead.assignedTo) : undefined,
+            bitacoras: (lead as any).bitacoras,
+            metadata: lead.metadata,
+          }}
+        />
+      )}
+
+      {showReassignModal && (
+        <RequestLeadTransferModal
+          isOpen={showReassignModal}
+          onClose={() => setShowReassignModal(false)}
+          companyId={companyId}
+          leadId={lead.id}
+          leadName={lead.name}
+          leadPhone={lead.phone}
+          currentAdvisorId={lead.assignedTo}
+          currentAdvisorName={advisorNames?.get(lead.assignedTo || '') || (lead.assignedTo === user?.uid ? 'Asignado a ti' : 'Sin asignar')}
+          currentUserId={user?.uid}
         />
       )}
     </div>

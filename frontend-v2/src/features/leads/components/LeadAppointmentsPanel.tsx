@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, Video } from 'lucide-react';
+import { Check, Copy, Video, ClipboardList } from 'lucide-react';
 import { listLeadAppointments, type AppointmentDTO } from '@/features/calendar/services/calendar.service';
+import { FichaTecnicaModal } from '@/features/calendar/components/FichaTecnicaModal';
 
 interface Props {
   companyId: string;
@@ -26,6 +27,7 @@ export function LeadAppointmentsPanel({ companyId, leadId, refreshKey = 0 }: Pro
   const [appointments, setAppointments] = useState<AppointmentDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [selectedApptForFicha, setSelectedApptForFicha] = useState<AppointmentDTO | null>(null);
 
   const load = useCallback(async () => {
     if (!companyId || !leadId) return;
@@ -65,28 +67,55 @@ export function LeadAppointmentsPanel({ companyId, leadId, refreshKey = 0 }: Pro
               <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${style.className}`}>{style.label}</span>
             </div>
             <p className="mt-0.5 text-[11px] capitalize text-zinc-400">{formatRange(appt.startTime, appt.endTime)}</p>
-            {appt.googleMeetLink && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <a
-                  href={appt.googleMeetLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20"
-                >
-                  <Video size={12} /> Abrir Meet
-                </a>
-                <button
-                  onClick={() => copyMeet(appt.id, appt.googleMeetLink!)}
-                  title={appt.googleMeetLink}
-                  className="inline-flex items-center gap-1.5 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-zinc-700"
-                >
-                  {copiedId === appt.id ? <Check size={12} /> : <Copy size={12} />} {copiedId === appt.id ? 'Copiado' : 'Copiar enlace'}
-                </button>
-              </div>
-            )}
+            <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+              {appt.googleMeetLink && (
+                <>
+                  <a
+                    href={appt.googleMeetLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20"
+                  >
+                    <Video size={12} /> Abrir Meet
+                  </a>
+                  <button
+                    onClick={() => copyMeet(appt.id, appt.googleMeetLink!)}
+                    title={appt.googleMeetLink}
+                    className="inline-flex items-center gap-1.5 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-zinc-700"
+                  >
+                    {copiedId === appt.id ? <Check size={12} /> : <Copy size={12} />} {copiedId === appt.id ? 'Copiado' : 'Copiar'}
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => setSelectedApptForFicha(appt)}
+                className="inline-flex items-center gap-1.5 rounded border border-indigo-500/40 bg-indigo-500/15 px-2.5 py-1 text-[11px] font-medium text-indigo-300 hover:bg-indigo-500/25 transition-colors"
+              >
+                <ClipboardList size={12} /> Ficha Técnica
+              </button>
+            </div>
           </div>
         );
       })}
+
+      {selectedApptForFicha && (
+        <FichaTecnicaModal
+          isOpen={!!selectedApptForFicha}
+          onClose={() => setSelectedApptForFicha(null)}
+          onSuccess={() => {
+            setSelectedApptForFicha(null);
+            load();
+          }}
+          companyId={companyId}
+          appointment={{
+            id: selectedApptForFicha.id,
+            leadId: selectedApptForFicha.leadId,
+            leadName: selectedApptForFicha.leadName,
+            leadPhone: selectedApptForFicha.leadPhone,
+            title: selectedApptForFicha.title,
+          }}
+        />
+      )}
     </div>
   );
 }

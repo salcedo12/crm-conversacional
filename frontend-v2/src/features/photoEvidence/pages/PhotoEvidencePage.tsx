@@ -621,6 +621,7 @@ export function PhotoEvidencePage() {
                               type="date"
                               value={eventDate}
                               onChange={(e) => setEventDate(e.target.value)}
+                              style={{ colorScheme: 'dark' }}
                               className="mt-1 h-8 w-full rounded border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-100 outline-none"
                             />
                           </label>
@@ -630,6 +631,7 @@ export function PhotoEvidencePage() {
                               type="time"
                               value={eventTime}
                               onChange={(e) => setEventTime(e.target.value)}
+                              style={{ colorScheme: 'dark' }}
                               className="mt-1 h-8 w-full rounded border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-100 outline-none"
                             />
                           </label>

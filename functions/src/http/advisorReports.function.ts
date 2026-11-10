@@ -103,7 +103,8 @@ function pct(part: number, whole: number): number {
 }
 
 export const getAdvisorReports = onCall(
-  { region: 'us-central1', timeoutSeconds: 300, memory: '512MiB' },
+  // 1GiB: con 512MiB se quedaba sin memoria al armar el informe (OOM, oct-2026).
+  { region: 'us-central1', timeoutSeconds: 300, memory: '1GiB' },
   async (request) => {
     const ctx = requireAuth(request);
     requireRole(ctx, ADMIN_ROLES);

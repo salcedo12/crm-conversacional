@@ -59,6 +59,10 @@ export const appointmentsRepository = {
     await col(companyId).doc(id).update({ status, updatedAt: Timestamp.now() });
   },
 
+  async update(companyId: string, id: string, patch: Record<string, unknown>): Promise<void> {
+    await col(companyId).doc(id).update({ ...patch, updatedAt: Timestamp.now() });
+  },
+
   async reassignCalendarOwner(
     companyId: string,
     id: string,

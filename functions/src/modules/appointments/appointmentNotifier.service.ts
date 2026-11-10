@@ -53,7 +53,7 @@ export async function sendAppointmentConfirmationToLead(
 
   // ── Ventana abierta → texto libre ──────────────────────────────────────────
   if (isWindowOpen(lead)) {
-    const content = buildConfirmation(businessName, name, start);
+    const content = buildConfirmation(businessName, name, start, appointment.modality);
     const { externalMsgId } = await sendTextToLeadChannel(lead, content);
     const now = Timestamp.now();
     await messagesRepository.create({

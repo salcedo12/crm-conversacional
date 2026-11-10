@@ -48,7 +48,7 @@ export function EventModal({ companyId, defaultDate, onClose, onCreated }: Props
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 pt-[calc(env(safe-area-inset-top,0px)+1rem)] pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]" onClick={onClose}>
       <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-5 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-sm font-semibold text-zinc-100">Nuevo evento</h3>
 
@@ -57,11 +57,11 @@ export function EventModal({ companyId, defaultDate, onClose, onCreated }: Props
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-[11px] text-zinc-400">Fecha</label>
-            <input type="date" className={inputClass} value={date} onChange={(e) => setDate(e.target.value)} />
+            <input type="date" className={inputClass} value={date} onChange={(e) => setDate(e.target.value)} style={{ colorScheme: 'dark' }} />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-[11px] text-zinc-400">Hora</label>
-            <input type="time" className={inputClass} value={time} onChange={(e) => setTime(e.target.value)} />
+            <input type="time" className={inputClass} value={time} onChange={(e) => setTime(e.target.value)} style={{ colorScheme: 'dark' }} />
           </div>
         </div>
 

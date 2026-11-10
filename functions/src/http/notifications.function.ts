@@ -39,7 +39,7 @@ function tokenId(token: string): string {
 export const markLeadRead = onCall(
   {
     region: 'us-central1',
-    memory: '256MiB',
+    memory: '512MiB',
     cors: true,
   },
   async (request) => {
@@ -70,7 +70,7 @@ export const markLeadRead = onCall(
 export const markLeadsRead = onCall(
   {
     region: 'us-central1',
-    memory: '256MiB',
+    memory: '512MiB',
     cors: true,
   },
   async (request) => {
@@ -100,7 +100,7 @@ export const markLeadsRead = onCall(
 export const registerPushToken = onCall(
   {
     region: 'us-central1',
-    memory: '256MiB',
+    memory: '512MiB',
     cors: true,
   },
   async (request) => {
@@ -134,7 +134,7 @@ export const registerPushToken = onCall(
 export const getPushNotificationStatus = onCall(
   {
     region: 'us-central1',
-    memory: '256MiB',
+    memory: '512MiB',
     cors: true,
   },
   async (request) => {
@@ -187,7 +187,7 @@ export const getPushNotificationStatus = onCall(
 export const sendTestPushNotification = onCall(
   {
     region: 'us-central1',
-    memory: '256MiB',
+    memory: '512MiB',
     cors: true,
   },
   async (request) => {
@@ -214,7 +214,7 @@ export const sendTestPushNotification = onCall(
 export const sendTestPushToDevice = onCall(
   {
     region: 'us-central1',
-    memory: '256MiB',
+    memory: '512MiB',
     cors: true,
   },
   async (request) => {

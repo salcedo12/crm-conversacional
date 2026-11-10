@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, FileText, FolderOpen, MapPin, Video, X } from 'lucide-react';
+import { ChevronLeft, Contact, FileText, FolderOpen, MapPin, Video, X } from 'lucide-react';
 import { Spinner } from '@/shared/components/Spinner';
 import { listenLibrary } from '../services/library.service';
 import {
@@ -62,14 +62,27 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
 
   const groups = useMemo(() => {
     const map = new Map<string, LibraryItem[]>();
-    const canSeePrivateVideos = platformAdmin || isAdminRole(role);
+    const isAdmin = platformAdmin || isAdminRole(role);
+    const cardFolder = isAdmin ? 'Tarjetas de Presentación' : 'Mi Tarjeta de Presentación';
+
     items.filter((i) => {
+      // Tarjeta de presentación:
+      // El administrador ve todas las tarjetas del equipo; cada asesor sólo ve la suya personal
+      if (i.project === 'Tarjeta de Presentación') {
+        return isAdmin || i.advisorId === user?.uid;
+      }
       const isVideo = i.kind === 'video' || i.contentType.startsWith('video/');
-      if (!isVideo) return true;
-      if ((i.visibility ?? 'general') !== 'advisor') return true;
-      return canSeePrivateVideos || i.advisorId === user?.uid;
+      if (isVideo) {
+        if ((i.visibility ?? 'general') !== 'advisor') return true;
+        return isAdmin || i.advisorId === user?.uid;
+      }
+      if ((i.visibility ?? 'general') === 'advisor') {
+        return isAdmin || i.advisorId === user?.uid;
+      }
+      return true;
     }).forEach((i) => {
-      const key = i.project?.trim() || NO_PROJECT;
+      const isCard = i.project === 'Tarjeta de Presentación';
+      const key = isCard ? cardFolder : (i.project?.trim() || NO_PROJECT);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(i);
     });
@@ -95,6 +108,10 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
 
   const projectNames = useMemo(() => {
     return [...groups.keys()].sort((a, b) => {
+      const isCardA = a === 'Mi Tarjeta de Presentación' || a === 'Tarjetas de Presentación';
+      const isCardB = b === 'Mi Tarjeta de Presentación' || b === 'Tarjetas de Presentación';
+      if (isCardA && !isCardB) return -1;
+      if (!isCardA && isCardB) return 1;
       if (a === NO_PROJECT) return 1;
       if (b === NO_PROJECT) return -1;
       return a.localeCompare(b);
@@ -108,7 +125,13 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
     }
   }, [loading, project, projectNames]);
 
-  const currentItems = project ? (groups.get(project) ?? []) : [];
+  const currentItems = useMemo(() => {
+    const list = project ? (groups.get(project) ?? []) : [];
+    if (project === 'Tarjetas de Presentación' || project === 'Mi Tarjeta de Presentación') {
+      return [...list].sort((a, b) => (a.advisorName || a.title).localeCompare(b.advisorName || b.title));
+    }
+    return list;
+  }, [project, groups]);
   const showBack = project !== null && projectNames.length > 1;
 
   return (
@@ -117,7 +140,7 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
       onClick={onClose}
     >
       <div
-        className="flex max-h-[70vh] w-full flex-col rounded-t-2xl border border-zinc-800 bg-zinc-900 sm:max-w-md sm:rounded-2xl"
+        className="flex max-h-[70vh] w-full flex-col rounded-t-2xl border border-zinc-800 bg-zinc-900 sm:max-w-md sm:rounded-2xl pb-[max(0.75rem,env(safe-area-inset-bottom))]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
@@ -145,20 +168,45 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
           ) : project === null ? (
             /* Paso 1: proyectos */
             <ul className="flex flex-col gap-1">
-              {projectNames.map((name) => (
-                <li key={name}>
-                  <button
-                    onClick={() => setProject(name)}
-                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-zinc-800"
-                  >
-                    <FolderOpen size={20} className="shrink-0 text-amber-400" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-zinc-200">{name}</p>
-                      <p className="truncate text-[11px] text-zinc-500">{groups.get(name)!.length} documento(s)</p>
-                    </div>
-                  </button>
-                </li>
-              ))}
+              {projectNames.map((name) => {
+                const isPresentation = name === 'Mi Tarjeta de Presentación' || name === 'Tarjetas de Presentación';
+                const isAdminView = name === 'Tarjetas de Presentación';
+                return (
+                  <li key={name}>
+                    <button
+                      onClick={() => setProject(name)}
+                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-zinc-800 ${
+                        isPresentation ? 'border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/15' : ''
+                      }`}
+                    >
+                      {isPresentation ? (
+                        <Contact size={20} className="shrink-0 text-amber-400" />
+                      ) : (
+                        <FolderOpen size={20} className="shrink-0 text-amber-400" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className={`truncate text-sm font-medium ${isPresentation ? 'text-amber-300' : 'text-zinc-200'}`}>
+                            {name}
+                          </p>
+                          {isPresentation && (
+                            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                              {isAdminView ? 'Equipo' : 'Personal'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="truncate text-[11px] text-zinc-500">
+                          {isAdminView
+                            ? `${groups.get(name)!.length} tarjeta(s) de los asesores`
+                            : isPresentation
+                            ? 'Tarjeta con tu foto y saludo oficial'
+                            : `${groups.get(name)!.length} documento(s)`}
+                        </p>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             /* Paso 2: documentos del proyecto */
@@ -166,6 +214,8 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
               {currentItems.map((item) => {
                 const plano = isPlanoItem(item);
                 const video = item.kind === 'video' || item.contentType.startsWith('video/');
+                const isImage = item.contentType.startsWith('image/');
+                const isCard = item.project === 'Tarjeta de Presentación';
                 return (
                   <li key={item.id}>
                     <button
@@ -176,13 +226,23 @@ export function PortfolioPicker({ companyId, onSelect, onClose }: PortfolioPicke
                         <MapPin size={20} className="shrink-0 text-emerald-400" />
                       ) : video ? (
                         <Video size={20} className="shrink-0 text-amber-400" />
+                      ) : isImage ? (
+                        <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md border border-zinc-700 bg-zinc-800">
+                          <img src={item.downloadUrl} alt={item.title} className="h-full w-full object-cover" />
+                        </div>
                       ) : (
                         <FileText size={20} className="shrink-0 text-violet-400" />
                       )}
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm text-zinc-200">{item.title}</p>
+                        <p className="truncate text-sm font-medium text-zinc-200">{item.title}</p>
                         <p className="truncate text-[11px] text-zinc-500">
-                          {plano ? (timeAgo(planoGenAt.get(item.id) ?? null) || 'disponibilidad en vivo') : video && (item.visibility ?? 'general') === 'advisor' ? `Solo ${item.advisorName || 'asesor'} - ${formatSize(item.sizeBytes)}` : formatSize(item.sizeBytes)}
+                          {isCard && item.advisorName
+                            ? `Asesor: ${item.advisorName}`
+                            : plano
+                            ? (timeAgo(planoGenAt.get(item.id) ?? null) || 'disponibilidad en vivo')
+                            : video && (item.visibility ?? 'general') === 'advisor'
+                            ? `Solo ${item.advisorName || 'asesor'} - ${formatSize(item.sizeBytes)}`
+                            : formatSize(item.sizeBytes)}
                         </p>
                       </div>
                     </button>

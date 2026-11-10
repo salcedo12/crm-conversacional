@@ -4,7 +4,12 @@ import { formatPhone }       from '@/shared/utils/formatPhone';
 import { MediaMessage }      from './MediaMessage';
 import { isWebp }            from '../services/media.service';
 import { inboxLabel }        from '../utils/inboxes';
-import type { Message }      from '../types';
+import { AdReferralCard }     from './AdReferralCard';
+import { retryFailedMessage } from '../services/messages.service';
+
+// Fallos donde reintentar no sirve (tope de marketing de Meta, ventana de 24 h cerrada, número sin WhatsApp, baja de marketing).
+const NO_RETRY_CODES = new Set(['131049', '131047', '131026', '131050']);
+import type { Message, LeadSourceMeta } from '../types';
 
 // Mensajes anormalmente largos (ej. transcripciones pegadas por error) se
 // truncan visualmente para que una sola burbuja no rompa el scroll del chat.
@@ -40,6 +45,10 @@ interface MessageBubbleProps {
   companyLineLabel?: string;
   companyLinePhone?: string | null;
   advisorWhatsappPhone?: string | null;
+  /** Datos de pauta de Meta (anuncio) si el mensaje proviene de un referral o es el primer mensaje de pauta. */
+  referral?: LeadSourceMeta;
+  companyId?: string;
+  leadId?:    string;
   /** Reacciona con un emoji a este mensaje del lead (emoji vacío = quitar). */
   onReact?: (message: Message, emoji: string) => void | Promise<void>;
 }
@@ -151,13 +160,19 @@ export function MessageBubble({
   companyLineLabel,
   companyLinePhone,
   advisorWhatsappPhone,
+  referral: referralProp,
+  companyId,
+  leadId,
   onReact,
 }: MessageBubbleProps) {
+  const referral = (message.metadata?.referral as LeadSourceMeta | undefined) ?? referralProp;
   const cfg  = senderConfig[message.senderType];
   const time = formatChatMessageDateTime(message.createdAt);
   const [expanded, setExpanded]     = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reacting, setReacting]     = useState(false);
+  const [retrying, setRetrying]     = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
 
   // Solo se puede reaccionar a mensajes ENTRANTES del lead que tengan wamid de WhatsApp.
   const canReact = !!onReact
@@ -221,6 +236,11 @@ export function MessageBubble({
         {senderLabel}
       </span>
 
+      {/* Tarjeta de anuncio de Meta si el mensaje proviene de una pauta */}
+      {!isOutbound && referral && (
+        <AdReferralCard referral={referral} companyId={companyId} leadId={leadId} />
+      )}
+
       {/* Burbuja + reacción */}
       <div className={`group flex items-end gap-1 ${isOutbound ? 'flex-row-reverse' : 'flex-row'}`}>
        <div className="relative">
@@ -269,7 +289,9 @@ export function MessageBubble({
               : '📎 Archivo no disponible'}
           </span>
         ) : (
-          <span className="sr-only">Mensaje sin contenido</span>
+          <span className="block text-xs italic text-zinc-400">
+            [Reacción o mensaje no compatible]
+          </span>
         )}
         </div>
          {/* Reacción del asesor, pegada a la esquina de la burbuja */}
@@ -339,6 +361,30 @@ export function MessageBubble({
         && friendlyFailureReason(message.failureCode, message.failureReason) && (
         <span className="max-w-full rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] leading-snug text-red-300 text-right">
           {friendlyFailureReason(message.failureCode, message.failureReason)}
+        </span>
+      )}
+      {/* Reintentar el envío (no se ofrece cuando reintentar no sirve: tope de marketing, ventana cerrada…). */}
+      {isOutbound && message.status === 'failed' && !NO_RETRY_CODES.has(message.failureCode ?? '') && (
+        <span className="flex items-center justify-end gap-2">
+          {retryError && <span className="text-[10px] text-red-300">{retryError}</span>}
+          <button
+            type="button"
+            disabled={retrying}
+            onClick={async () => {
+              setRetrying(true);
+              setRetryError(null);
+              try {
+                await retryFailedMessage(companyId ?? message.companyId, leadId ?? message.leadId, message.id);
+              } catch (err) {
+                setRetryError(err instanceof Error ? err.message : 'No se pudo reenviar.');
+              } finally {
+                setRetrying(false);
+              }
+            }}
+            className="rounded-full border border-red-500/40 px-2.5 py-0.5 text-[10px] font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-50"
+          >
+            {retrying ? 'Reintentando…' : '↻ Reintentar envío'}
+          </button>
         </span>
       )}
       <span className={`max-w-full rounded-full border border-zinc-800 bg-zinc-900/80 px-2 py-0.5 text-[10px] text-zinc-500 ${isOutbound ? 'text-right' : 'text-left'}`}>

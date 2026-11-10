@@ -59,14 +59,14 @@ export async function resolveCompanyIdForChannel(
   return route.companyId;
 }
 
-// Caché en memoria por instancia. Las rutas cambian rara vez y el webhook las
-// consulta en CADA mensaje entrante y CADA envío (para elegir el número `from`);
-// sin caché serían dos lecturas de Firestore por mensaje. Se limpia al guardar.
-// `null` cachea también "no existe" para no re-leer rutas ausentes (p. ej. la 317,
-// cuyo inbox coincide con el número por defecto y no tiene ruta de asesor).
-const routeCache = new Map<string, ChannelRoute | null>();
+interface RouteCacheEntry {
+  route: ChannelRoute | null;
+  expiresAt: number;
+}
 
-/** Lee una ruta de canal (con caché). Devuelve null si no existe. */
+const routeCache = new Map<string, RouteCacheEntry>();
+
+/** Lee una ruta de canal (con caché con TTL). Devuelve null si no existe. */
 export async function getChannelRoute(
   provider: ChannelProvider,
   identifier: string
@@ -75,11 +75,17 @@ export async function getChannelRoute(
   if (!normalized) return null;
   const id = channelRouteId(provider, normalized);
 
-  if (routeCache.has(id)) return routeCache.get(id) ?? null;
+  const now = Date.now();
+  const cached = routeCache.get(id);
+  if (cached && cached.expiresAt > now) {
+    return cached.route;
+  }
 
   const snap = await db.collection('channelRoutes').doc(id).get();
   const route = snap.exists ? ({ id, ...snap.data() } as ChannelRoute) : null;
-  routeCache.set(id, route);
+  // Rutas encontradas se cachean 60s; ausentes solo 5s para detectar nuevas rutas rápido
+  const ttl = route ? 60_000 : 5_000;
+  routeCache.set(id, { route, expiresAt: now + ttl });
   return route;
 }
 
@@ -104,12 +110,14 @@ export function clearChannelRouteCache(): void {
   allRoutesCache = null;
 }
 
-// Caché de la lista completa (la colección es diminuta: un puñado de números).
-let allRoutesCache: ChannelRoute[] | null = null;
+// Caché de la lista completa con TTL (la colección es diminuta: un puñado de números).
+let allRoutesCache: { routes: ChannelRoute[]; expiresAt: number } | null = null;
 async function getAllRoutes(): Promise<ChannelRoute[]> {
-  if (allRoutesCache) return allRoutesCache;
-  allRoutesCache = await listChannelRoutes();
-  return allRoutesCache;
+  const now = Date.now();
+  if (allRoutesCache && allRoutesCache.expiresAt > now) return allRoutesCache.routes;
+  const routes = await listChannelRoutes();
+  allRoutesCache = { routes, expiresAt: now + 60_000 };
+  return routes;
 }
 
 /**

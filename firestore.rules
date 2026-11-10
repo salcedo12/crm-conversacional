@@ -24,11 +24,11 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
-    // Empresa donde se permite el bootstrap automático del perfil al primer login
-    // (la empresa demo de un solo tenant). Las empresas adicionales se aprovisionan
-    // server-side: un admin crea el doc del usuario y el trigger setea sus claims.
+    // Empresa donde se permite el bootstrap automático del perfil al primer login.
+    // Las empresas adicionales se aprovisionan server-side: un admin crea el doc del
+    // usuario y el trigger setea sus claims.
     function bootstrapCompany() {
-      return 'empresa_demo';
+      return 'grupo_meraki_real';
     }
 
     // El usuario pertenece a la empresa (según su claim companyId)
@@ -47,28 +47,18 @@ service cloud.firestore {
                  && request.auth.token.role in ['admin', 'manager']);
     }
 
-    function isAssignedAdvisor(companyId) {
-      return inCompany(companyId)
-             && request.auth.token.role == 'advisor'
-             && resource.data.assignedTo == request.auth.uid;
-    }
-
     function canReadLead(companyId, leadId) {
-      return isAdmin(companyId)
-             || (inCompany(companyId)
-                 && request.auth.token.role == 'advisor'
-                 && get(/databases/$(database)/documents/companies/$(companyId)/leads/$(leadId)).data.assignedTo == request.auth.uid);
+      return inCompany(companyId) && leadId != null;
     }
 
     match /companies/{companyId} {
 
       // ── Perfiles de usuario ────────────────────────────────────────────────
-      // Cada usuario puede leer y bootstrappear su propio perfil (necesario para
-      // el primer login y el backfill de claims), pero NO puede auto-asignarse un
-      // rol elevado ni reactivarse: el rol propio queda fijado a 'advisor'.
+      // Cada usuario de la empresa puede consultar el directorio de compañeros (asesores/admins)
+      // para ver asignaciones y nombres en el CRM.
       // Los admins/managers gestionan a todos los usuarios de su empresa.
       match /users/{userId} {
-        allow read:   if isSelf(userId) || isAdmin(companyId);
+        allow read:   if inCompany(companyId);
         allow create: if isAdmin(companyId)
                       || (isSelf(userId)
                           && companyId == bootstrapCompany()
@@ -82,12 +72,12 @@ service cloud.firestore {
       }
 
       // ── Leads y mensajes ───────────────────────────────────────────────────
-      // Lectura para cualquier miembro de la empresa (la bandeja del CRM).
-      // Las escrituras solo ocurren vía Cloud Functions (Admin SDK), por eso el
-      // cliente no puede escribir directamente.
+      // Lectura para cualquier miembro de la empresa (la bandeja y embudo del CRM).
+      // Actualizaciones permitidas para miembros de la empresa (pipeline, notas, seguimientos).
       match /leads/{leadId} {
-        allow read:  if isAdmin(companyId) || isAssignedAdvisor(companyId);
-        allow write: if false;
+        allow read:   if inCompany(companyId);
+        allow update: if inCompany(companyId);
+        allow create, delete: if false;
 
         match /messages/{messageId} {
           allow read:  if canReadLead(companyId, leadId);
@@ -101,15 +91,37 @@ service cloud.firestore {
           allow write: if false;
         }
 
-        // Notas internas y recordatorios del lead. Lectura en tiempo real desde
-        // el cliente; escrituras solo vía callables (addLeadNote, etc.).
+        // Notas internas y recordatorios del lead. Lectura y registro desde el cliente
         match /notes/{noteId} {
+          allow read:   if canReadLead(companyId, leadId);
+          allow create: if inCompany(companyId);
+          allow update, delete: if isAdmin(companyId);
+        }
+
+        // Evidencia fotográfica del lead (soporta ambos alias: evidence y photo_evidence)
+        match /photo_evidence/{evidenceId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+        match /evidence/{evidenceId} {
           allow read:  if canReadLead(companyId, leadId);
           allow write: if false;
         }
 
-        // Evidencia fotográfica del lead.
-        match /photo_evidence/{evidenceId} {
+        // Subcolección de Touchpoints (historial de atribución y entradas)
+        match /touchpoints/{touchpointId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Subcolección de Oportunidades comerciales
+        match /opportunities/{opportunityId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Subcolección de Historial y auditoría de eventos
+        match /history/{historyId} {
           allow read:  if canReadLead(companyId, leadId);
           allow write: if false;
         }
@@ -120,19 +132,84 @@ service cloud.firestore {
         allow read:  if inCompany(companyId);
         allow write: if false;
       }
+      match /evidence/{evidenceId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
 
-      // ── Biblioteca de portafolios ──────────────────────────────────────────
-      // Archivos reutilizables de la empresa (PDFs, etc.). Cualquier miembro de
-      // la empresa puede LEER la lista (para elegir qué enviar desde la Bandeja).
-      // Las escrituras van por callables (saveLibraryItem/…) con Admin SDK.
+      // ── Biblioteca de portafolios y planos ──────────────────────────────────
       match /library/{itemId} {
         allow read:  if inCompany(companyId);
         allow write: if false;
       }
 
+      // ── Fuentes de Ubicación / Captación Comercial ─────────────────────────
+      // -- Configuraciones de la empresa (Ficha T�cnica, campos, etc.) --------
+      match /configs/{configId} {
+        allow read:  if inCompany(companyId);
+        allow write: if isAdmin(companyId);
+      }
+
+      match /leadSources/{sourceId} {
+        allow read:  if inCompany(companyId);
+        allow write: if isAdmin(companyId);
+      }
+
+      // ── Inventario Inmobiliario In-House (Proyectos y Lotes) ────────────────
+      match /projects/{projectId} {
+        allow read:  if inCompany(companyId);
+        allow write: if isAdmin(companyId);
+
+        match /lots/{lotId} {
+          allow read:  if inCompany(companyId);
+          allow write: if isAdmin(companyId);
+        }
+      }
+
+      // -- Fichas de compradores (cedulas y datos personales, Ley 1581) -------
+      // Solo via callables del modulo Negocios (http/deals.function.ts).
+      match /clients/{clientId} {
+        allow read, write: if false;
+      }
+
+      // ── Negociaciones, Separaciones y Contratos ────────────────────────────
+      match /deals/{dealId} {
+        allow read:  if isAdmin(companyId) || (inCompany(companyId) && resource.data.advisorId == request.auth.uid);
+        allow write: if false;
+      }
+
+      // ── Ventas de SmartHome (copia sincronizada para reportes e informes) ──
+      match /smarthomeSales/{saleId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Métricas y Contadores Agregados O(1) ──────────────────────────────
+      match /daily_metrics/{metricId} {
+        allow read:  if isAdmin(companyId);
+        allow write: if false;
+      }
+
+      // ── Caché de Reportes Agregados ─────────────────────────────────────────
+      match /reportCache/{cacheId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Caché de Creativos de Meta Ads (videos, miniaturas, títulos) ──────
+      match /metaAdCreatives/{adId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Solicitudes de Traslado y Reasignación de Leads ────────────────────
+      match /leadTransferRequests/{requestId} {
+        allow read:  if isAdmin(companyId) || (inCompany(companyId) && resource.data.requesterId == request.auth.uid);
+        allow write: if false;
+      }
+
       // ── Resto de subcolecciones de la empresa ──────────────────────────────
-      // aiConfigs, templates, appointments, googleConnections
-      // (incluyen tokens sensibles), followups, etc. → solo backend.
+      // aiConfigs, templates, appointments, googleConnections, etc. → solo backend.
       match /{document=**} {
         allow read, write: if false;
       }

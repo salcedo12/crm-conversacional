@@ -22,6 +22,21 @@ function whatsappDestination(lead: Pick<Lead, 'phone' | 'whatsappUserId'>): stri
   return lead.whatsappUserId || lead.phone;
 }
 
+/**
+ * Formatea texto Markdown para WhatsApp:
+ * WhatsApp utiliza un solo asterisco (*texto*) para negrita.
+ * El Markdown estándar usa doble asterisco (**texto**), lo que en WhatsApp provoca
+ * que se muestren asteriscos visibles alrededor de la palabra (*texto*).
+ */
+export function formatForWhatsApp(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
+    .replace(/\*{2,}([^*]+?)\*{2,}/g, '*$1*')
+    .replace(/\*+(\$?\d[\d.,]*)\*+/g, '*$1*')
+    .replace(/\*\*/g, '*');
+}
+
 export async function sendTextToLeadChannel(
   lead: SendLead,
   content: string,
@@ -36,7 +51,8 @@ export async function sendTextToLeadChannel(
   }
 
   const client = await getYcloudClientForInbox(lead.companyId, lead.inboxId, senderAdvisorId);
-  const r = await client.sendText(whatsappDestination(lead), content);
+  const formattedContent = formatForWhatsApp(content);
+  const r = await client.sendText(whatsappDestination(lead), formattedContent);
   return { provider: 'ycloud', externalMsgId: r.id, fromNumber: client.fromNumber };
 }
 
@@ -76,6 +92,7 @@ export async function sendMediaToLeadChannel(
   }
 
   const client = await getYcloudClientForInbox(lead.companyId, lead.inboxId, senderAdvisorId);
-  const r = await client.sendMedia(whatsappDestination(lead), mediaUrl, mediaType, caption, fileName);
+  const formattedCaption = caption ? formatForWhatsApp(caption) : undefined;
+  const r = await client.sendMedia(whatsappDestination(lead), mediaUrl, mediaType, formattedCaption, fileName);
   return { provider: 'ycloud', externalMsgId: r.id, fromNumber: client.fromNumber };
 }

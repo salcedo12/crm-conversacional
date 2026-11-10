@@ -70,7 +70,7 @@ export function LeadCardList({ leads, selectedId, advisors, onSelect }: LeadCard
               {/* Badges */}
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <LeadStatusBadge status={lead.status} />
-                <LeadSourceBadge source={lead.source} />
+                <LeadSourceBadge source={lead.source} fuenteUbicacion={lead.fuenteUbicacion || lead.metadata?.smarthomeFuenteOriginal} />
                 <LeadScoreBadge score={lead.aiAnalysis?.score} temperature={lead.aiAnalysis?.temperature} />
                 <AiStatusBadge aiEnabled={lead.aiEnabled} />
               </div>
