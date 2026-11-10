@@ -24,7 +24,7 @@ import {
   type LeadListFilters,
 } from '../services/leadLists.service';
 import type { Lead } from '@/features/inbox/types';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import { listLeadsPage, type LeadsPageCursor } from '../services/leadsPage.service';
 
 import { ExportLeadsModal } from '@/features/dashboard/components/ExportLeadsModal';
@@ -55,9 +55,12 @@ export function LeadsPage() {
   const [hasMore, setHasMore] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const isAdmin = platformAdmin || isAdminRole(role);
+  // "Solo lectura" consulta todos los leads (como un admin), pero no crea ni gestiona.
+  const readOnly = !platformAdmin && isViewerRole(role);
+  const canSeeAll = isAdmin || readOnly;
   const visibleLeads = useMemo(
-    () => isAdmin ? leads : leads.filter((lead) => lead.assignedTo === user?.uid),
-    [isAdmin, leads, user?.uid]
+    () => canSeeAll ? leads : leads.filter((lead) => lead.assignedTo === user?.uid),
+    [canSeeAll, leads, user?.uid]
   );
 
   const {
@@ -281,7 +284,7 @@ export function LeadsPage() {
               )}
             </button>
           )}
-          {companyId && (
+          {companyId && !readOnly && (
             <button
               onClick={() => setShowNewLeadModal(true)}
               className="text-xs px-3 py-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 transition-colors font-medium flex items-center gap-1.5"
@@ -390,7 +393,7 @@ export function LeadsPage() {
         advisors={advisors}
         allTags={allTags}
         inboxes={inboxes}
-        canFilterByAdvisor={isAdmin}
+        canFilterByAdvisor={canSeeAll}
         onChange={(f) => setFilters((prev) => ({ ...prev, ...f }))}
       />
 

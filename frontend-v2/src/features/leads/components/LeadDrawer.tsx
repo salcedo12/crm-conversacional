@@ -29,7 +29,7 @@ import { subscribeLeadSources, type LeadSourceItem } from '@/features/config/ser
 import { useCalls } from '../hooks/useCalls';
 import { pauseAi, resumeAi } from '@/features/inbox/services/messages.service';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import type { Lead, LeadStatus } from '@/features/inbox/types';
 
 interface LeadDrawerProps {
@@ -55,6 +55,8 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
   const navigate = useNavigate();
   const { role, platformAdmin, user, profile } = useAuth();
   const canReassign = platformAdmin || isAdminRole(role);
+  // "Solo lectura": ve todos los datos del lead, pero sin editar ni ejecutar acciones.
+  const readOnly = !platformAdmin && isViewerRole(role);
 
   const [liveLead, setLiveLead] = useState<Lead>(leadProp);
   const lead = liveLead;
@@ -410,9 +412,9 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
               <button
                 type="button"
                 onClick={handleToggleAi}
-                disabled={toggling}
-                title={lead.aiEnabled ? 'IA activa — Toca para pausar' : 'IA pausada — Toca para activar'}
-                className={`flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors disabled:opacity-50 shadow-sm ${
+                disabled={toggling || readOnly}
+                title={readOnly ? (lead.aiEnabled ? 'IA activa' : 'IA pausada') : lead.aiEnabled ? 'IA activa — Toca para pausar' : 'IA pausada — Toca para activar'}
+                className={`flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors disabled:opacity-50 shadow-sm ${readOnly ? 'pointer-events-none disabled:!opacity-100' : ''} ${
                   lead.aiEnabled
                     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
                     : 'border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
@@ -423,16 +425,17 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
               </button>
             </div>
 
-            <div className={`grid ${isWhatsapp ? 'grid-cols-4' : 'grid-cols-2'} gap-1.5`}>
+            <div className={`grid ${readOnly ? 'grid-cols-1' : isWhatsapp ? 'grid-cols-4' : 'grid-cols-2'} gap-1.5`}>
               <button
                 type="button"
                 onClick={() => setShowFichaModal(true)}
-                title="Diligenciar Ficha Técnica"
+                title={readOnly ? 'Ver historial de la Ficha Técnica' : 'Diligenciar Ficha Técnica'}
                 className="flex h-9 items-center justify-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25 shadow-sm"
               >
                 <ClipboardList size={14} className="shrink-0 text-emerald-400" />
                 <span>Ficha</span>
               </button>
+              {!readOnly && (<>
               <button
                 type="button"
                 onClick={() => setShowAppointment(true)}
@@ -477,6 +480,7 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
                   <span>Permiso WA</span>
                 </button>
               ))}
+              </>)}
             </div>
           </div>
         </header>
@@ -507,13 +511,15 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
                   <p className="flex items-center gap-1 text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">
                     <Compass size={11} className="text-emerald-400" /> Fuente
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingFuente(!isEditingFuente)}
-                    className="text-[10px] text-zinc-500 hover:text-emerald-300 transition-colors"
-                  >
-                    {isEditingFuente ? 'Listo' : 'Cambiar'}
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingFuente(!isEditingFuente)}
+                      className="text-[10px] text-zinc-500 hover:text-emerald-300 transition-colors"
+                    >
+                      {isEditingFuente ? 'Listo' : 'Cambiar'}
+                    </button>
+                  )}
                 </div>
                 {isEditingFuente ? (
                   <div className="mt-1">
@@ -554,13 +560,15 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
                     <span>🕒</span> Seguimiento Comercial Activo
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setShowFichaModal(true)}
-                    className="text-[11px] font-bold text-emerald-300 hover:underline cursor-pointer"
-                  >
-                    + Diligenciar Ficha
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setShowFichaModal(true)}
+                      className="text-[11px] font-bold text-emerald-300 hover:underline cursor-pointer"
+                    >
+                      + Diligenciar Ficha
+                    </button>
+                  )}
                 </div>
                 {(lead as any).lastFollowUpAction && (
                   <p className="text-zinc-300 text-[11px]">
@@ -663,7 +671,9 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
             })()}
           </section>
 
-          <section className="space-y-4 px-5 py-4">
+          <section className="px-5 py-4">
+            {/* En "Solo lectura" el fieldset deshabilita todos los campos y botones de edición. */}
+            <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-4 border-0 p-0 disabled:opacity-80">
             <div>
               <p className="mb-3 text-[10px] font-semibold uppercase text-zinc-500">Datos del contacto</p>
               <label className="mb-1.5 block text-xs text-zinc-400">Nombre</label>
@@ -800,15 +810,17 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
                       {advisors.find((a) => a.id === assignedTo)?.displayName || (isAssigned ? 'Asignado a ti' : 'Sin asignar')}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowRequestTransferModal(true)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
-                    title="Solicitar al administrador la reasignación o traslado de este prospecto"
-                  >
-                    <ArrowRightLeft size={12} />
-                    <span>Solicitar Reasignación</span>
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setShowRequestTransferModal(true)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
+                      title="Solicitar al administrador la reasignación o traslado de este prospecto"
+                    >
+                      <ArrowRightLeft size={12} />
+                      <span>Solicitar Reasignación</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -865,6 +877,7 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
             )}
 
             {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
+            </fieldset>
           </section>
 
           <section className="border-t border-zinc-800 px-5 py-4">
@@ -872,12 +885,14 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
               <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-zinc-500">
                 <CalendarCheck size={12} /> Citas
               </p>
-              <button
-                onClick={() => setShowAppointment(true)}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-300 hover:text-sky-200"
-              >
-                <CalendarPlus size={12} /> Agendar
-              </button>
+              {!readOnly && (
+                <button
+                  onClick={() => setShowAppointment(true)}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-300 hover:text-sky-200"
+                >
+                  <CalendarPlus size={12} /> Agendar
+                </button>
+              )}
             </div>
             <LeadAppointmentsPanel companyId={companyId} leadId={lead.id} refreshKey={apptRefresh} />
           </section>
@@ -898,7 +913,7 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
             <LeadNotesPanel
               companyId={companyId}
               leadId={lead.id}
-              onOpenNewFicha={() => setShowFichaModal(true)}
+              onOpenNewFicha={readOnly ? undefined : () => setShowFichaModal(true)}
             />
           </section>
 
@@ -917,6 +932,11 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
           </section>
         </div>
 
+        {readOnly ? (
+          <footer className="border-t border-zinc-800 bg-zinc-900 px-5 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-center text-xs text-zinc-500">
+            Modo solo lectura: puedes consultar los datos, pero no modificarlos.
+          </footer>
+        ) : (
         <footer className="border-t border-zinc-800 bg-zinc-900 px-5 py-3.5 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-xl">
           <Button
             onClick={handleSave}
@@ -931,6 +951,7 @@ export function LeadDrawer({ lead: leadProp, companyId, allTags = [], advisors, 
             <Save size={15} /> {saved ? '✓ Cambios guardados' : isDirty ? 'Guardar cambios pendientes' : 'Sin cambios pendientes'}
           </Button>
         </footer>
+        )}
       </aside>
 
       {showAppointment && (

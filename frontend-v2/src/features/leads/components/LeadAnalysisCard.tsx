@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { analyzeLead, toAnalysisResult, type LeadAnalysisResult } from '../services/leadAnalysis.service';
 import type { Lead, LeadTemperature } from '@/features/inbox/types';
+import { useAuth } from '@/features/auth/hooks/useAuth';
+import { isViewerRole } from '@/features/auth/types';
 
 interface LeadAnalysisCardProps {
   lead:      Lead;
@@ -20,6 +22,9 @@ const TEMP_META: Record<LeadTemperature, {
 };
 
 export function LeadAnalysisCard({ lead, companyId }: LeadAnalysisCardProps) {
+  const { role, platformAdmin } = useAuth();
+  // "Solo lectura": ve la radiografía existente, pero no la genera ni la regenera.
+  const readOnly = !platformAdmin && isViewerRole(role);
   const [analysis, setAnalysis] = useState<LeadAnalysisResult | null>(
     lead.aiAnalysis ? toAnalysisResult(lead.aiAnalysis) : null
   );
@@ -56,14 +61,14 @@ export function LeadAnalysisCard({ lead, companyId }: LeadAnalysisCardProps) {
           Deja que la IA lea la conversación y califique este lead: puntaje, interés,
           objeciones y el próximo paso ideal.
         </p>
-        <button
+        {!readOnly && <button
           onClick={run}
           disabled={loading}
           className="mt-3 inline-flex items-center gap-2 rounded-md border border-violet-500/40 bg-violet-500/15 px-3.5 py-2 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/25 disabled:opacity-50"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
           {loading ? 'Analizando…' : 'Analizar lead con IA'}
-        </button>
+        </button>}
         {error && <p className="mt-3 text-[11px] text-red-300">{error}</p>}
       </div>
     );
@@ -83,14 +88,14 @@ export function LeadAnalysisCard({ lead, companyId }: LeadAnalysisCardProps) {
             <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${temp.chip}`}>
               <TempIcon size={11} /> {temp.label}
             </span>
-            <button
+            {!readOnly && <button
               onClick={run}
               disabled={loading}
               title="Volver a analizar"
               className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
             >
               {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-            </button>
+            </button>}
           </div>
           <p className="mt-2 text-xs leading-relaxed text-zinc-300">{analysis.summary}</p>
         </div>

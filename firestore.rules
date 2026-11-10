@@ -47,6 +47,13 @@ service cloud.firestore {
                  && request.auth.token.role in ['admin', 'manager']);
     }
 
+    // Miembro de la empresa con permiso de escritura: todos menos "Solo lectura"
+    // (viewer). Sin claim de rol se asume asesor, igual que el backend.
+    function canWrite(companyId) {
+      return inCompany(companyId)
+             && (isPlatformAdmin() || request.auth.token.get('role', 'advisor') != 'viewer');
+    }
+
     function canReadLead(companyId, leadId) {
       return inCompany(companyId) && leadId != null;
     }
@@ -73,10 +80,11 @@ service cloud.firestore {
 
       // ── Leads y mensajes ───────────────────────────────────────────────────
       // Lectura para cualquier miembro de la empresa (la bandeja y embudo del CRM).
-      // Actualizaciones permitidas para miembros de la empresa (pipeline, notas, seguimientos).
+      // Actualizaciones permitidas para miembros de la empresa (pipeline, notas, seguimientos),
+      // excepto el rol "Solo lectura" (viewer), que solo consulta.
       match /leads/{leadId} {
         allow read:   if inCompany(companyId);
-        allow update: if inCompany(companyId);
+        allow update: if canWrite(companyId);
         allow create, delete: if false;
 
         match /messages/{messageId} {
@@ -94,7 +102,7 @@ service cloud.firestore {
         // Notas internas y recordatorios del lead. Lectura y registro desde el cliente
         match /notes/{noteId} {
           allow read:   if canReadLead(companyId, leadId);
-          allow create: if inCompany(companyId);
+          allow create: if canWrite(companyId);
           allow update, delete: if isAdmin(companyId);
         }
 

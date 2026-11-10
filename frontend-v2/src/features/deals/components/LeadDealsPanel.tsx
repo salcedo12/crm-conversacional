@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Ban, Calculator, Loader2, Plus, Users } from 'lucide-react';
 import type { Lead } from '@/features/inbox/types';
+import { useAuth } from '@/features/auth/hooks/useAuth';
+import { isViewerRole } from '@/features/auth/types';
 import { DealBuyersModal } from './DealBuyersModal';
 import { DealLotSection } from './DealLotSection';
 import { DealPlanModal } from './DealPlanModal';
@@ -27,6 +29,9 @@ const STATUS_STYLES: Record<DealStatus, string> = {
 
 /** Negocios del lead (sección del LeadDrawer): crear negocio y registrar sus compradores. */
 export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: Lead }) {
+  const { role, platformAdmin } = useAuth();
+  // "Solo lectura": ve los negocios, pero no crea, edita ni anula.
+  const readOnly = !platformAdmin && isViewerRole(role);
   const [deals, setDeals] = useState<DealSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -97,7 +102,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
           const names = deal.buyerNames?.length
             ? deal.buyerNames
             : deal.buyerProfiles.map((b) => `${b.firstNames} ${b.lastNames}`.trim());
-          const editable = deal.status === 'borrador' || deal.status === 'plan_listo';
+          const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
           return (
             <div key={deal.id} className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
               <div className="flex items-center justify-between gap-2">
@@ -114,6 +119,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
               {deal.status === 'anulado' && deal.cancelReason && (
                 <p className="mt-1 text-[11px] text-zinc-500">Motivo: {deal.cancelReason}</p>
               )}
+              <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0">
               {deal.status !== 'anulado' && (
                 <DealLotSection
                   companyId={companyId}
@@ -128,6 +134,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
               {deal.status !== 'anulado' && (
                 <DealDocumentsSection companyId={companyId} deal={deal} onChanged={() => void load()} />
               )}
+              </fieldset>
               {cancelingId === deal.id && (
                 <div className="mt-2 space-y-2">
                   <textarea
@@ -157,7 +164,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
                   </div>
                 </div>
               )}
-              {deal.status !== 'anulado' && cancelingId !== deal.id && (
+              {!readOnly && deal.status !== 'anulado' && cancelingId !== deal.id && (
                 <div className="mt-2 flex gap-3">
                   {editable && (
                     <button
@@ -182,7 +189,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
         })
       )}
 
-      {!loading && !hasOpenDeal && (
+      {!readOnly && !loading && !hasOpenDeal && (
         <button
           type="button"
           onClick={handleCreate}

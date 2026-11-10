@@ -30,6 +30,8 @@ const OFFICIAL_PROJECTS = [
 export function PipelinePage() {
   const { companyId, user, role, platformAdmin } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
+  // "Solo lectura": ve el embudo, pero no mueve tarjetas de etapa.
+  const readOnly = !platformAdmin && role === 'viewer';
 
   const [cards, setCards] = useState<PipelineCardItem[]>([]);
   const [advisors, setAdvisors] = useState<{ id: string; name: string }[]>([]);
@@ -367,8 +369,8 @@ export function PipelinePage() {
                   stage={stage}
                   cards={stageCards}
                   onOpenFicha={(card) => setFichaTargetCard(card)}
-                  onChangeStage={handleStageChange}
-                  onDropCard={handleStageChange}
+                  onChangeStage={readOnly ? undefined : handleStageChange}
+                  onDropCard={readOnly ? undefined : handleStageChange}
                 />
               );
             })}

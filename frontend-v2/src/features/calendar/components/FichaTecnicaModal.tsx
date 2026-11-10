@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import { Trash2, Calendar, Clock, CheckCircle2, ExternalLink, Download } from 'lucide-react';
 import { reportAppointmentFicha } from '../services/calendar.service';
 import { useLeadNotes, deleteLeadNote } from '@/features/leads/services/leadNotes.service';
@@ -189,6 +189,8 @@ export function FichaTecnicaModal({
   const appointmentId = appointment?.id;
   const { role, platformAdmin } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
+  // "Solo lectura": solo ve el historial; no diligencia la ficha ni cambia el proyecto.
+  const readOnly = !platformAdmin && isViewerRole(role);
 
   const initialProject =
     lead?.project ||
@@ -261,7 +263,7 @@ export function FichaTecnicaModal({
     }
   };
 
-  const [activeTab, setActiveTab] = useState<'form' | 'history'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'form' | 'history'>(readOnly ? 'history' : initialTab);
 
   // Hook de notas del lead para ver historial
   const { notes: leadNotes, loading: loadingNotes } = useLeadNotes(companyId, targetLeadId);
@@ -698,8 +700,8 @@ export function FichaTecnicaModal({
                     <select
                       value={selectedProject}
                       onChange={(e) => handleProjectChange(e.target.value)}
-                      disabled={updatingProject}
-                      className="bg-transparent text-emerald-300 font-bold text-xs outline-none cursor-pointer pr-1"
+                      disabled={updatingProject || readOnly}
+                      className="bg-transparent text-emerald-300 font-bold text-xs outline-none cursor-pointer pr-1 disabled:cursor-default"
                       title="Haz clic para actualizar el proyecto de interés del prospecto"
                     >
                       <option value="" className="bg-zinc-900 text-zinc-400">Sin definir / Por definir</option>
@@ -733,7 +735,7 @@ export function FichaTecnicaModal({
 
           {/* Pestañas: Diligenciar vs Historial de Seguimientos */}
           <div className="flex border-b border-zinc-800 bg-zinc-900/60 px-2 sm:px-6 shrink-0">
-            <button
+            {!readOnly && <button
               type="button"
               onClick={() => setActiveTab('form')}
               className={`flex-1 sm:flex-initial py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-bold border-b-2 flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
@@ -744,7 +746,7 @@ export function FichaTecnicaModal({
             >
               <span>📝</span>
               <span>Diligenciar Ficha</span>
-            </button>
+            </button>}
             <button
               type="button"
               onClick={() => setActiveTab('history')}
@@ -1216,13 +1218,15 @@ export function FichaTecnicaModal({
                   <p className="text-xs text-zinc-400">
                     Historial cronológico de gestiones, llamadas, citas y notas con este contacto.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('form')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/25 transition-colors cursor-pointer"
-                  >
-                    <span>+</span> Diligenciar Nueva Ficha
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('form')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                    >
+                      <span>+</span> Diligenciar Nueva Ficha
+                    </button>
+                  )}
                 </div>
 
                 {loadingNotes ? (
@@ -1234,10 +1238,10 @@ export function FichaTecnicaModal({
                   <div className="py-12 text-center text-zinc-500">
                     <p className="text-3xl mb-2">📜</p>
                     <p className="text-xs font-medium text-zinc-400">No hay seguimientos registrados aún para este prospecto.</p>
-                    <p className="text-[11px] text-zinc-600 mt-1 max-w-sm mx-auto">
+                    {!readOnly && <p className="text-[11px] text-zinc-600 mt-1 max-w-sm mx-auto">
                       Registra una nueva gestión diligenciando la Ficha Técnica oficial.
-                    </p>
-                    <div className="flex items-center justify-center flex-wrap gap-3 mt-4">
+                    </p>}
+                    {!readOnly && <div className="flex items-center justify-center flex-wrap gap-3 mt-4">
                       <button
                         type="button"
                         onClick={() => setActiveTab('form')}
@@ -1245,7 +1249,7 @@ export function FichaTecnicaModal({
                       >
                         Registrar primer seguimiento
                       </button>
-                    </div>
+                    </div>}
                   </div>
                 ) : (
                   <div className="space-y-4">

@@ -120,6 +120,8 @@ export function InboxPage() {
     for (const lead of unread) {
       if (lead.lastInboundAt) markLocalRead(lead.id, lead.lastInboundAt.toMillis());
     }
+    // Solo lectura no escribe en los leads: la marca de leído queda solo local.
+    if (!canWrite) return;
     markLeadsRead(companyId ?? 'grupo_meraki_real', unread.map((lead) => lead.id))
       .catch((err) => console.warn('[Inbox] No se pudo marcar todo como leído:', err));
   };

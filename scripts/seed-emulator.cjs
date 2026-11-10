@@ -44,6 +44,8 @@ const INVENTORY = [
 const USERS = [
   { email: 'admin.pruebas@meraki.test', displayName: 'Admin Pruebas', role: 'admin' },
   { email: 'asesor.pruebas@meraki.test', displayName: 'Asesor Pruebas', role: 'advisor' },
+  // "Solo lectura": ve todas las conversaciones sin poder modificar nada.
+  { email: 'lectura.pruebas@meraki.test', displayName: 'Lectura Pruebas', role: 'viewer' },
 ];
 
 const LEADS = [

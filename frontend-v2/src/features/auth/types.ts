@@ -10,6 +10,11 @@ export function isAdminRole(role: UserRole | null | undefined): boolean {
   return !!role && ADMIN_ROLES.includes(role);
 }
 
+/** True si el rol es "Solo lectura": ve todo como un admin pero no modifica nada. */
+export function isViewerRole(role: UserRole | null | undefined): boolean {
+  return role === 'viewer';
+}
+
 export interface UserProfile {
   id:          string;
   companyId:   string;

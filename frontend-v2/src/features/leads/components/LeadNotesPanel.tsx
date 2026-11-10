@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { formatMessageTime, formatFullDateTime } from '@/shared/utils/date';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import {
   addLeadNote, deleteLeadNote, setReminderDone, useLeadNotes,
   type LeadNoteKind, type LeadNote,
@@ -77,6 +77,8 @@ export function LeadNotesPanel({
 }: LeadNotesPanelProps) {
   const { role, platformAdmin } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
+  // "Solo lectura": ve el historial, pero no agrega notas ni marca recordatorios.
+  const readOnly = !platformAdmin && isViewerRole(role);
   const { notes, loading } = useLeadNotes(companyId, leadId);
   const [filter, setFilter] = useState<'all' | 'fichas' | 'deals' | 'reminders' | 'notes'>('all');
   const [showQuickForm, setShowQuickForm] = useState(false);
@@ -149,7 +151,7 @@ export function LeadNotesPanel({
             <span>📝 Diligenciar Ficha</span>
           </button>
         )}
-        <button
+        {!readOnly && <button
           type="button"
           onClick={() => setShowQuickForm(!showQuickForm)}
           className="inline-flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 py-2 px-3 text-xs font-medium text-zinc-300 hover:bg-zinc-700 transition-colors cursor-pointer"
@@ -157,11 +159,11 @@ export function LeadNotesPanel({
           <Plus size={13} />
           <span>Nota / Recordatorio</span>
           {showQuickForm ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
+        </button>}
       </div>
 
       {/* Formulario rápido desplegable */}
-      {showQuickForm && (
+      {showQuickForm && !readOnly && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-800/40 p-3 space-y-2">
           <div className="flex gap-1">
             {(['note', 'reminder'] as LeadNoteKind[]).map((k) => (
@@ -403,6 +405,7 @@ export function LeadNotesPanel({
                 {isReminder ? (
                   <button
                     onClick={() => handleToggleDone(note)}
+                    disabled={readOnly}
                     title={note.done ? 'Marcar pendiente' : 'Marcar hecho'}
                     className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors cursor-pointer ${
                       note.done ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-zinc-600 hover:border-emerald-500'

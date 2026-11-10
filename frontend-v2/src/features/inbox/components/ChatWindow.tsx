@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
-import { AlertTriangle, ShieldAlert, ClipboardList } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, ClipboardList, Eye } from 'lucide-react';
 import { Spinner }              from '@/shared/components/Spinner';
 import { EmptyState }           from '@/shared/components/EmptyState';
 import { useAuth }              from '@/features/auth/hooks/useAuth';
-import { isAdminRole }          from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import { MessageBubble }        from './MessageBubble';
 import { ConversationHeader }   from './ConversationHeader';
 import { MessageComposer }      from './MessageComposer';
@@ -35,13 +35,17 @@ interface ChatWindowProps {
 export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, onBack, onMarkedRead }: ChatWindowProps) {
   const { user, role, platformAdmin } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
-  const isAssignedToOther = !isAdmin && !!lead.assignedTo && !!user?.uid && lead.assignedTo !== user.uid;
+  // "Solo lectura": ve todas las conversaciones completas (como un admin), pero sin
+  // compositor, plantillas, reacciones ni control de la IA.
+  const readOnly = !platformAdmin && isViewerRole(role);
+  const canSeeAll = isAdmin || readOnly;
+  const isAssignedToOther = !canSeeAll && !!lead.assignedTo && !!user?.uid && lead.assignedTo !== user.uid;
   const { messages, loading, loadingMore, hasMore, loadMore } = useMessages(companyId, isAssignedToOther ? null : lead.id);
 
   // Muro de Privacidad de Chats en Reasignaciones (Protocolo Meraki)
   // Si el usuario es un asesor (no admin), y el lead fue asignado o reasignado, se ocultan los mensajes
   // anteriores a la asignación para proteger la confidencialidad de la gestión previa.
-  const isReassigned = !isAdmin && !!lead.advisorAssignedAt;
+  const isReassigned = !canSeeAll && !!lead.advisorAssignedAt;
   const cutoffTime = isReassigned && lead.advisorAssignedAt ? lead.advisorAssignedAt.toMillis() : 0;
 
   const { visibleMessages, hiddenCount } = useMemo(() => {
@@ -102,10 +106,12 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
 
     markedReadKeyRef.current = markKey;
     onMarkedRead?.(lead.id, readAtMillis);
+    // Solo lectura no escribe en el lead: su marca de leído queda solo local.
+    if (readOnly) return;
     markLeadRead(companyId, lead.id, readAtMillis).catch((err) => {
       console.warn('[ChatWindow] No se pudo marcar el lead como leido:', err);
     });
-  }, [companyId, lead.id, lead.lastInboundAt, onMarkedRead, isAssignedToOther]);
+  }, [companyId, lead.id, lead.lastInboundAt, onMarkedRead, isAssignedToOther, readOnly]);
 
   const isWhatsapp = !lead.channel || lead.channel === 'whatsapp';
   // La ventana de 24h SOLO la abre un mensaje entrante real del lead. Un lead sin
@@ -245,7 +251,8 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
         onOpenTemplates={() => setShowTemplates(true)}
         onOpenLeadDetails={onOpenLeadDetails}
         onOpenFicha={() => setShowFichaModal(true)}
-        onRequestReassign={!isAdmin ? () => setShowReassignModal(true) : undefined}
+        onRequestReassign={!isAdmin && !readOnly ? () => setShowReassignModal(true) : undefined}
+        readOnly={readOnly}
       />
 
       {/* Messages area */}
@@ -312,7 +319,7 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
             companyLineLabel={inboxLabel(lead.inboxId)}
             companyLinePhone={lead.inboxId}
             advisorWhatsappPhone={advisorWhatsappPhone}
-            onReact={handleReact}
+            onReact={readOnly ? undefined : handleReact}
           />
         ))}
 
@@ -320,7 +327,12 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
       </div>
 
       {/* Compositor o aviso de ventana cerrada (Messenger/Instagram: siempre abierto, no hay plantillas) */}
-      {canUseComposer ? (
+      {readOnly ? (
+        <div className="flex shrink-0 items-center justify-center gap-2 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-xs text-zinc-600 dark:text-zinc-400">
+          <Eye size={14} className="shrink-0" />
+          <span>Modo solo lectura: puedes ver la conversación, pero no enviar mensajes.</span>
+        </div>
+      ) : canUseComposer ? (
         <>
           {companyLineBlocked && advisorWhatsappAvailable && (
             <div className="flex shrink-0 items-start justify-between gap-3 border-t border-amber-500/30 bg-amber-50/90 dark:bg-amber-950/40 dark:border-amber-500/30 px-4 py-2 text-xs text-zinc-900 dark:text-zinc-100">

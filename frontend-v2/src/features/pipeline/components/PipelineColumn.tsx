@@ -9,7 +9,8 @@ interface PipelineColumnProps {
   stage: PipelineStageConfig;
   cards: PipelineCardItem[];
   onOpenFicha: (card: PipelineCardItem) => void;
-  onChangeStage: (cardId: string, newStageId: string) => void;
+  /** Sin este callback (rol "Solo lectura") las tarjetas no se mueven de etapa. */
+  onChangeStage?: (cardId: string, newStageId: string) => void;
   onDropCard?: (cardId: string, targetStageId: string) => void;
 }
 

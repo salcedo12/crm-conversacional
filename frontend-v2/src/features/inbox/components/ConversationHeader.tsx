@@ -16,6 +16,8 @@ interface ConversationHeaderProps {
   onOpenFicha?: () => void;
   onRequestReassign?: () => void;
   onBack?: () => void;
+  /** Rol "Solo lectura": oculta plantillas y deja el estado de la IA como indicador. */
+  readOnly?: boolean;
 }
 
 export function ConversationHeader({
@@ -26,6 +28,7 @@ export function ConversationHeader({
   onOpenLeadDetails,
   onOpenFicha,
   onRequestReassign,
+  readOnly = false,
   onBack,
 }: ConversationHeaderProps) {
   const [toggling, setToggling] = useState(false);
@@ -46,7 +49,7 @@ export function ConversationHeader({
   } : null;
 
   const handleToggleAi = async () => {
-    if (toggling) return;
+    if (toggling || readOnly) return;
     setToggling(true);
     try {
       if (lead.aiEnabled) await onPauseAi();
@@ -142,7 +145,7 @@ export function ConversationHeader({
             </button>
           )}
 
-          {isWhatsapp && (
+          {isWhatsapp && !readOnly && (
             <button
               onClick={onOpenTemplates}
               className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800/70 px-2.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700 hover:text-white"
@@ -158,8 +161,8 @@ export function ConversationHeader({
             <button
               onClick={onOpenFicha}
               className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800/70 px-2.5 text-xs font-semibold text-zinc-200 transition-colors hover:bg-zinc-700 hover:text-white shadow-sm"
-              title="Diligenciar Ficha Técnica / Registrar Seguimiento"
-              aria-label="Diligenciar Ficha Técnica"
+              title={readOnly ? 'Ver historial de la Ficha Técnica' : 'Diligenciar Ficha Técnica / Registrar Seguimiento'}
+              aria-label={readOnly ? 'Ver Ficha Técnica' : 'Diligenciar Ficha Técnica'}
             >
               <ClipboardList size={14} className="text-amber-500 dark:text-amber-400" />
               <span>Ficha</span>
@@ -181,18 +184,19 @@ export function ConversationHeader({
           {/* Botón interactivo único para ver estado y alternar la IA al tocarlo */}
           <button
             onClick={handleToggleAi}
-            disabled={toggling}
+            disabled={toggling || readOnly}
             className={`
               flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-medium
               transition-colors focus:outline-none shadow-sm
+              ${readOnly ? 'disabled:!cursor-default disabled:!opacity-100 pointer-events-none' : ''}
               ${lead.aiEnabled
                 ? 'border-emerald-500/40 bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30 hover:bg-emerald-100 dark:hover:bg-emerald-500/25'
                 : 'border-amber-500/40 bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/25'
               }
               disabled:cursor-not-allowed disabled:opacity-50
             `}
-            title={lead.aiEnabled ? 'IA activa — Toca para pausar' : 'IA pausada — Toca para activar'}
-            aria-label={lead.aiEnabled ? 'IA activa — Toca para pausar' : 'IA pausada — Toca para activar'}
+            title={readOnly ? (lead.aiEnabled ? 'IA activa' : 'IA pausada') : lead.aiEnabled ? 'IA activa — Toca para pausar' : 'IA pausada — Toca para activar'}
+            aria-label={readOnly ? (lead.aiEnabled ? 'IA activa' : 'IA pausada') : lead.aiEnabled ? 'IA activa — Toca para pausar' : 'IA pausada — Toca para activar'}
           >
             {toggling ? (
               <Spinner size="sm" />
@@ -215,7 +219,7 @@ export function ConversationHeader({
           }`}
         >
           <span className="truncate font-semibold">{manualTakeoverInfo.text}</span>
-          {onOpenFicha && manualTakeoverInfo.tone !== 'compliant' && (
+          {onOpenFicha && !readOnly && manualTakeoverInfo.tone !== 'compliant' && (
             <button
               type="button"
               onClick={onOpenFicha}
@@ -269,7 +273,7 @@ export function ConversationHeader({
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 Línea oficial WhatsApp
               </span>
-            ) : (
+            ) : readOnly ? null : (
               <button
                 type="button"
                 onClick={onOpenTemplates}

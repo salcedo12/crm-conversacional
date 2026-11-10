@@ -11,7 +11,8 @@ import {
 interface PipelineCardProps {
   card: PipelineCardItem;
   onOpenFicha: (card: PipelineCardItem) => void;
-  onChangeStage: (cardId: string, newStageId: string) => void;
+  /** Sin este callback (rol "Solo lectura") la tarjeta no se arrastra ni se mueve de etapa. */
+  onChangeStage?: (cardId: string, newStageId: string) => void;
   onDragStart?: (e: DragEvent, cardId: string) => void;
 }
 
@@ -22,15 +23,16 @@ export function PipelineCard({
   onDragStart,
 }: PipelineCardProps) {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const canMove = !!onChangeStage;
 
   const cleanPhone = card.phone.replace(/\D/g, '');
   const waUrl = cleanPhone ? `https://wa.me/${cleanPhone}` : null;
 
   return (
     <div
-      draggable
-      onDragStart={(e) => onDragStart?.(e, card.id)}
-      className="group relative rounded-xl border border-zinc-800 bg-zinc-900/90 p-3.5 shadow-md transition-all hover:border-zinc-700 hover:bg-zinc-900 hover:shadow-lg active:cursor-grabbing cursor-grab flex flex-col gap-2.5"
+      draggable={canMove}
+      onDragStart={canMove ? (e) => onDragStart?.(e, card.id) : undefined}
+      className={`group relative rounded-xl border border-zinc-800 bg-zinc-900/90 p-3.5 shadow-md transition-all hover:border-zinc-700 hover:bg-zinc-900 hover:shadow-lg flex flex-col gap-2.5 ${canMove ? 'active:cursor-grabbing cursor-grab' : ''}`}
     >
       {/* Cabecera de la tarjeta: Nombre y Score */}
       <div className="flex items-start justify-between gap-2">
@@ -125,7 +127,7 @@ export function PipelineCard({
         </div>
 
         {/* Botón selector de etapa */}
-        <div className="relative">
+        {onChangeStage && <div className="relative">
           <button
             type="button"
             onClick={() => setShowMoveMenu(!showMoveMenu)}
@@ -164,7 +166,7 @@ export function PipelineCard({
               ))}
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </div>
   );

@@ -29,7 +29,8 @@ export const listLeadsPage = onCall(
     }).parse(request.data);
 
     assertCompany(ctx, data.companyId);
-    const filters = (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role))
+    // Admin/manager y "Solo lectura" (viewer) consultan todos los leads; el asesor solo los suyos.
+    const filters = (ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role) || ctx.role === 'viewer')
       ? data.filters
       : { ...data.filters, assignedTo: ctx.uid };
 
