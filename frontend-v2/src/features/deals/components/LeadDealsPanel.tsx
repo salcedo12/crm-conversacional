@@ -237,6 +237,11 @@ function DealPlanLine({ deal, editable, onEdit }: { deal: DealSummary; editable:
         <p className="flex items-center gap-1.5 text-[11px] text-zinc-300">
           <Calculator size={12} className="text-emerald-400" />
           Plan: {formatPesos(total)}{plan.termMonths ? ` · ${plan.termMonths} meses` : ' · de contado'}
+          {plan.specialTerm && (
+            <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-semibold text-amber-300" title={plan.specialTerm.approvedBy ? `Aprobado por ${plan.specialTerm.approvedBy}` : undefined}>
+              Especial
+            </span>
+          )}
         </p>
       ) : stale ? (
         <p className="flex items-center gap-1 text-[11px] text-amber-300"><AlertTriangle size={11} /> El plan era para otro lote; revísalo.</p>

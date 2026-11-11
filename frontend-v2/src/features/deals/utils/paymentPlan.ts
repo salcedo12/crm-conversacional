@@ -192,6 +192,44 @@ export function summarizePlan(p: {
   return { totalLand, separationTotal, ordinaryTotal, extraordinaryTotal, bonusTotal, installmentsTotal, difference, installments, issues };
 }
 
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+/** '2029-06-09' → 'jun 2029' */
+export function formatMonthYear(value: string): string {
+  const [y, m] = value.split('-');
+  return `${MONTHS[Number(m) - 1] ?? m} ${y}`;
+}
+
+export interface TermCheck {
+  /** Plazo escogido en la lista de precios (meses). */
+  termMonths: number;
+  /** Mes de la primera cuota ordinaria: ahí arranca el plazo (cuenta como el mes 1). */
+  start: string;
+  /** Último día permitido: el mes número `termMonths` contado desde `start`. */
+  end: string;
+  /** Cuotas ordinarias o extraordinarias que caen después del plazo. */
+  outside: Installment[];
+}
+
+/**
+ * ¿Caben las cuotas en el plazo escogido? El plazo arranca con la primera cuota ordinaria
+ * (esa cuota es el mes 1), así 30 meses desde ene 2027 llegan hasta jun 2029. La separación
+ * va antes del plazo y la cuota bono no la paga el cliente, por eso no cuentan.
+ * Se compara por mes: una extraordinaria el 20 de jun 2029 sigue dentro del plazo.
+ * Devuelve null si no hay plazo (de contado o valor manual) o aún no hay cuotas ordinarias.
+ * (Regla pura, sin React: se puede usar igual en la app móvil.)
+ */
+export function checkTerm(installments: Installment[], termMonths: number | null | undefined): TermCheck | null {
+  if (!termMonths || termMonths <= 0) return null;
+  const start = installments.filter((i) => i.kind === 'ordinaria').map((i) => i.date).sort()[0];
+  if (!start) return null;
+  const end = addMonths(start, termMonths - 1);
+  const endMonth = end.slice(0, 7);
+  const outside = installments.filter((i) =>
+    (i.kind === 'ordinaria' || i.kind === 'extraordinaria') && i.date.slice(0, 7) > endMonth);
+  return { termMonths, start, end, outside };
+}
+
 /** '$ 145.000.000' */
 export function formatPesos(n: number): string {
   return `$ ${Math.round(n).toLocaleString('es-CO').replace(/,/g, '.')}`;

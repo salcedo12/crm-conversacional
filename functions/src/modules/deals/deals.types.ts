@@ -106,7 +106,9 @@ export interface PaymentPlan {
   simple?:     SimplePlanInputs;
   listPrice?:  number | null;    // precio de lista sugerido para ese plazo (referencia)
   landValue:   number;           // VALOR DEL TERRENO (según plazo en la lista de precios)
-  termMonths:  number;           // plazo en meses de la lista de precios
+  termMonths:  number;           // plazo en meses (de la lista o el negociado si es especial)
+  /** Plazo/valor por fuera de la lista de precios, aprobado por gerencia. null/ausente = de lista. */
+  specialTerm?: { approvedBy: string } | null;
   benefit:     number;           // BENEFICIO
   severance:   Severance | null; // CESANTÍAS
   rows:        PlanRow[];

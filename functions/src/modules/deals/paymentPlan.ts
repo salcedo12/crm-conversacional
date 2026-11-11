@@ -147,6 +147,28 @@ export function summarizePlan(plan: PaymentPlan): PlanSummary {
   };
 }
 
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const monthYear = (date: string) => `${MONTHS[Number(date.slice(5, 7)) - 1]} ${date.slice(0, 4)}`;
+
+/**
+ * Cuotas que se salen del plazo escogido en la lista de precios. El plazo arranca con la
+ * primera cuota ordinaria (esa es el mes 1): 30 meses desde ene 2027 llegan hasta jun 2029.
+ * La separación (va antes) y la cuota bono (no la paga el cliente) no cuentan. Se compara
+ * por mes. Sin plazo (de contado / valor manual) o sin ordinarias no hay nada que revisar.
+ * Va aparte de `summarizePlan` para no cambiar el estado de negocios ya guardados.
+ * Misma regla que `checkTerm` en frontend-v2/src/features/deals/utils/paymentPlan.ts.
+ */
+export function termIssue(installments: Installment[], termMonths: number): string | null {
+  if (!termMonths || termMonths <= 0) return null;
+  const start = installments.filter((i) => i.kind === 'ordinaria').map((i) => i.date).sort()[0];
+  if (!start) return null;
+  const end = addMonths(start, termMonths - 1);
+  const outside = installments.filter((i) =>
+    (i.kind === 'ordinaria' || i.kind === 'extraordinaria') && i.date.slice(0, 7) > end.slice(0, 7));
+  if (!outside.length) return null;
+  return `Se pasa del plazo de ${termMonths} meses: ${outside.length === 1 ? '1 cuota queda' : `${outside.length} cuotas quedan`} después de ${monthYear(end)} (el plazo va de ${monthYear(start)} a ${monthYear(end)}).`;
+}
+
 /** Arras = porcentaje del precio total (30 % según la promesa de ejemplo: 43.500.000 de 145.000.000). */
 export function computeEarnestMoney(price: number, percent = 30): number {
   return Math.round((price * percent) / 100);

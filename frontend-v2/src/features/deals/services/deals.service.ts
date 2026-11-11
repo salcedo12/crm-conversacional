@@ -66,6 +66,8 @@ export interface PaymentPlan {
   listPrice?:  number | null;
   landValue:   number;
   termMonths:  number;
+  /** Plazo/valor por fuera de la lista de precios, aprobado por gerencia. null = de lista. */
+  specialTerm?: { approvedBy: string } | null;
   benefit:     number;
   severance:   { fundName: string; amount: number } | null;
   rows:        PlanRow[];

@@ -8,6 +8,7 @@ import {
   rowsForEvenSplit,
   splitIntoInstallments,
   summarizePlan,
+  termIssue,
 } from './paymentPlan';
 import type { PaymentPlan } from './deals.types';
 
@@ -279,4 +280,36 @@ test('draftStatusFor: plan listo solo con compradores, lote y plan válido de es
   expect(draftStatusFor({ ...base, lot: { ...lot, inventoryLotId: 'otro' } })).toBe('borrador');
   expect(draftStatusFor({ ...base, plan: { ...marCanarias053, landValue: 1 } })).toBe('borrador');
   expect(draftStatusFor({ ...base, status: 'preventa_en_firma' as const })).toBe('preventa_en_firma');
+});
+
+// ── Plazo: todas las cuotas deben caber desde la primera ordinaria ───────────
+
+const plazo30 = expandRows([
+  { kind: 'separacion', count: 2, amount: 3_000_000, firstDate: '2026-11-09' },
+  { kind: 'ordinaria', count: 30, amount: 2_716_392, firstDate: '2027-01-09' },
+  { kind: 'extraordinaria', count: 1, amount: 30_000_000, firstDate: '2027-07-09' },
+  { kind: 'bono', count: 1, amount: 50_000_000, firstDate: '2029-07-09' },
+]);
+
+test('termIssue: 30 ordinarias desde ene 2027 caben en 30 meses (separación y bono no cuentan)', () => {
+  expect(termIssue(plazo30, 30)).toBeNull();
+});
+
+test('termIssue: el último mes del plazo cuenta completo; el siguiente ya se pasa', () => {
+  const extra = (date: string) => [...plazo30, { kind: 'extraordinaria' as const, amount: 10_000_000, date }];
+  expect(termIssue(extra('2029-06-20'), 30)).toBeNull();
+  expect(termIssue(extra('2029-07-01'), 30)).toBe(
+    'Se pasa del plazo de 30 meses: 1 cuota queda después de jun 2029 (el plazo va de ene 2027 a jun 2029).',
+  );
+  expect(termIssue(extra('2032-10-12'), 30)).toContain('1 cuota queda después de jun 2029');
+});
+
+test('termIssue: más ordinarias que meses del plazo', () => {
+  const rows = expandRows([{ kind: 'ordinaria', count: 32, amount: 1_000_000, firstDate: '2027-01-09' }]);
+  expect(termIssue(rows, 30)).toContain('2 cuotas quedan después de jun 2029');
+});
+
+test('termIssue: sin plazo (de contado o manual) o sin ordinarias no revisa', () => {
+  expect(termIssue(plazo30, 0)).toBeNull();
+  expect(termIssue(expandRows([{ kind: 'separacion', count: 1, amount: 1, firstDate: '2026-11-09' }]), 30)).toBeNull();
 });

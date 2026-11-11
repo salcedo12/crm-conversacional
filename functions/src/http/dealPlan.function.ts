@@ -7,7 +7,7 @@ import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/aut
 import { draftStatusFor, EDITABLE_STATUSES, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef, money as formatMoney } from '../modules/deals/dealAudit';
 import { parseCivilDate } from '../modules/deals/civilDate';
-import { computeEarnestMoney, summarizePlan } from '../modules/deals/paymentPlan';
+import { computeEarnestMoney, summarizePlan, termIssue } from '../modules/deals/paymentPlan';
 import { getProjectLegalProfile } from '../modules/deals/legalProfiles';
 import type { PaymentPlan } from '../modules/deals/deals.types';
 import { loadPriceList, priceOptionsFor } from '../modules/pricing/priceList';
@@ -54,6 +54,7 @@ const PlanSchema = z.object({
   listPrice:  money.nullable().optional(),
   landValue:  money.refine((v) => v > 0, 'El valor del terreno debe ser mayor que cero'),
   termMonths: z.number().int().min(0).max(240),
+  specialTerm: z.object({ approvedBy: z.string().trim().max(120) }).nullable().optional(),
   benefit:    money,
   severance:  z.object({ fundName: z.string().trim().max(120), amount: money }).nullable(),
   rows:       z.array(z.object({
@@ -91,11 +92,21 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
     severance: data.plan.severance && data.plan.severance.amount > 0 ? data.plan.severance : null,
     referredBy: data.plan.referredBy || '',
     notes: data.plan.notes || '',
+    specialTerm: data.plan.specialTerm ?? null,
+    ...(data.plan.specialTerm ? { listPrice: null } : {}),
   };
+  // Plazo especial de un lote que SÍ está en la lista: debe quedar quién lo aprobó.
+  if (plan.specialTerm && !plan.specialTerm.approvedBy) {
+    const listed = priceOptionsFor(await loadPriceList(), deal.lot.sector, deal.lot.lotNumber);
+    if (listed.length) throw new HttpsError('invalid-argument', 'Escribe quién aprobó el plazo especial.');
+  }
   const summary = summarizePlan(plan);
   if (summary.issues.length) {
     throw new HttpsError('invalid-argument', `El plan no cuadra: ${summary.issues.join(' ')}`);
   }
+  // Todas las cuotas deben caber en el plazo escogido (desde la primera ordinaria).
+  const outOfTerm = termIssue(summary.installments, plan.termMonths);
+  if (outOfTerm) throw new HttpsError('invalid-argument', `${outOfTerm} Corrige las fechas.`);
 
   const status = draftStatusFor({ ...deal, plan });
   const now = Timestamp.now();
@@ -125,7 +136,8 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
     event: 'plan_saved',
     title: deal.plan ? 'Plan de negocio actualizado' : 'Plan de negocio guardado',
     lines: [
-      `Valor del terreno: ${formatMoney(plan.landValue)} · Plazo: ${plan.termMonths} meses`,
+      `Valor del terreno: ${formatMoney(plan.landValue)} · Plazo: ${plan.termMonths} meses`
+        + (plan.specialTerm ? ` (especial${plan.specialTerm.approvedBy ? `, aprobado por ${plan.specialTerm.approvedBy}` : ''})` : ''),
       `Separación: ${formatMoney(summary.separationTotal)} · Ordinarias: ${formatMoney(summary.ordinaryTotal)} · Extraordinarias: ${formatMoney(summary.extraordinaryTotal)}`,
       `Beneficio: ${formatMoney(plan.benefit)} · Cesantías: ${formatMoney(summary.severanceTotal)}`,
       ...(plan.referredBy ? [`Referido por: ${plan.referredBy}`] : []),

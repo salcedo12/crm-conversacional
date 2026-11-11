@@ -574,6 +574,14 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
               <div className="mt-3 space-y-2 text-xs text-zinc-400">
                 <p><strong className="text-zinc-200">Estado:</strong> {DEAL_STATUS_LABELS[deal.status]}</p>
                 <p><strong className="text-zinc-200">Valor:</strong> {deal.plan ? money(deal.plan.landValue) : 'Sin plan'}</p>
+                {deal.plan && (
+                  <p>
+                    <strong className="text-zinc-200">Plazo:</strong> {deal.plan.termMonths ? `${deal.plan.termMonths} meses` : 'De contado'}
+                    {deal.plan.specialTerm && (
+                      <span className="text-amber-300"> · especial{deal.plan.specialTerm.approvedBy ? `, aprobado por ${deal.plan.specialTerm.approvedBy}` : ''}</span>
+                    )}
+                  </p>
+                )}
                 <p><strong className="text-zinc-200">Bono/descuento:</strong> {deal.plan?.benefit ? money(deal.plan.benefit) : 'No aplica'}</p>
                 <p><strong className="text-zinc-200">Referido por:</strong> {referralName(deal.plan?.referredBy) || 'No aplica'}</p>
                 <p><strong className="text-zinc-200">Documentos generados:</strong> {deal.documents?.length ?? 0}</p>

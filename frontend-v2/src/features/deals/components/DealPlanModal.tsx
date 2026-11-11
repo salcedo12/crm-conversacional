@@ -13,7 +13,9 @@ import {
   addMonths,
   buildSimpleRows,
   formatDMY,
+  formatMonthYear,
   formatPesos,
+  checkTerm,
   groupInstallments,
   monthlyInstallmentCount,
   parsePesos,
@@ -38,6 +40,9 @@ const KIND_LABELS: Record<InstallmentKind, string> = {
   extraordinaria: 'Extraordinaria',
   bono: 'Bono descuento',
 };
+
+/** Valor del selector de plazo para el plazo especial (por fuera de la lista de precios). */
+const SPECIAL = 'especial';
 
 /** Separación por defecto de los contratos de ejemplo ($6.000.000 en 2 cuotas). */
 const DEFAULT_SEPARATION = 6_000_000;
@@ -78,6 +83,10 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const [earnestPercent, setEarnestPercent] = useState(30);
   const [termMonths, setTermMonths] = useState<number | null>(saved?.termMonths ?? null);
   const [listPrice, setListPrice] = useState<number | null>(saved?.listPrice ?? null);
+  // Plazo especial: meses y valor negociados por fuera de la lista (los aprueba gerencia).
+  // Los planes viejos con "Valor manual" (sin precio de lista) se abren como especiales.
+  const [special, setSpecial] = useState(saved ? !!saved.specialTerm || saved.listPrice == null : false);
+  const [approvedBy, setApprovedBy] = useState(saved?.specialTerm?.approvedBy ?? '');
   const [landValue, setLandValue] = useState(saved?.landValue ?? 0);
   const [benefit, setBenefit] = useState(saved?.benefit ?? 0);
   const [severanceAmount, setSeveranceAmount] = useState(saved?.severance?.amount ?? 0);
@@ -117,6 +126,8 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
           setLandValue(first.price);
           setSimple((s) => ({ ...s, ordinaryCount: Math.max(1, first.termMonths) }));
         }
+        // Lote que no está en la lista: el plazo y el valor se escriben a mano.
+        if (!saved && !res.options.length) setSpecial(true);
       })
       .catch(() => setOptions([]))
       .finally(() => setLoadingPrices(false));
@@ -135,13 +146,27 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const isVerified = verifiedSignature === verificationSignature;
 
   const pickTerm = (value: string) => {
-    if (value === '') { setTermMonths(null); setListPrice(null); return; }
+    if (value === SPECIAL) {
+      // Se conserva lo que había (meses y valor) como punto de partida para negociar.
+      setSpecial(true);
+      setListPrice(null);
+      return;
+    }
     const opt = options.find((o) => o.termMonths === Number(value));
     if (!opt) return;
+    setSpecial(false);
     setTermMonths(opt.termMonths);
     setListPrice(opt.price);
     setLandValue(opt.price);
     if (mode === 'simple') setSimple((s) => ({ ...s, ordinaryCount: Math.max(1, opt.termMonths) }));
+  };
+
+  /** Meses negociados del plazo especial ('' = sin escribir). Ajusta las ordinarias como la lista. */
+  const setSpecialMonths = (value: string) => {
+    if (value.trim() === '') { setTermMonths(null); return; }
+    const months = Math.min(240, Math.max(0, Math.round(Number(value) || 0)));
+    setTermMonths(months);
+    if (mode === 'simple' && months > 0) setSimple((s) => ({ ...s, ordinaryCount: months }));
   };
 
   const switchMode = (next: 'simple' | 'especifico') => {
@@ -187,9 +212,10 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       await saveDealPlan(companyId, deal.id, {
         mode,
         ...(mode === 'simple' ? { simple } : {}),
-        listPrice,
+        listPrice: special ? null : listPrice,
         landValue,
         termMonths: termMonths ?? 0,
+        specialTerm: special ? { approvedBy: approvedBy.trim() } : null,
         benefit,
         severance,
         rows: effectiveRows,
@@ -208,6 +234,20 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const earnest = Math.round((landValue * earnestPercent) / 100);
   const byKind = (k: InstallmentKind) => groupInstallments(summary.installments.filter((i) => i.kind === k));
   const automaticOrdinaryRows = effectiveRows.filter((row) => row.kind === 'ordinaria');
+  // Plazo de la lista de precios: todas las cuotas deben caber desde la primera ordinaria.
+  const term = checkTerm(summary.installments, termMonths);
+  const termEndMonth = term?.end.slice(0, 7);
+  const isOutsideTerm = (date: string) => !!termEndMonth && !!date && date.slice(0, 7) > termEndMonth;
+  const termAlert = term && term.outside.length > 0
+    ? `Se pasa del plazo de ${term.termMonths} meses: ${term.outside.length === 1 ? '1 cuota queda' : `${term.outside.length} cuotas quedan`} después de ${formatMonthYear(term.end)} (el plazo va de ${formatMonthYear(term.start)} a ${formatMonthYear(term.end)}).`
+    : null;
+  // Plazo especial: hay que escribir los meses y, si el lote está en la lista, quién lo aprobó.
+  const specialIssue = !special ? null
+    : termMonths === null ? 'Escribe los meses negociados del plazo especial.'
+      : options.length > 0 && !approvedBy.trim() ? 'Escribe quién aprobó el plazo especial.'
+        : null;
+  // Pasarse del plazo bloquea guardar, igual que si el plan no cuadra (el servidor también lo revisa).
+  const canSave = summary.issues.length === 0 && !termAlert && !specialIssue;
 
   const setExtraordinary = (list: SimpleInputs['extraordinary']) => setSimple({ ...simple, extraordinary: list });
   const setRanges = (list: NonNullable<SimpleInputs['ordinaryRanges']>) => setSimple({ ...simple, ordinaryRanges: list });
@@ -230,12 +270,20 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
           {/* Cuadre siempre visible: en celular el resumen queda muy abajo. */}
           <PlanBalance totalLand={summary.totalLand} paid={summary.installmentsTotal + severanceAmount} difference={summary.difference} />
           {error && <p className="text-xs text-red-300">{error}</p>}
+          {termAlert && (
+            <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-200 sm:text-[11px]">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" /> <span>{termAlert} Corrige las fechas para poder guardar.</span>
+            </p>
+          )}
+          {specialIssue && !error && (
+            <p className="text-xs font-medium text-amber-300 sm:text-[11px]">{specialIssue}</p>
+          )}
           {summary.issues.length > 0 && !error && (
             <p className="line-clamp-2 text-xs text-amber-300/90 sm:text-[11px]">{summary.issues[0]}{summary.issues.length > 1 ? ` (+${summary.issues.length - 1} más)` : ''}</p>
           )}
           <div className="grid grid-cols-[auto_1fr] gap-2 sm:flex sm:justify-end">
             <Button variant="ghost" onClick={onClose} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">Cancelar</Button>
-            <Button onClick={handleSave} loading={saving} disabled={summary.issues.length > 0} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
+            <Button onClick={handleSave} loading={saving} disabled={!canSave} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
               Guardar plan
             </Button>
           </div>
@@ -246,22 +294,53 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       <Section title="Cierre del negocio">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Field
-            label="Plazo (lista de precios)"
+            label="Plazo"
             hint={loadingPrices ? (
               <p className="mt-1 text-[11px] text-zinc-500">Cargando precios…</p>
             ) : !options.length && (
-              <p className="mt-1 text-[11px] text-zinc-500">Este lote no está en la lista de precios: escribe el valor.</p>
+              <p className="mt-1 text-[11px] text-zinc-500">Este lote no está en la lista de precios: escribe el plazo y el valor.</p>
             )}
           >
-            <select className={inputCls} value={termMonths ?? ''} onChange={(e) => pickTerm(e.target.value)}>
-              <option value="">Valor manual</option>
+            <select className={inputCls} value={special ? SPECIAL : (termMonths ?? '')} onChange={(e) => pickTerm(e.target.value)}>
+              {!special && termMonths === null && <option value="">Seleccionar</option>}
               {options.map((o) => (
                 <option key={o.termMonths} value={o.termMonths}>
                   {o.termMonths === 0 ? 'De contado' : `${o.termMonths} meses`} · {formatPesos(o.price)}
                 </option>
               ))}
+              <option value={SPECIAL}>{options.length ? 'Plazo especial (aprobado por gerencia)' : 'Plazo y valor a mano'}</option>
             </select>
           </Field>
+          {special && (
+            // Negociado por fuera de la lista: meses + quién lo aprobó. El valor va en "Valor del terreno".
+            <div className="grid grid-cols-[6.5rem_1fr] gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 sm:col-span-3 sm:grid-cols-[9rem_1fr_1.4fr] sm:items-end">
+              <Field label="Meses negociados">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={240}
+                  className={inputCls}
+                  value={termMonths ?? ''}
+                  placeholder="Ej: 36"
+                  onChange={(e) => setSpecialMonths(e.target.value)}
+                />
+              </Field>
+              <Field label={options.length ? 'Aprobado por' : 'Aprobado por (opcional)'}>
+                <input
+                  className={inputCls}
+                  value={approvedBy}
+                  placeholder="Nombre de quien aprobó"
+                  autoComplete="off"
+                  onChange={(e) => setApprovedBy(e.target.value)}
+                />
+              </Field>
+              <p className="col-span-2 text-[11px] text-amber-200/80 sm:col-span-1 sm:pb-2">
+                {termMonths === 0 ? 'De contado. ' : termMonths ? `Las cuotas deben caber en ${termMonths} meses desde la primera ordinaria. ` : ''}
+                Escribe el valor negociado en "Valor del terreno".
+              </p>
+            </div>
+          )}
           <Field
             label="Valor del terreno"
             hint={listPrice !== null && listPrice !== landValue && (
@@ -374,6 +453,9 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                             <RemoveButton label="Quitar rango de cuotas ordinarias" onClick={() => setRanges((simple.ordinaryRanges ?? []).filter((_, index) => index !== i))} />
                           </div>
                         </div>
+                        {term && isOutsideTerm(range.toDate) && (
+                          <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-300"><AlertTriangle size={11} className="shrink-0" /> Fuera del plazo: va hasta {formatMonthYear(term.end)}.</p>
+                        )}
                         {count === 0 && range.fromDate && range.toDate && (
                           <p className="mt-1.5 text-[11px] text-amber-300">La fecha final debe coincidir con una mensualidad calculada desde la fecha inicial.</p>
                         )}
@@ -397,7 +479,14 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                     <input type="number" inputMode="numeric" min={0} max={240} className={inputCls} value={simple.ordinaryCount}
                       onChange={(e) => setSimple({ ...simple, ordinaryCount: Math.max(0, Number(e.target.value) || 0) })} />
                   </Field>
-                  <Field label="Primera cuota">
+                  <Field
+                    label="Primera cuota"
+                    hint={term && (
+                      <p className={`mt-1 text-[11px] ${term.outside.length ? 'text-amber-300' : 'text-zinc-500'}`}>
+                        Plazo de {term.termMonths} meses: hasta {formatMonthYear(term.end)}.
+                      </p>
+                    )}
+                  >
                     <input type="date" className={inputCls} value={simple.ordinaryFirstDate}
                       onChange={(e) => setSimple({ ...simple, ordinaryFirstDate: e.target.value })} />
                   </Field>
@@ -430,6 +519,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                       amount={e.amount}
                       date={e.date}
                       removeLabel="Quitar extraordinaria"
+                      warning={isOutsideTerm(e.date) && term ? `Fuera del plazo: va hasta ${formatMonthYear(term.end)}.` : undefined}
                       onAmount={(v) => setExtraordinary(simple.extraordinary.map((x, j) => (j === i ? { ...x, amount: v } : x)))}
                       onDate={(d) => setExtraordinary(simple.extraordinary.map((x, j) => (j === i ? { ...x, date: d } : x)))}
                       onRemove={() => setExtraordinary(simple.extraordinary.filter((_, j) => j !== i))}
@@ -486,6 +576,10 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                 {r.count > 1 && r.amount > 0 && (
                   <p className="mt-1.5 text-[11px] text-zinc-500 sm:hidden">{r.count} × {formatPesos(r.amount)} = {formatPesos(r.count * r.amount)}</p>
                 )}
+                {term && (r.kind === 'ordinaria' || r.kind === 'extraordinaria') && r.count > 0 && r.firstDate
+                  && isOutsideTerm(addMonths(r.firstDate, r.count - 1)) && (
+                  <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-300"><AlertTriangle size={11} className="shrink-0" /> Termina {formatMonthYear(addMonths(r.firstDate, r.count - 1))}: fuera del plazo (hasta {formatMonthYear(term.end)}).</p>
+                )}
               </div>
             ))}
             <AddButton onClick={() => setRows((prev) => [...prev, { kind: 'ordinaria', count: 1, amount: 0, firstDate: start }])}>
@@ -525,13 +619,13 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         )}
         {isVerified && (
           <div className={`mt-3 rounded-lg border px-3 py-2.5 ${
-            summary.issues.length
+            !canSave
               ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
               : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
           }`}>
             <p className="flex items-center gap-1.5 text-sm font-semibold sm:text-xs">
-              {summary.issues.length ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
-              {summary.issues.length ? 'La comprobación encontró diferencias' : 'Comprobación correcta: todos los valores cuadran'}
+              {!canSave ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+              {summary.issues.length ? 'La comprobación encontró diferencias' : termAlert ? 'Los valores cuadran, pero hay cuotas fuera del plazo' : 'Comprobación correcta: todos los valores cuadran'}
             </p>
             {/* Cuentas en filas (etiqueta / valor) para que se lean en pantallas angostas. */}
             <dl className="mt-2 space-y-1 text-xs text-zinc-300 sm:text-[11px]">
@@ -571,6 +665,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             </div>
           ))}
         </div>
+        {termAlert && (
+          <p className="mt-3 flex items-start gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 sm:text-[11px]">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {termAlert}
+          </p>
+        )}
         {summary.issues.length > 0 ? (
           <div className="mt-3 space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 sm:text-[11px]">
             {summary.issues.map((issue) => <p key={issue} className="flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> {issue}</p>)}
@@ -683,8 +782,10 @@ function Segmented<T extends string>({ value, onChange, options, small = false }
 }
 
 /** Fila valor + fecha + quitar (separaciones y extraordinarias). */
-function AmountDateRow({ index, amount, date, removeLabel, onAmount, onDate, onRemove }: {
+function AmountDateRow({ index, amount, date, removeLabel, warning, onAmount, onDate, onRemove }: {
   index: number;
+  /** Aviso bajo la fila (p. ej. la fecha se sale del plazo). */
+  warning?: string;
   amount: number;
   date: string;
   removeLabel: string;
@@ -693,13 +794,23 @@ function AmountDateRow({ index, amount, date, removeLabel, onAmount, onDate, onR
   onRemove: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="hidden w-4 shrink-0 text-center text-[11px] text-zinc-600 sm:block">{index}</span>
-      <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-2 sm:grid-cols-2">
-        <MoneyInput value={amount} onChange={onAmount} />
-        <input type="date" className={`${inputCls} max-sm:!px-2`} value={date} onChange={(e) => onDate(e.target.value)} aria-label={`Fecha ${index}`} />
+    <div>
+      <div className="flex items-center gap-2">
+        <span className="hidden w-4 shrink-0 text-center text-[11px] text-zinc-600 sm:block">{index}</span>
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-2 sm:grid-cols-2">
+          <MoneyInput value={amount} onChange={onAmount} />
+          <input
+            type="date"
+            className={`${inputCls} max-sm:!px-2 ${warning ? '!border-amber-500/70' : ''}`}
+            value={date}
+            onChange={(e) => onDate(e.target.value)}
+            aria-label={`Fecha ${index}`}
+            aria-invalid={!!warning}
+          />
+        </div>
+        <RemoveButton label={removeLabel} onClick={onRemove} />
       </div>
-      <RemoveButton label={removeLabel} onClick={onRemove} />
+      {warning && <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-300 sm:pl-6"><AlertTriangle size={11} className="shrink-0" /> {warning}</p>}
     </div>
   );
 }
