@@ -148,6 +148,7 @@ export function buildContractData(input: ContractInputs): ContractData {
     'plan.valorTerreno': pesos(plan.landValue),
     'plan.valorTerrenoLetras': pesosEnLetras(plan.landValue),
     'plan.beneficio': pesos(plan.benefit),
+    'plan.beneficioLetras': plan.benefit > 0 ? pesosEnLetras(plan.benefit) : '',
     'plan.cesantias': pesos(severance),
     'plan.cesantiasAplica': severance > 0 ? 'Aplica' : 'No Aplica',
     'plan.fondoCesantias': severance > 0 ? plan.severance!.fundName : 'No Aplica',
