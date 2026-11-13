@@ -169,6 +169,21 @@ function convertPromesa(xml) {
   xml = clearParagraphs(xml, 'GRUPO CONSTRUCTOR MERAKI S.A.S ZOMAC,');
   xml = clearParagraphs(xml, '(EL TEXTO VA CONTINUO SOLO CAMBIA EL NOMBRE DE LA EMPRESA DE ACUERDO AL PROYECTO)');
 
+  // Unificar "expedido por el área administrativa del {vendedor.razonSocial}," de forma continua sin espacios vacíos
+  const adminMarker = 'expedido por el área administrativa del';
+  const adminIdx = xml.indexOf(adminMarker);
+  const lote2Marker = '2. Que el lote objeto';
+  const lote2Idx = xml.indexOf(lote2Marker, adminIdx);
+  if (adminIdx !== -1 && lote2Idx !== -1) {
+    const pBeforeLote2 = xml.slice(0, lote2Idx);
+    const pLote2Start = [...pBeforeLote2.matchAll(/<w:p(?=[ >])/g)].pop();
+    if (pLote2Start) {
+      xml = xml.slice(0, adminIdx) +
+        'expedido por el área administrativa del {vendedor.razonSocial},</w:t></w:r></w:p>' +
+        xml.slice(pLote2Start.index);
+    }
+  }
+
   // ── Datos dentro de párrafos ──
   xml = replaceText(xml, '<<CÓDIGO DE REFERENCIA DEL LOTE>>', '{lote.codigo}');
   xml = replaceText(xml, 'ETAPA MAR SANTORINI, ubicado', 'ETAPA {lote.sector}, ubicado');
