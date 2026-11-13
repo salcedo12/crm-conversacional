@@ -26,6 +26,7 @@ const CallsPage         = lazy(() => import('@/features/calls/pages/CallsPage').
 const MarketingPage     = lazy(() => import('@/features/marketing/pages/MarketingPage').then((m) => ({ default: m.MarketingPage })));
 const ReportsPage       = lazy(() => import('@/features/reports/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const DealsPage         = lazy(() => import('@/features/deals/pages/DealsPage').then((m) => ({ default: m.DealsPage })));
+const DealDetailPage   = lazy(() => import('@/features/deals/pages/DealDetailPage').then((m) => ({ default: m.DealDetailPage })));
 const BrandHomePage     = lazy(() => import('@/features/legal/pages/BrandHomePage').then((m) => ({ default: m.BrandHomePage })));
 const PrivacyPolicyPage = lazy(() => import('@/features/legal/pages/PrivacyPolicyPage').then((m) => ({ default: m.PrivacyPolicyPage })));
 const TermsPage         = lazy(() => import('@/features/legal/pages/TermsPage').then((m) => ({ default: m.TermsPage })));
@@ -88,6 +89,7 @@ export default function App() {
                 <Route path="/dashboard/pipeline"  element={<PipelinePage />} />
                 <Route path="/dashboard/leads"     element={<LeadsPage />} />
                 <Route path="/dashboard/deals"     element={<DealsPage />} />
+                <Route path="/dashboard/deals/:dealId" element={<DealDetailPage />} />
                 <Route path="/dashboard/calls"     element={<CallsPage />} />
                 <Route path="/dashboard/calendar"  element={<CalendarPage />} />
                 <Route path="/dashboard/config"    element={<ConfigPage />} />

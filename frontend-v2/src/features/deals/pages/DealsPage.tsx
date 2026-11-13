@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BadgeDollarSign, Building2, CheckCircle2, Download, FileCheck2, FileText, Filter,
   Handshake, Loader2, MapPin, Paperclip, Phone, RefreshCw, Search, Trash2,
@@ -62,14 +63,14 @@ const LAGUNA_SECTORS = [
   { key: 'MAR CANARIAS', name: 'Mar Canarias', subtitle: 'Laguna Mar', logo: '/project-logos/mar-canarias.png', accent: 'from-cyan-950/80 to-emerald-950/30' },
 ];
 
-const CATEGORY_LABELS: Record<DealAttachmentCategory, string> = {
+export const CATEGORY_LABELS: Record<DealAttachmentCategory, string> = {
   buyer_identification: 'Cédula / documento del comprador',
   benefit_authorization: 'Autorización de bono o descuento',
   referral_evidence: 'Pantallazo o evidencia del referido',
   separation_payment: 'Soporte de pago de separación',
 };
 
-const STATUS_STYLE: Record<DealStatus, string> = {
+export const STATUS_STYLE: Record<DealStatus, string> = {
   borrador: 'border-zinc-700 bg-zinc-800 text-zinc-300',
   plan_listo: 'border-sky-500/30 bg-sky-500/10 text-sky-300',
   preventa_en_firma: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
@@ -79,20 +80,20 @@ const STATUS_STYLE: Record<DealStatus, string> = {
   anulado: 'border-red-500/30 bg-red-500/10 text-red-300',
 };
 
-function money(value = 0) {
+export function money(value = 0) {
   return `$ ${Math.round(value).toLocaleString('es-CO')}`;
 }
 
-function dateTime(value: number | null | undefined) {
+export function dateTime(value: number | null | undefined) {
   return value ? new Date(value).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 }
 
-function projectName(projectId: string | undefined) {
+export function projectName(projectId: string | undefined) {
   if (!projectId) return 'Proyecto sin definir';
   return PROJECT_NAMES[projectId] || projectId.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function supportStats(deal: DealSummary) {
+export function supportStats(deal: DealSummary) {
   const attachments = deal.attachments ?? [];
   const buyerDocs = new Set(attachments.filter((a) => a.category === 'buyer_identification').map((a) => a.buyerClientId)).size;
   const paymentProofs = attachments.filter((a) => a.category === 'separation_payment').length;
@@ -105,6 +106,7 @@ function supportStats(deal: DealSummary) {
 }
 
 export function DealsPage() {
+  const navigate = useNavigate();
   const { companyId, role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
   const [deals, setDeals] = useState<DealSummary[]>([]);
@@ -324,7 +326,7 @@ export function DealsPage() {
             {filtered.map((deal) => {
               const stats = supportStats(deal);
               return (
-                <button key={deal.id} onClick={() => setSelectedId(deal.id)} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-emerald-500/30 hover:bg-zinc-900">
+                <button key={deal.id} onClick={() => navigate(`/dashboard/deals/${deal.id}`)} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-emerald-500/30 hover:bg-zinc-900">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-zinc-100">{deal.buyerNames?.join(', ') || deal.leadName || 'Sin compradores'}</p>
@@ -708,6 +710,6 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
   );
 }
 
-function Checklist({ ok, text }: { ok: boolean; text: string }) {
+export function Checklist({ ok, text }: { ok: boolean; text: string }) {
   return <div className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-xs ${ok ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : 'border-amber-500/20 bg-amber-500/5 text-amber-300'}`}>{ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />} {text}</div>;
 }

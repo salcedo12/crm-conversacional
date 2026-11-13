@@ -115,6 +115,47 @@ function convertPromesa(xml) {
   xml = wrapBlock(xml, { marker: MARK_LLANO_REZAGO, lastStartsWith: 'Portería, oficina', open: '{#proyecto.esLlanoGrande}', close: '{/proyecto.esLlanoGrande}' });
   xml = wrapBlock(xml, { marker: MARK_CANON, lastStartsWith: 'portería, oficina', open: '{#proyecto.esCanon}', close: '{/proyecto.esCanon}' });
   xml = wrapBlock(xml, { marker: MARK_LAGUNA, lastStartsWith: 'Portería, cancha sintética', open: '{#proyecto.esLagunaMar}', close: '{/proyecto.esLagunaMar}' });
+
+  // Unificar amenidades de forma continua en el mismo párrafo ("de recorrido") y sin saltos vacíos
+  const startMarker = 'estarán compuestas por: </w:t></w:r>';
+  const startIdx = xml.indexOf(startMarker);
+  const endMarker = 'CLÁUSULA SEGUNDA';
+  const endIdx = xml.indexOf(endMarker, startIdx);
+  if (startIdx !== -1 && endIdx !== -1) {
+    const clausulaPStart = xml.lastIndexOf('<w:p', endIdx);
+    const regionToReplace = xml.slice(startIdx + startMarker.length, clausulaPStart);
+
+    const extractRuns = (tag) => {
+      const o = regionToReplace.indexOf('{#' + tag + '}');
+      const c = regionToReplace.indexOf('{/' + tag + '}');
+      if (o === -1 || c === -1) return '';
+      const inside = regionToReplace.slice(o, c);
+      const runs = inside.match(/<w:r(?=[ >])[\s\S]*?<\/w:r>/g) || [];
+      return runs.filter(r => !r.includes('{#' + tag + '}')).join('');
+    };
+
+    const rioRuns = extractRuns('proyecto.esRioClaro');
+    const llanoRuns = extractRuns('proyecto.esLlanoGrande');
+    const canonRuns = extractRuns('proyecto.esCanon');
+    const lagunaRuns = extractRuns('proyecto.esLagunaMar');
+
+    const inlineReplacement =
+      '<w:r><w:t xml:space="preserve">{#proyecto.esRioClaro}</w:t></w:r>' +
+      rioRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esRioClaro}</w:t></w:r>' +
+      '<w:r><w:t xml:space="preserve">{#proyecto.esLlanoGrande}</w:t></w:r>' +
+      llanoRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esLlanoGrande}</w:t></w:r>' +
+      '<w:r><w:t xml:space="preserve">{#proyecto.esCanon}</w:t></w:r>' +
+      canonRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esCanon}</w:t></w:r>' +
+      '<w:r><w:t xml:space="preserve">{#proyecto.esLagunaMar}</w:t></w:r>' +
+      lagunaRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esLagunaMar}</w:t></w:r>' +
+      '</w:p>';
+
+    xml = xml.slice(0, startIdx + startMarker.length) + inlineReplacement + xml.slice(clausulaPStart);
+  }
   // Cuentas bancarias.
   xml = wrapBlock(xml, { marker: '(Texto para el proyecto CAÑÓN DE ARIZONA)', lastStartsWith: 'y realizarse únicamente', open: '{#vendedor.esSM}', close: '{/vendedor.esSM}' });
   xml = wrapBlock(xml, { marker: MARK_OTHERS, lastStartsWith: 'y realizarse únicamente', open: '{^vendedor.esSM}', close: '{/vendedor.esSM}' });
