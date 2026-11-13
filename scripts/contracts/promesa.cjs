@@ -122,7 +122,9 @@ function convertPromesa(xml) {
   const endMarker = 'CLÁUSULA SEGUNDA';
   const endIdx = xml.indexOf(endMarker, startIdx);
   if (startIdx !== -1 && endIdx !== -1) {
-    const clausulaPStart = xml.lastIndexOf('<w:p', endIdx);
+    const pBefore = xml.slice(0, endIdx);
+    const pStartMatch = [...pBefore.matchAll(/<w:p(?=[ >])/g)].pop();
+    const clausulaPStart = pStartMatch.index;
     const regionToReplace = xml.slice(startIdx + startMarker.length, clausulaPStart);
 
     const extractRuns = (tag) => {
