@@ -49,67 +49,214 @@ function normalizeImportedPhone(raw: string): { phone: string; normalizedPhone: 
   return { phone, normalizedPhone: phone.toLowerCase() };
 }
 
+interface FollowUpCandidate {
+  millis: number;
+  summary: string;
+}
+
+function isSystemGeneratedNote(data: FirebaseFirestore.DocumentData): boolean {
+  if (data.authorId === 'system' || data.authorId === 'bot') return true;
+  if (data.type === 'audit' || data.type === 'deal_activity' || data.type === 'transfer_audit') return true;
+  if (data.actionType === 'unificacion_duplicado' || data.actionType === 'traslado_comercial') return true;
+  if (data.source === 'system' || data.source === 'automation') return true;
+
+  const author = String(data.authorName || '').toLowerCase();
+  if (
+    author.includes('sistema') ||
+    author.includes('unificaci') ||
+    author.includes('dirección comercial') ||
+    author.includes('direccion comercial')
+  ) {
+    return true;
+  }
+
+  const text = String(data.text || '');
+  if (
+    text.includes('Prospecto Unificado Automáticamente') ||
+    text.includes('Solicitud de traslado') ||
+    text.includes('Traslado aprobada') ||
+    text.includes('Traslado aprobado') ||
+    text.includes('Reasignación aprobada')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
- * Calcula la última fecha real de seguimiento humano del asesor sobre un lead
- * (mensajes enviados por asesor, ficha técnica o notas de bitácora) sin confundirlo
- * con `updatedAt` automático del sistema.
+ * Calcula la última fecha real de seguimiento humano del asesor asignado sobre un lead.
+ * Filtra y excluye:
+ * - Mensajes enviados por otros asesores (ej: asesores que intentan contactarlo o solicitan traslado).
+ * - Notas y unificaciones automáticas del sistema o de auditoría.
+ * - Notas redactadas por otros asesores.
  */
 async function inspectLeadLastFollowUp(
   companyId: string,
   leadId: string,
-  leadData: FirebaseFirestore.DocumentData
+  leadData: FirebaseFirestore.DocumentData,
+  targetAdvisorId?: string | null
 ): Promise<{
   lastFollowUpMillis: number | null;
   daysSinceFollowUp: number | null;
   lastFollowUpSummary: string | null;
   assignedAtMillis: number | null;
 }> {
-  const candidates: number[] = [];
-  if (leadData.lastAdvisorMessageAt?.toMillis) candidates.push(leadData.lastAdvisorMessageAt.toMillis());
-  if (leadData.lastFollowUpAt?.toMillis) candidates.push(leadData.lastFollowUpAt.toMillis());
-  if (leadData.advisorFirstContactAt?.toMillis) candidates.push(leadData.advisorFirstContactAt.toMillis());
+  const currentAdvisorId = targetAdvisorId || leadData.assignedTo || null;
+  const candidates: FollowUpCandidate[] = [];
 
-  let lastFollowUpSummary: string | null = null;
+  // 1. Revisar mensajes reales de WhatsApp enviados específicamente por el asesor actual
+  try {
+    const msgsSnap = await leadCollection(companyId)
+      .doc(leadId)
+      .collection('messages')
+      .orderBy('createdAt', 'desc')
+      .limit(35)
+      .get();
 
-  // Revisar la nota humana más reciente en subcolección notes
+    for (const mDoc of msgsSnap.docs) {
+      const m = mDoc.data();
+      if (m.direction === 'outbound') {
+        // Si conocemos el asesor asignado a auditar, SOLO contar mensajes enviados por él
+        if (currentAdvisorId && m.advisorId && m.advisorId !== currentAdvisorId) {
+          continue; // Mensaje enviado por otro asesor (ej: asesor solicitante de traslado), NO por el dueño actual
+        }
+        const mMs = m.createdAt?.toMillis?.() ?? 0;
+        if (mMs > 0) {
+          const content = m.content
+            ? m.content.replace(/\s+/g, ' ').trim().slice(0, 140)
+            : m.mediaType
+            ? 'Archivo / imagen por WhatsApp'
+            : 'Mensaje de WhatsApp';
+          candidates.push({
+            millis: mMs,
+            summary: `WhatsApp: "${content}"`,
+          });
+          break; // Se toma el mensaje outbound más reciente del asesor asignado
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Revisar notas humanas en la subcolección notes (excluyendo auditorías de sistema y notas de otros asesores)
   try {
     const notesSnap = await leadCollection(companyId)
       .doc(leadId)
       .collection('notes')
       .orderBy('createdAt', 'desc')
-      .limit(1)
+      .limit(30)
       .get();
 
-    if (!notesSnap.empty) {
-      const n = notesSnap.docs[0].data();
+    for (const doc of notesSnap.docs) {
+      const n = doc.data();
+      if (isSystemGeneratedNote(n)) continue;
+
+      // Si conocemos el asesor actual a auditar, no atribuirle notas registradas por otros asesores
+      if (currentAdvisorId && n.authorId && n.authorId !== currentAdvisorId && n.authorId !== 'system') {
+        continue;
+      }
+
       const noteMs = n.createdAt?.toMillis?.() ?? 0;
-      if (noteMs > 0) candidates.push(noteMs);
-      if (n.text && typeof n.text === 'string') {
-        lastFollowUpSummary = n.text.replace(/\s+/g, ' ').trim().slice(0, 180);
+      if (noteMs > 0) {
+        let summary = '';
+        if (n.type === 'ficha_tecnica') {
+          const clean = (n.text || '')
+            .replace(/^📋 FICHA TÉCNICA[^\n]*\n?/i, '')
+            .replace(/\n?• Observaciones:[\s\S]*$/i, '')
+            .trim();
+          summary = [
+            n.actionType ? `${n.actionType}` : '',
+            n.result ? `(${n.result})` : '',
+            clean,
+          ].filter(Boolean).join(' ');
+        } else {
+          summary = n.text || '';
+        }
+        summary = summary.replace(/\s+/g, ' ').trim().slice(0, 180);
+        if (n.authorName && !summary.includes(n.authorName)) {
+          summary = `${summary} (por ${n.authorName})`;
+        }
+        candidates.push({ millis: noteMs, summary: summary || 'Nota de seguimiento comercial' });
+        break; // Tomar la nota humana más reciente
       }
     }
   } catch {}
 
-  // Revisar bitácoras embebidas si no hubo nota en subcolección
+  // 3. Revisar bitácoras históricas embebidas (SmartHome / CRM) excluyendo logs del sistema
   const bitacoras = leadData.bitacoras || leadData.metadata?.smarthomeBitacoras || [];
   if (Array.isArray(bitacoras) && bitacoras.length > 0) {
-    const latestBit = bitacoras[0];
-    if (!lastFollowUpSummary && latestBit) {
-      const desc = latestBit.description || latestBit.action || '';
-      if (desc) lastFollowUpSummary = String(desc).replace(/\s+/g, ' ').trim().slice(0, 180);
-    }
-    const rawDate = latestBit?.lastDate || latestBit?.fecha;
-    if (rawDate && typeof rawDate === 'string') {
-      const parsed = Date.parse(rawDate.includes('T') ? rawDate : rawDate.replace(' ', 'T') + '-05:00');
-      if (!Number.isNaN(parsed) && parsed > 0) candidates.push(parsed);
+    for (const bit of bitacoras) {
+      if (!bit || typeof bit !== 'object') continue;
+      const asesor = String(bit.asesor || '').toLowerCase();
+      const action = String(bit.action || '').toLowerCase();
+      const desc = String(bit.description || '');
+
+      if (
+        asesor.includes('sistema') ||
+        action.includes('unificaci') ||
+        action.includes('traslado') ||
+        desc.includes('Prospecto Unificado') ||
+        desc.includes('traslado') ||
+        desc.includes('solicitud de traslado') ||
+        bit.system === true ||
+        action === 'evento del sistema'
+      ) {
+        continue;
+      }
+
+      const rawDate = bit.lastDate || bit.fecha;
+      if (rawDate && typeof rawDate === 'string') {
+        const parsed = Date.parse(rawDate.includes('T') ? rawDate : rawDate.replace(' ', 'T') + '-05:00');
+        if (!Number.isNaN(parsed) && parsed > 0) {
+          const actionStr = bit.action ? `${bit.action}: ` : '';
+          const authorStr = bit.asesor ? ` (por ${bit.asesor})` : '';
+          const fullDesc = `${actionStr}${desc}${authorStr}`.replace(/\s+/g, ' ').trim().slice(0, 180);
+          candidates.push({ millis: parsed, summary: fullDesc || 'Bitácora de seguimiento comercial' });
+          break;
+        }
+      }
     }
   }
 
-  if (!lastFollowUpSummary && leadData.lastAdvisorMessageAt) {
-    lastFollowUpSummary = 'Mensaje de WhatsApp enviado por el asesor';
+  // 4. Si no encontramos mensajes en la subcolección pero existe lastAdvisorMessageAt del lead
+  // (SOLO como fallback cuando no hay un asesor específico filtrado)
+  if (!currentAdvisorId && candidates.length === 0 && leadData.lastAdvisorMessageAt?.toMillis) {
+    candidates.push({
+      millis: leadData.lastAdvisorMessageAt.toMillis(),
+      summary: 'Mensaje de WhatsApp enviado por el asesor',
+    });
   }
 
-  const lastFollowUpMillis = candidates.length > 0 ? Math.max(...candidates) : null;
+  // 5. Revisar primer contacto (solo como fallback)
+  if (!currentAdvisorId && candidates.length === 0 && leadData.advisorFirstContactAt?.toMillis) {
+    candidates.push({
+      millis: leadData.advisorFirstContactAt.toMillis(),
+      summary: 'Primer contacto realizado por el asesor',
+    });
+  }
+
+  // 6. Revisar lastFollowUpAt si no fue establecido por un script o unificación
+  const isSyntheticFollowUp =
+    (typeof leadData.lastFollowUpAuthor === 'string' && leadData.lastFollowUpAuthor.toLowerCase().includes('sistema')) ||
+    leadData.lastFollowUpAction === 'unificacion_duplicado' ||
+    leadData.lastFollowUpAction === 'traslado_comercial' ||
+    (typeof leadData.lastFollowUpSummary === 'string' && leadData.lastFollowUpSummary.includes('Prospecto Unificado'));
+
+  if (leadData.lastFollowUpAt?.toMillis && !isSyntheticFollowUp) {
+    candidates.push({
+      millis: leadData.lastFollowUpAt.toMillis(),
+      summary: (leadData.lastFollowUpSummary || 'Seguimiento comercial registrado').replace(/\s+/g, ' ').trim().slice(0, 180),
+    });
+  }
+
+  let lastFollowUpMillis: number | null = null;
+  let lastFollowUpSummary: string | null = null;
+
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => b.millis - a.millis);
+    lastFollowUpMillis = candidates[0].millis;
+    lastFollowUpSummary = candidates[0].summary;
+  }
+
   const daysSinceFollowUp =
     lastFollowUpMillis !== null
       ? Math.max(0, Math.floor((Date.now() - lastFollowUpMillis) / (1000 * 60 * 60 * 24)))
@@ -295,7 +442,7 @@ export const checkPhoneAvailability = onCall(
       }
     } catch {}
 
-    const followUpAudit = await inspectLeadLastFollowUp(companyId, existingDoc.id, d);
+    const followUpAudit = await inspectLeadLastFollowUp(companyId, existingDoc.id, d, d.assignedTo);
 
     return {
       status: 'locked_by_other' as const,
@@ -394,7 +541,7 @@ export const requestLeadTransfer = onCall(
       }
     } catch {}
 
-    const followUpAudit = await inspectLeadLastFollowUp(companyId, targetDoc.id, leadData);
+    const followUpAudit = await inspectLeadLastFollowUp(companyId, targetDoc.id, leadData, leadData.assignedTo);
     const now = Timestamp.now();
     const actionToken = randomBytes(16).toString('hex');
 
@@ -523,7 +670,7 @@ export const listLeadTransferRequests = onCall(
           try {
             const leadSnap = await leadCollection(companyId).doc(d.leadId).get();
             if (leadSnap.exists) {
-              const liveAudit = await inspectLeadLastFollowUp(companyId, d.leadId, leadSnap.data() ?? {});
+              const liveAudit = await inspectLeadLastFollowUp(companyId, d.leadId, leadSnap.data() ?? {}, d.currentAdvisorId);
               lastFollowUpMillis = liveAudit.lastFollowUpMillis;
               daysSinceFollowUp = liveAudit.daysSinceFollowUp;
               lastFollowUpSummary = liveAudit.lastFollowUpSummary;

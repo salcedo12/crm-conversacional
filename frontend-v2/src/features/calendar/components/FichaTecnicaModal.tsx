@@ -171,6 +171,31 @@ function formatFriendlySchedule(dateStr: string, timeStr: string): string {
   return `${formattedDate} · ${formattedTime}`;
 }
 
+function isAutomatedSystemNote(note: {
+  authorId?: string | null;
+  authorName?: string | null;
+  type?: string | null;
+  actionType?: string | null;
+  text?: string | null;
+  source?: string | null;
+}): boolean {
+  if (note.authorId === 'system' || note.authorId === 'bot') return true;
+  if (note.type === 'audit' || note.actionType === 'unificacion_duplicado' || note.actionType === 'traslado_comercial') return true;
+  if (note.source === 'system' || note.source === 'automation') return true;
+  const author = (note.authorName || '').toLowerCase();
+  if (author.includes('sistema') || author.includes('unificaci')) return true;
+  const text = note.text || '';
+  if (
+    text.includes('Prospecto Unificado Automáticamente') ||
+    text.includes('Solicitud de traslado') ||
+    text.includes('Traslado aprobad') ||
+    text.includes('Reasignación aprobad')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function FichaTecnicaModal({
   isOpen,
   onClose,
@@ -202,6 +227,7 @@ export function FichaTecnicaModal({
   const [selectedProject, setSelectedProject] = useState<string>(initialProject);
   const [updatingProject, setUpdatingProject] = useState<boolean>(false);
   const [projectSavedToast, setProjectSavedToast] = useState<boolean>(false);
+  const [docBitacoras, setDocBitacoras] = useState<any[]>(lead?.bitacoras || []);
 
   useEffect(() => {
     const p =
@@ -212,27 +238,39 @@ export function FichaTecnicaModal({
       appointment?.project ||
       '';
     if (p) setSelectedProject(p);
+    if (lead?.bitacoras && Array.isArray(lead.bitacoras)) {
+      setDocBitacoras(lead.bitacoras);
+    }
   }, [
     lead?.project,
     lead?.projectInterest,
+    lead?.bitacoras,
     (lead?.metadata as any)?.project,
     (lead?.metadata as any)?.smarthomeProyectoOriginal,
     appointment?.project,
   ]);
 
-  // Si no se proporcionó proyecto en props y tenemos targetLeadId, consultarlo directamente en Firestore
+  // Consultar directamente el lead en Firestore para asegurar proyecto y bitácoras completas
   useEffect(() => {
-    if (!companyId || !targetLeadId || selectedProject) return;
+    if (!companyId || !targetLeadId) return;
     let isCancelled = false;
     getDoc(doc(db, 'companies', companyId, 'leads', targetLeadId))
       .then((snap) => {
         if (!isCancelled && snap.exists()) {
           const d = snap.data();
           const p = (d?.projectInterest && d.projectInterest[0]) || d?.metadata?.project || d?.firstTouch?.project || '';
-          if (p) setSelectedProject(p);
+          if (p && !selectedProject) setSelectedProject(p);
+          const rawBits = [
+            ...(Array.isArray(d?.bitacoras) ? d.bitacoras : []),
+            ...(Array.isArray(d?.metadata?.smarthomeBitacoras) ? d.metadata.smarthomeBitacoras : []),
+            ...(Array.isArray(d?.smarthomeBitacoras) ? d.smarthomeBitacoras : []),
+          ];
+          if (rawBits.length > 0) {
+            setDocBitacoras(rawBits);
+          }
         }
       })
-      .catch((err) => console.warn('[FichaTecnicaModal] Error consultando proyecto del lead:', err));
+      .catch((err) => console.warn('[FichaTecnicaModal] Error consultando proyecto y bitácora del lead:', err));
     return () => { isCancelled = true; };
   }, [companyId, targetLeadId, selectedProject]);
 
@@ -310,11 +348,13 @@ export function FichaTecnicaModal({
 
   if (!isOpen) return null;
 
-  // Filtrar notas que son fichas o seguimiento oficiales del CRM
+  // Separar notas humanas del asesor de eventos/auditorías de sistema
   const fichaNotes = leadNotes.filter(
     (n) => n.type === 'ficha_tecnica' || n.text?.includes('FICHA TÉCNICA') || n.kind === 'note'
   );
-  const totalFollowUpsCount = fichaNotes.length;
+  const humanFichaNotes = fichaNotes.filter((n) => !isAutomatedSystemNote(n));
+  const systemAuditNotes = fichaNotes.filter((n) => isAutomatedSystemNote(n));
+  const totalFollowUpsCount = humanFichaNotes.length + docBitacoras.length;
 
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
 
@@ -331,7 +371,7 @@ export function FichaTecnicaModal({
     }
   };
 
-  const lastNote = fichaNotes[0];
+  const lastNote = humanFichaNotes[0];
   const lastFollowUpSummary = lastNote
     ? {
         title: lastNote.actionType
@@ -341,6 +381,14 @@ export function FichaTecnicaModal({
         author: lastNote.authorName || 'Asesor',
         date: lastNote.createdAt ? formatFullDateTime(lastNote.createdAt) : '',
         next: lastNote.nextAction || '',
+      }
+    : docBitacoras.length > 0
+    ? {
+        title: docBitacoras[0].action || 'Seguimiento comercial',
+        result: docBitacoras[0].description ? String(docBitacoras[0].description).slice(0, 80) : '',
+        author: docBitacoras[0].asesor || 'Asesor',
+        date: docBitacoras[0].fecha || docBitacoras[0].lastDate || '',
+        next: '',
       }
     : null;
 
@@ -1234,7 +1282,7 @@ export function FichaTecnicaModal({
                     <Spinner />
                     <span className="ml-2">Cargando bitácora de seguimientos...</span>
                   </div>
-                ) : totalFollowUpsCount === 0 ? (
+                ) : totalFollowUpsCount === 0 && systemAuditNotes.length === 0 ? (
                   <div className="py-12 text-center text-zinc-500">
                     <p className="text-3xl mb-2">📜</p>
                     <p className="text-xs font-medium text-zinc-400">No hay seguimientos registrados aún para este prospecto.</p>
@@ -1253,8 +1301,8 @@ export function FichaTecnicaModal({
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {/* Lista de Fichas y Notas del CRM */}
-                    {fichaNotes.map((n) => {
+                    {/* Lista de Fichas y Notas Humanas del Asesor */}
+                    {humanFichaNotes.map((n) => {
                       const aType = n.actionType || 'seguimiento_general';
                       const color = ACTION_COLORS[aType] || ACTION_COLORS.seguimiento_general;
                       const opt = formActions.find((o) => o.id === aType) || ALL_ACTION_DISPLAY.find((o) => o.id === aType);
@@ -1347,6 +1395,73 @@ export function FichaTecnicaModal({
                         </div>
                       );
                     })}
+
+                    {/* Bitácoras históricas embebidas (SmartHome / CRM) */}
+                    {docBitacoras && docBitacoras.length > 0 && (
+                      <div className="space-y-3 pt-3 border-t border-zinc-800">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <span>📜</span>
+                            <span>Bitácoras Registradas ({docBitacoras.length})</span>
+                          </span>
+                        </div>
+                        <div className="space-y-2.5">
+                          {docBitacoras.map((b: any, bIdx: number) => (
+                            <div key={bIdx} className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 space-y-1.5 text-xs">
+                              <div className="flex items-center justify-between text-zinc-400 text-[11px] flex-wrap gap-1">
+                                <span className="font-bold text-emerald-400 flex items-center gap-1">
+                                  <span>✓</span>
+                                  <span>{b.action || 'Gestión comercial'}</span>
+                                </span>
+                                <span className="font-mono text-zinc-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+                                  {b.fecha || b.lastDate || 'Sin fecha'}
+                                </span>
+                              </div>
+                              {b.description && (
+                                <p className="text-zinc-200 text-xs leading-relaxed italic bg-zinc-950/50 p-2 rounded-lg border border-zinc-800/60">
+                                  "{b.description}"
+                                </p>
+                              )}
+                              <div className="text-[10px] text-zinc-500 pt-0.5">
+                                Asesor / Autor: <strong className="text-zinc-300">{b.asesor || 'Asesor'}</strong>
+                                {b.origen && <span className="ml-2 text-zinc-500">· Origen: {b.origen}</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Registros de Auditoría y Eventos Automáticos del Sistema */}
+                    {systemAuditNotes.length > 0 && (
+                      <div className="pt-4 border-t border-zinc-800/90">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <span>⚙️</span>
+                            <span>Registros del Sistema y Auditoría ({systemAuditNotes.length})</span>
+                          </span>
+                          <span className="text-[10px] text-zinc-500">
+                            (Unificaciones y traslados automáticos)
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {systemAuditNotes.map((sn) => (
+                            <div key={sn.id} className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800/80 text-xs text-zinc-400 space-y-1">
+                              <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+                                <span className="font-semibold text-zinc-300 flex items-center gap-1">
+                                  <span>🤖</span>
+                                  <span>{sn.authorName || 'Sistema'}</span>
+                                </span>
+                                {sn.createdAt && <span className="text-zinc-500">{formatFullDateTime(sn.createdAt)}</span>}
+                              </div>
+                              <p className="text-zinc-300 font-mono text-[11px] bg-zinc-900/80 p-2 rounded-lg border border-zinc-800/80 whitespace-pre-wrap">
+                                {sn.text}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

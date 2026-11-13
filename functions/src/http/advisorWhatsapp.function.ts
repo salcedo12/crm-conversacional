@@ -682,12 +682,14 @@ export const advisorWhatsappWebhook = onRequest(
       leadUpdate.lastInboundAt = createdAt;
     }
     if (data.direction === 'outbound') {
-      leadUpdate.lastAdvisorMessageAt = createdAt;
-
       if (!isNewLead && hasDifferentAdvisor) {
         // ── FILTRO A: PROTECCIÓN DE EXCLUSIVIDAD Y PRIVACIDAD COMERCIAL ──────
         // El lead YA PERTENECE a otro asesor. NO se reasigna a quien le escribió.
         // Se mantiene el assignedTo original. Se alerta por push al asesor.
+        // IMPORTANTE: NO actualizar lastAdvisorMessageAt del lead, porque este mensaje
+        // NO fue enviado por el asesor dueño actual (ej: es un asesor solicitante).
+        leadUpdate.lastUnauthorizedContactAt = createdAt;
+        leadUpdate.lastUnauthorizedContactAdvisorId = data.advisorId;
         logger.warn('[AdvisorWhatsapp] Intento de contacto a lead asignado a otro asesor', {
           companyId: data.companyId,
           leadId: lead.id,
@@ -711,7 +713,8 @@ export const advisorWhatsappWebhook = onRequest(
             logger.warn('[AdvisorWhatsapp] Error enviando push de exclusividad', { err });
           });
       } else {
-        // Lead libre (sin asesor) o lead que ya era propio:
+        // Lead libre (sin asesor) o lead que pertenece al asesor que escribió:
+        leadUpdate.lastAdvisorMessageAt = createdAt;
         if (!lead.assignedTo) {
           leadUpdate.assignedTo = data.advisorId;
           leadUpdate.advisorAssignedAt = createdAt;

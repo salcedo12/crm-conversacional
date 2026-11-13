@@ -17,6 +17,7 @@ import {
   type LeadTransferRequestItem,
 } from '../services/contacts';
 import { Icon } from './Icon';
+import { FichaTecnicaModal } from './FichaTecnicaModal';
 
 interface TransferRequestsModalProps {
   isOpen: boolean;
@@ -54,6 +55,14 @@ export function TransferRequestsModal({
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [adminNotes, setAdminNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [selectedFichaReq, setSelectedFichaReq] = useState<{
+    leadId: string;
+    leadName: string;
+    leadPhone: string;
+    leadProject: string;
+    currentAdvisorName: string;
+    initialTab: 'form' | 'history';
+  } | null>(null);
 
   const loadRequests = useCallback(async () => {
     if (!companyId) return;
@@ -284,6 +293,67 @@ export function TransferRequestsModal({
                         "{req.lastFollowUpSummary}"
                       </Text>
                     ) : null}
+
+                    {/* Botones de Bitácora y Ficha Técnica */}
+                    <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: palette.border }}>
+                      <Pressable
+                        onPress={() =>
+                          setSelectedFichaReq({
+                            leadId: req.leadId,
+                            leadName: req.leadName,
+                            leadPhone: req.leadPhone,
+                            leadProject: req.leadProject || '',
+                            currentAdvisorName: req.currentAdvisorName,
+                            initialTab: 'history',
+                          })
+                        }
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 4,
+                          paddingVertical: 4,
+                          paddingHorizontal: 8,
+                          borderRadius: 8,
+                          backgroundColor: palette.amberBg,
+                          borderWidth: 1,
+                          borderColor: palette.amberBorder,
+                        }}
+                      >
+                        <Icon name="history" size={12} color={palette.amberText} />
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: palette.amberText }}>
+                          Ver Bitácora
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        onPress={() =>
+                          setSelectedFichaReq({
+                            leadId: req.leadId,
+                            leadName: req.leadName,
+                            leadPhone: req.leadPhone,
+                            leadProject: req.leadProject || '',
+                            currentAdvisorName: req.currentAdvisorName,
+                            initialTab: 'form',
+                          })
+                        }
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 4,
+                          paddingVertical: 4,
+                          paddingHorizontal: 8,
+                          borderRadius: 8,
+                          backgroundColor: palette.emeraldBg,
+                          borderWidth: 1,
+                          borderColor: palette.emeraldBorder,
+                        }}
+                      >
+                        <Icon name="file-text" size={12} color={palette.emeraldText} />
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: palette.emeraldText }}>
+                          Ficha Técnica
+                        </Text>
+                      </Pressable>
+                    </View>
                   </View>
 
                   {/* Solicitante */}
@@ -341,6 +411,27 @@ export function TransferRequestsModal({
           )}
         </ScrollView>
       </View>
+
+      {/* Modal Ficha Técnica y Bitácora */}
+      {selectedFichaReq && companyId && (
+        <FichaTecnicaModal
+          isOpen={!!selectedFichaReq}
+          onClose={() => setSelectedFichaReq(null)}
+          companyId={companyId}
+          lead={{
+            id: selectedFichaReq.leadId,
+            name: selectedFichaReq.leadName,
+            phone: selectedFichaReq.leadPhone,
+            project: selectedFichaReq.leadProject,
+            advisorName: selectedFichaReq.currentAdvisorName,
+          }}
+          initialTab={selectedFichaReq.initialTab}
+          onSuccess={() => {
+            void loadRequests();
+            onResolved?.();
+          }}
+        />
+      )}
     </Modal>
   );
 }

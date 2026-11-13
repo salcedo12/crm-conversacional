@@ -284,6 +284,31 @@ async function shareIcsInvitation(opts: {
   }
 }
 
+function isAutomatedSystemNote(note: {
+  authorId?: string | null;
+  authorName?: string | null;
+  type?: string | null;
+  actionType?: string | null;
+  text?: string | null;
+  source?: string | null;
+}): boolean {
+  if (note.authorId === 'system' || note.authorId === 'bot') return true;
+  if (note.type === 'audit' || note.actionType === 'unificacion_duplicado' || note.actionType === 'traslado_comercial') return true;
+  if (note.source === 'system' || note.source === 'automation') return true;
+  const author = (note.authorName || '').toLowerCase();
+  if (author.includes('sistema') || author.includes('unificaci')) return true;
+  const text = note.text || '';
+  if (
+    text.includes('Prospecto Unificado Automáticamente') ||
+    text.includes('Solicitud de traslado') ||
+    text.includes('Traslado aprobad') ||
+    text.includes('Reasignación aprobad')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function FichaTecnicaModal({
   isOpen,
   onClose,
@@ -468,9 +493,10 @@ export function FichaTecnicaModal({
   const fichaNotes = leadNotes.filter(
     (n) => n.type === 'ficha_tecnica' || n.text?.includes('FICHA TÉCNICA') || n.kind === 'note' || n.kind === 'ficha'
   );
-  const totalFollowUpsCount = fichaNotes.length;
+  const humanFichaNotes = fichaNotes.filter((n) => !isAutomatedSystemNote(n));
+  const totalFollowUpsCount = humanFichaNotes.length;
 
-  const lastNote = fichaNotes[0];
+  const lastNote = humanFichaNotes[0];
   const lastFollowUpSummary = lastNote
     ? {
         title: lastNote.actionType

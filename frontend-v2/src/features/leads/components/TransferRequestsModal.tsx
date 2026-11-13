@@ -9,6 +9,9 @@ import {
   Phone,
   Building2,
   FileText,
+  ClipboardList,
+  History,
+  ExternalLink,
   RefreshCw,
   X,
 } from 'lucide-react';
@@ -17,6 +20,7 @@ import {
   resolveLeadTransferRequest,
   type LeadTransferRequestItem,
 } from '@/features/inbox/services/contacts.service';
+import { FichaTecnicaModal } from '@/features/calendar/components/FichaTecnicaModal';
 
 interface TransferRequestsModalProps {
   isOpen: boolean;
@@ -53,6 +57,25 @@ export function TransferRequestsModal({
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [adminNotes, setAdminNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [selectedFichaReq, setSelectedFichaReq] = useState<{
+    leadId: string;
+    leadName: string;
+    leadPhone: string;
+    leadProject: string;
+    currentAdvisorName: string;
+    initialTab: 'form' | 'history';
+  } | null>(null);
+
+  const handleOpenFicha = (req: LeadTransferRequestItem, initialTab: 'form' | 'history' = 'history') => {
+    setSelectedFichaReq({
+      leadId: req.leadId,
+      leadName: req.leadName || 'Prospecto',
+      leadPhone: req.leadPhone || '',
+      leadProject: req.leadProject || '',
+      currentAdvisorName: req.currentAdvisorName || 'Asesor Asignado',
+      initialTab,
+    });
+  };
 
   const loadRequests = useCallback(async () => {
     if (!companyId) return;
@@ -243,19 +266,52 @@ export function TransferRequestsModal({
                       </p>
                     </div>
 
-                    {req.status === 'pending' ? (
-                      <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300">
-                        ⏳ Pendiente de decisión
-                      </span>
-                    ) : req.status === 'approved' ? (
-                      <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-                        ✅ Aprobado ({formatBogotaDateTime(req.resolvedAtMillis)})
-                      </span>
-                    ) : (
-                      <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300">
-                        ❌ Rechazado ({formatBogotaDateTime(req.resolvedAtMillis)})
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFicha(req, 'history')}
+                        title="Ver la bitácora completa de gestiones y seguimientos de este prospecto"
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl border border-amber-500/40 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-xs font-semibold transition-all cursor-pointer shadow-sm active:scale-95"
+                      >
+                        <History size={13} />
+                        <span>Ver Bitácora</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFicha(req, 'form')}
+                        title="Ver los detalles y perfil en la Ficha Técnica oficial"
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-semibold transition-all cursor-pointer shadow-sm active:scale-95"
+                      >
+                        <ClipboardList size={13} />
+                        <span>Ficha Técnica</span>
+                      </button>
+
+                      {req.leadId && (
+                        <button
+                          type="button"
+                          onClick={() => window.open(`/dashboard/inbox?lead=${encodeURIComponent(req.leadId)}`, '_blank')}
+                          title="Abrir conversación en Bandeja de Chats en una nueva pestaña"
+                          className="p-1.5 rounded-xl border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                        >
+                          <ExternalLink size={13} />
+                        </button>
+                      )}
+
+                      {req.status === 'pending' ? (
+                        <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                          ⏳ Pendiente de decisión
+                        </span>
+                      ) : req.status === 'approved' ? (
+                        <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                          ✅ Aprobado ({formatBogotaDateTime(req.resolvedAtMillis)})
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300">
+                          ❌ Rechazado ({formatBogotaDateTime(req.resolvedAtMillis)})
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Comparativa: Asesor Actual vs Asesor Solicitante */}
@@ -311,6 +367,24 @@ export function TransferRequestsModal({
                             "{req.lastFollowUpSummary}"
                           </p>
                         )}
+                        <div className="pt-2 mt-2 border-t border-zinc-800/80 flex items-center justify-between gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenFicha(req, 'history')}
+                            className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-400 hover:text-amber-300 hover:underline cursor-pointer"
+                          >
+                            <History size={12} />
+                            <span>Ver bitácora de {req.currentAdvisorName} →</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenFicha(req, 'form')}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer"
+                          >
+                            <ClipboardList size={11} />
+                            <span>Ficha técnica</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -380,6 +454,27 @@ export function TransferRequestsModal({
           )}
         </div>
       </div>
+
+      {/* Modal Integrado de Ficha Técnica y Bitácora */}
+      {selectedFichaReq && companyId && (
+        <FichaTecnicaModal
+          isOpen={!!selectedFichaReq}
+          onClose={() => setSelectedFichaReq(null)}
+          companyId={companyId}
+          lead={{
+            id: selectedFichaReq.leadId,
+            name: selectedFichaReq.leadName,
+            phone: selectedFichaReq.leadPhone,
+            project: selectedFichaReq.leadProject,
+            advisorName: selectedFichaReq.currentAdvisorName,
+          }}
+          initialTab={selectedFichaReq.initialTab}
+          onSuccess={() => {
+            loadRequests();
+            if (onResolved) onResolved();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -127,10 +127,9 @@ export async function executeResolveLeadTransferRequest(
       previousAdvisorId: leadData.assignedTo || null,
       advisorAssignedAt: now,
       updatedAt: now,
-      lastFollowUpAt: now,
-      lastFollowUpAction: 'traslado_comercial',
-      lastFollowUpSummary: followUpSummary,
-      lastFollowUpAuthor: newAdvisorName,
+      // No se toca lastFollowUpAt: el traslado no es una gestión del asesor. Así el
+      // prospecto le aparece al nuevo asesor en "Falta seguimiento" hasta que registre
+      // una llamada o bitácora real. La bitácora del traslado queda como historial.
       bitacoras: updatedBitacoras,
       'metadata.smarthomeBitacoras': updatedBitacoras,
       tags: updatedTags,
@@ -151,6 +150,9 @@ export async function executeResolveLeadTransferRequest(
         adminNote ? `\n• Nota Admin: ${adminNote}` : ''
       }`,
       kind: 'note',
+      type: 'audit',
+      actionType: 'traslado_comercial',
+      source: 'system',
       createdAt: now,
     });
 
@@ -227,6 +229,9 @@ export async function executeResolveLeadTransferRequest(
           reqData.currentAdvisorName
         }.${adminNote ? `\n• Motivo/Nota: ${adminNote}` : ''}`,
         kind: 'note',
+        type: 'audit',
+        actionType: 'traslado_comercial',
+        source: 'system',
         createdAt: now,
       });
     } catch {}
