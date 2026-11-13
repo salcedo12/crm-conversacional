@@ -351,6 +351,28 @@ function configurePromesaHeaders(zip) {
   zip.file('word/document.xml', docXml);
 }
 
+function cleanNumbering(zip) {
+  if (!zip.file('word/numbering.xml')) return;
+  let xml = zip.file('word/numbering.xml').asText();
+  // Normaliza viñetas: reemplaza el círculo negro grande ● (U+25CF) de Google Docs
+  // por la viñeta estándar tipográfica • (U+2022) en Arial con tamaño refinado (9pt = 18).
+  xml = xml.replace(/<w:lvlText w:val="●"\/>/g, '<w:lvlText w:val="•"/>');
+  xml = xml.replace(/<w:rFonts[^>]*Noto Sans Symbols[^>]*\/>/g, '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/>');
+  xml = xml.replace(/(<w:lvl\b[\s\S]*?<\/w:lvl>)/g, (lvlXml) => {
+    if (lvlXml.includes('w:numFmt w:val="bullet"')) {
+      lvlXml = lvlXml.replace(/<w:sz w:val="20"\/>/g, '<w:sz w:val="18"/>');
+      lvlXml = lvlXml.replace(/<w:szCs w:val="20"\/>/g, '<w:szCs w:val="18"/>');
+      if (lvlXml.includes('<w:rPr>') && !lvlXml.includes('<w:sz ')) {
+        lvlXml = lvlXml.replace('<w:rPr>', '<w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/>');
+      } else if (lvlXml.includes('<w:rPr/>')) {
+        lvlXml = lvlXml.replace('<w:rPr/>', '<w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/></w:rPr>');
+      }
+    }
+    return lvlXml;
+  });
+  zip.file('word/numbering.xml', xml);
+}
+
 function build(src, outName, convert) {
   const zip = new PizZip(fs.readFileSync(src));
   let xml = convert(zip.file('word/document.xml').asText());
@@ -371,6 +393,7 @@ function build(src, outName, convert) {
   } else if (outName === 'promesa-2026.docx') {
     configurePromesaHeaders(zip);
   }
+  cleanNumbering(zip);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const out = path.join(OUT_DIR, outName);
   fs.writeFileSync(out, zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
