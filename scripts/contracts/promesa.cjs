@@ -110,6 +110,51 @@ function convertPromesa(xml) {
   xml = wrapBlock(xml, { marker: MARK_CANON, lastStartsWith: 'El bien inmueble identificado hace parte del proyecto', open: '{#proyecto.esCanon}', close: '{/proyecto.esCanon}' });
   xml = wrapBlock(xml, { marker: MARK_RIO, lastStartsWith: 'El bien inmueble identificado hace parte del proyecto', open: '{#proyecto.esRioClaro}', close: '{/proyecto.esRioClaro}' });
   xml = wrapBlock(xml, { marker: MARK_LAGUNA, lastStartsWith: 'Las partes reconocen que, por tratarse', open: '{#proyecto.esLagunaMar}', close: '{/proyecto.esLagunaMar}' });
+
+  // Limpiar párrafos vacíos y espaciados entre la tabla de lote y la descripción del predio
+  const lotTableIdx = xml.indexOf('Condición del Terreno');
+  if (lotTableIdx !== -1) {
+    const tblEnd = xml.indexOf('</w:tbl>', lotTableIdx) + 8;
+    const paraPrimero = xml.indexOf('Parágrafo Primero: Naturaleza del bien prometido');
+    if (paraPrimero !== -1) {
+      const pBefore = xml.slice(0, paraPrimero);
+      const pStartMatch = [...pBefore.matchAll(/<w:p(?=[ >])/g)].pop();
+      const paraPrimeroStart = pStartMatch.index;
+      const chunk = xml.slice(tblEnd, paraPrimeroStart);
+
+      const extractProjectPara = (tag) => {
+        const o = chunk.indexOf('{#' + tag + '}');
+        const c = chunk.indexOf('{/' + tag + '}');
+        if (o === -1 || c === -1) return '';
+        const inside = chunk.slice(o, c);
+        const insideParas = inside.match(/<w:p\b[\s\S]*?<\/w:p>/g) || [];
+        return insideParas.find(p => p.replace(/<[^>]+>/g, '').trim().length > 50) || '';
+      };
+
+      const llanoP = extractProjectPara('proyecto.esLlanoGrande');
+      const canonP = extractProjectPara('proyecto.esCanon');
+      const rioP = extractProjectPara('proyecto.esRioClaro');
+      const lagunaP = extractProjectPara('proyecto.esLagunaMar');
+
+      if (llanoP && canonP && rioP && lagunaP) {
+        const cleanChunk =
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esLlanoGrande}</w:t></w:r></w:p>' +
+          llanoP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esLlanoGrande}</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esCanon}</w:t></w:r></w:p>' +
+          canonP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esCanon}</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esRioClaro}</w:t></w:r></w:p>' +
+          rioP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esRioClaro}</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esLagunaMar}</w:t></w:r></w:p>' +
+          lagunaP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esLagunaMar}</w:t></w:r></w:p>';
+
+        xml = xml.slice(0, tblEnd) + cleanChunk + xml.slice(paraPrimeroStart);
+      }
+    }
+  }
   // Amenidades.
   xml = wrapBlock(xml, { marker: MARK_RIO, lastStartsWith: 'Portería, oficina', open: '{#proyecto.esRioClaro}', close: '{/proyecto.esRioClaro}' });
   xml = wrapBlock(xml, { marker: MARK_LLANO_REZAGO, lastStartsWith: 'Portería, oficina', open: '{#proyecto.esLlanoGrande}', close: '{/proyecto.esLlanoGrande}' });
