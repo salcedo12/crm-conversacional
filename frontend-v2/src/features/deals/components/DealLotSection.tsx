@@ -68,7 +68,7 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
           <p className="flex items-center gap-1.5 text-sm text-zinc-200 sm:text-xs">
             <MapPin size={12} className="shrink-0 text-emerald-400" />
             <span className="min-w-0 sm:truncate">
-              {lot.sector} · Lote {lot.lotNumber} · {formatArea(lot.areaM2)}{lot.corner ? ' · Esquinero' : ''}
+              {lot.sector} · Lote {lot.lotNumber}{lot.lotCode ? ` · Cód. ${lot.lotCode}` : ''} · {formatArea(lot.areaM2)}{lot.corner ? ' · Esquinero' : ''}
             </span>
           </p>
           {editable && state?.state === 'reservado' && (

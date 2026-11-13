@@ -155,7 +155,7 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
   return (
     <DealSheet
       title="Firma digital"
-      subtitle={deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Negocio'}
+      subtitle={deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Negocio'}
       icon={<PenLine size={18} />}
       onClose={onClose}
       width="2xl"

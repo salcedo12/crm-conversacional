@@ -127,6 +127,7 @@ function convertPromesa(xml) {
   xml = clearParagraphs(xml, '(EL TEXTO VA CONTINUO SOLO CAMBIA EL NOMBRE DE LA EMPRESA DE ACUERDO AL PROYECTO)');
 
   // ── Datos dentro de párrafos ──
+  xml = replaceText(xml, '<<CÓDIGO DE REFERENCIA DEL LOTE>>', '{lote.codigo}');
   xml = replaceText(xml, 'ETAPA MAR SANTORINI, ubicado', 'ETAPA {lote.sector}, ubicado');
   xml = replaceText(xml,
     'CIENTO CUARENTA Y CINCO MILLONES DE PESOS M/CTE ($145.000.000)',

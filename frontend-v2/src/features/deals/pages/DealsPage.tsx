@@ -336,7 +336,7 @@ export function DealsPage() {
                     <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3">
                       <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-emerald-400"><MapPin size={11} /> Proyecto y lote</p>
                       <p className="mt-1 text-base font-extrabold text-zinc-100">{projectName(deal.lot?.projectId)}</p>
-                      <p className="mt-0.5 text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Sin lote seleccionado'}</p>
+                      <p className="mt-0.5 text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</p>
                       {deal.lot && <p className="mt-1 text-[10px] text-zinc-500">{deal.lot.areaM2.toLocaleString('es-CO', { maximumFractionDigits: 2 })} m²{deal.lot.corner ? ' · Esquinero' : ''}</p>}
                     </div>
                     <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-zinc-400"><BadgeDollarSign size={14} className="mb-2 text-amber-400" /><p className="text-[9px] font-bold uppercase tracking-wide text-zinc-500">Valor</p><p className="mt-1 text-sm font-bold text-zinc-200">{deal.plan ? money(deal.plan.landValue) : 'Sin plan'}</p></div>
@@ -579,7 +579,7 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
         <header className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-zinc-800 bg-zinc-950/95 px-4 pb-3 pt-[max(0.75rem,var(--safe-top))] backdrop-blur sm:p-4">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">{projectName(deal.lot?.projectId)}</p>
-            <h2 className="mt-0.5 text-lg font-extrabold text-zinc-100 sm:text-xl">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Sin lote seleccionado'}</h2>
+            <h2 className="mt-0.5 text-lg font-extrabold text-zinc-100 sm:text-xl">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</h2>
             <p className="mt-1 truncate text-xs text-zinc-500">{deal.buyerNames?.join(', ') || deal.leadName} · {deal.advisorName}</p>
           </div>
           <button onClick={onClose} aria-label="Cerrar" className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 sm:mr-0 sm:h-9 sm:w-9"><X size={18} /></button>
@@ -646,7 +646,7 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-zinc-100">{document.kind === 'preventa' ? 'Contrato de preventa' : 'Promesa de compraventa'} · v{document.version}</p>
                       <p className="mt-1 text-[10px] text-zinc-500">Generado: {dateTime(document.generatedAt)} · Estado: {document.signatureStatus || 'generado'}</p>
-                      <p className="mt-1 truncate text-[10px] font-medium text-emerald-400">{projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}</p>
+                      <p className="mt-1 truncate text-[10px] font-medium text-emerald-400">{projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}{deal.lot?.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}</p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1.5 sm:justify-end">
                       {document.signatureStatus === 'firmado' && document.signedPdfStoragePath && (
