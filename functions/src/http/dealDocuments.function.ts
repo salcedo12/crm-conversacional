@@ -38,10 +38,10 @@ async function buyersOf(companyId: string, deal: Deal): Promise<ClientProfile[]>
   return snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() } as ClientProfile));
 }
 
-/** Cambia solo las fechas de emisión de unos datos ya guardados. */
+/** Cambia solo las fechas de emisión de unos datos ya guardados y asegura campos calculados de la promesa. */
 function withIssueDate(data: ContractData, issuedAt: { date: string; time: string }): ContractData {
   const f = fechaEnLetras(issuedAt.date);
-  return {
+  const updated: ContractData = {
     ...data,
     'fecha.corta': fechaCorta(issuedAt.date),
     'fecha.texto': f.texto,
@@ -50,6 +50,14 @@ function withIssueDate(data: ContractData, issuedAt: { date: string; time: strin
     'fecha.anio': f.anio,
     'fecha.diligenciamiento': `${formatDMY(issuedAt.date)} ${issuedAt.time}`,
   };
+  // Si la preventa se guardó sin soporte explícito de bono, hidratarlo desde plan.beneficio
+  const benef = updated['plan.beneficio'];
+  if (!updated['plan.tieneBono'] && benef && benef !== '$ 0' && benef !== '$\u00a00') {
+    updated['plan.tieneBono'] = true;
+    updated['plan.bono'] = benef;
+    updated['plan.bonoLetras'] = updated['plan.beneficioLetras'] || '';
+  }
+  return updated;
 }
 
 export function fileName(deal: Deal, kind: DealDocumentKind, version: number): string {

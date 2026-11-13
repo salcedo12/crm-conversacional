@@ -176,9 +176,11 @@ export function buildContractData(input: ContractInputs): ContractData {
     'plan.totalExtraordinarias': pesos(summary.extraordinaryTotal),
     'plan.saldo': pesos(balance),
     'plan.saldoLetras': pesosEnLetras(balance),
-    'plan.tieneBono': summary.bonusTotal > 0,
-    'plan.bono': pesos(summary.bonusTotal),
-    'plan.bonoLetras': summary.bonusTotal > 0 ? pesosEnLetras(summary.bonusTotal) : '',
+    'plan.tieneBono': (summary.bonusTotal > 0 || (plan.benefit ?? 0) > 0),
+    'plan.bono': pesos(summary.bonusTotal > 0 ? summary.bonusTotal : (plan.benefit ?? 0)),
+    'plan.bonoLetras': (summary.bonusTotal > 0 || (plan.benefit ?? 0) > 0)
+      ? pesosEnLetras(summary.bonusTotal > 0 ? summary.bonusTotal : (plan.benefit ?? 0))
+      : '',
     'plan.arras': pesos(earnest),
     'plan.arrasLetras': pesosEnLetras(earnest),
     'plan.referido': plan.referredBy || '',
