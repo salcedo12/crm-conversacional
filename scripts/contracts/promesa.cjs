@@ -169,6 +169,8 @@ function convertPromesa(xml) {
     '$1$2');
   xml = prepareSignatureBoxes(xml, { heading: 'PROMITENTE COMPRADOR', sellerLines: 3 });
   xml = ensureAllTablesCantSplit(xml);
+  // Unificar colores con el oro oficial Meraki (#D5B545)
+  xml = xml.replace(/B7871C/gi, 'D5B545');
   xml = xml.replace(/<w:lastRenderedPageBreak\/>/g, '');
   return xml;
 }

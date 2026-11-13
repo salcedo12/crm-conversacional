@@ -163,8 +163,8 @@ function convertPreventa(xml) {
   // Asegurar cantSplit en TODAS las filas de TODAS las tablas
   xml = ensureAllTablesCantSplit(xml);
 
-  // Unificar colores de todas las tablas con el oro oficial Meraki (#D5B545)
-  xml = xml.replace(/w:fill="B7871C"/gi, 'w:fill="D5B545"');
+  // Unificar colores de todas las tablas y figuras con el oro oficial Meraki (#D5B545)
+  xml = xml.replace(/B7871C/gi, 'D5B545');
 
   // Quitar marcas de salto de página heredadas del Word de edición de jurídica
   xml = xml.replace(/<w:lastRenderedPageBreak\/>/g, '');

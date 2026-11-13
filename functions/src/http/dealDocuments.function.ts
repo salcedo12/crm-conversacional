@@ -111,6 +111,11 @@ export async function generateDocument(
   const version = documents.filter((d) => d.kind === data.kind).length + 1;
   const docxStoragePath = `${basePath(data.companyId, deal.id)}/${data.kind}-v${version}.docx`;
   const dataStoragePath = `${basePath(data.companyId, deal.id)}/${data.kind}-v${version}.json`;
+  const pdfStoragePath = docxStoragePath.replace(/\.docx$/, '.pdf');
+
+  // Elimina cualquier PDF previo de esta versión en Storage para evitar servir archivos obsoletos en caché
+  await bucket.file(pdfStoragePath).delete({ ignoreNotFound: true }).catch(() => {});
+
   await Promise.all([
     bucket.file(docxStoragePath).save(docx, { contentType: DOCX_MIME, resumable: false }),
     bucket.file(dataStoragePath).save(JSON.stringify(contractData), { contentType: 'application/json', resumable: false }),
@@ -190,10 +195,28 @@ async function convertToPdf(docx: Buffer, name: string): Promise<Buffer> {
 /** PDF del documento (se convierte la primera vez y queda en Storage junto al Word). */
 export async function documentPdf(deal: Deal, doc: DealDocument): Promise<Buffer> {
   const bucket = storage.bucket();
+  const docxFile = bucket.file(doc.docxStoragePath);
   const pdfFile = bucket.file(doc.docxStoragePath.replace(/\.docx$/, '.pdf'));
   const [cached] = await pdfFile.exists();
-  if (cached) return (await pdfFile.download())[0];
-  const [docx] = await bucket.file(doc.docxStoragePath).download();
+  if (cached) {
+    try {
+      const [[pdfMeta], [docxMeta]] = await Promise.all([pdfFile.getMetadata(), docxFile.getMetadata()]);
+      const pdfTime = new Date(String(pdfMeta.updated || pdfMeta.timeCreated || 0)).getTime();
+      const docxTime = new Date(String(docxMeta.updated || docxMeta.timeCreated || 0)).getTime();
+      if (pdfTime >= docxTime) {
+        return (await pdfFile.download())[0];
+      }
+      logger.info('[DealDocuments] PDF en caché obsoleto respecto al docx; regenerando PDF...', {
+        dealId: deal.id,
+        version: doc.version,
+        pdfTime,
+        docxTime,
+      });
+    } catch (err) {
+      logger.warn('[DealDocuments] Error verificando frescura del PDF cacheado', { error: String(err) });
+    }
+  }
+  const [docx] = await docxFile.download();
   const pdf = await convertToPdf(docx, fileName(deal, doc.kind, doc.version));
   await pdfFile.save(pdf, { contentType: 'application/pdf', resumable: false });
   return pdf;
