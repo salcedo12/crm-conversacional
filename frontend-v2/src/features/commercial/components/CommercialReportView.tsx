@@ -29,6 +29,11 @@ import {
   ExternalLink,
   Phone,
   MousePointerClick,
+  XCircle,
+  CalendarCheck,
+  MapPin,
+  Clock,
+  PieChart,
 } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/config/firebase';
@@ -60,6 +65,213 @@ const MONTH_NAMES = [
 
 const WEEKDAYS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
+function buildWhatsAppUrl(phone?: string | null): string | null {
+  if (!phone) return null;
+  const raw = phone.replace(/\D/g, '');
+  if (!raw) return null;
+  const clean = raw.length === 10 && raw.startsWith('3') ? `57${raw}` : raw;
+  return `https://wa.me/${clean}`;
+}
+
+const CANCELLATION_REASON_COLORS: Record<string, { bg: string; text: string; border: string; hex: string }> = {
+  'Fuera de Presupuesto': { bg: 'bg-rose-500/15', text: 'text-rose-700 dark:text-rose-300', border: 'border-rose-500/30', hex: '#ef4444' },
+  'Proveedor Ofreciendo Servicios': { bg: 'bg-orange-500/15', text: 'text-orange-700 dark:text-orange-300', border: 'border-orange-500/30', hex: '#f97316' },
+  'No le Interesa la Ubicación': { bg: 'bg-amber-500/15', text: 'text-amber-700 dark:text-amber-300', border: 'border-amber-500/30', hex: '#f59e0b' },
+  'No Solicitó Información / Equivocado': { bg: 'bg-violet-500/15', text: 'text-violet-700 dark:text-violet-300', border: 'border-violet-500/30', hex: '#8b5cf6' },
+  'Descarte Comercial General': { bg: 'bg-cyan-500/15', text: 'text-cyan-700 dark:text-cyan-300', border: 'border-cyan-500/30', hex: '#06b6d4' },
+  'Desistimiento Personal': { bg: 'bg-pink-500/15', text: 'text-pink-700 dark:text-pink-300', border: 'border-pink-500/30', hex: '#ec4899' },
+  'Solicitud de Empleo': { bg: 'bg-emerald-500/15', text: 'text-emerald-700 dark:text-emerald-300', border: 'border-emerald-500/30', hex: '#10b981' },
+  'Contacto para Otra Área (No Comercial)': { bg: 'bg-indigo-500/15', text: 'text-indigo-700 dark:text-indigo-300', border: 'border-indigo-500/30', hex: '#6366f1' },
+  'No Contesta tras Seguimiento': { bg: 'bg-slate-500/15', text: 'text-slate-700 dark:text-slate-300', border: 'border-slate-500/30', hex: '#64748b' },
+};
+
+function getReasonColor(reason: string) {
+  return CANCELLATION_REASON_COLORS[reason] || {
+    bg: 'bg-zinc-500/15',
+    text: 'text-zinc-700 dark:text-zinc-300',
+    border: 'border-zinc-500/30',
+    hex: '#71717a',
+  };
+}
+
+function CancellationsDonutChart({
+  reasons,
+  totalCancelled,
+  onSelectReason,
+}: {
+  reasons: Array<{ reason: string; count: number; percentage: number }>;
+  totalCancelled: number;
+  onSelectReason: (reason: string) => void;
+}) {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  const size = 200;
+  const strokeWidth = 32;
+  const radius = (size - strokeWidth) / 2; // (200 - 32) / 2 = 84
+  const circumference = 2 * Math.PI * radius; // ~527.78
+
+  let accumulatedPercent = 0;
+
+  return (
+    <div className="bg-white rounded-xl border border-zinc-200 p-3.5 shadow-xs mb-3">
+      <div className="flex items-center justify-between mb-2.5 border-b border-zinc-100 pb-2">
+        <div className="flex items-center gap-2">
+          <span className="p-1 rounded-md bg-rose-50 text-rose-600 border border-rose-200">
+            <PieChart size={14} />
+          </span>
+          <div>
+            <h3 className="text-xs font-bold text-zinc-900 uppercase tracking-wide">
+              Distribución y % por Tipo de Descarte (Torta General)
+            </h3>
+            <p className="text-[10px] text-zinc-500">
+              Toca una porción o motivo para ver cada prospecto con teléfono, WhatsApp y bitácora
+            </p>
+          </div>
+        </div>
+        <div className="text-right">
+          <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider block">Total Sumado</span>
+          <span className="text-xs font-black text-rose-600 font-mono">
+            {totalCancelled} descartes (100%)
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
+        {/* GRÁFICA DE TORTA (SVG DONUT) */}
+        <div className="sm:col-span-5 flex flex-col items-center justify-center relative py-1">
+          <div className="relative w-[190px] h-[190px]">
+            <svg
+              width="190"
+              height="190"
+              viewBox={`0 0 ${size} ${size}`}
+              className="transform -rotate-90"
+            >
+              <circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                stroke="#f4f4f5"
+                strokeWidth={strokeWidth}
+              />
+              {reasons.map((r, i) => {
+                const pct = totalCancelled > 0 ? r.count / totalCancelled : 0;
+                const strokeDasharray = `${pct * circumference} ${circumference}`;
+                const strokeDashoffset = -accumulatedPercent * circumference;
+                accumulatedPercent += pct;
+                const colorInfo = getReasonColor(r.reason);
+                const isHovered = hoveredIdx === i;
+
+                return (
+                  <circle
+                    key={r.reason}
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    fill="none"
+                    stroke={colorInfo.hex}
+                    strokeWidth={isHovered ? strokeWidth + 5 : strokeWidth}
+                    strokeDasharray={strokeDasharray}
+                    strokeDashoffset={strokeDashoffset}
+                    className="transition-all duration-150 cursor-pointer"
+                    style={{
+                      opacity: hoveredIdx !== null && hoveredIdx !== i ? 0.45 : 1,
+                      transformOrigin: 'center',
+                    }}
+                    onMouseEnter={() => setHoveredIdx(i)}
+                    onMouseLeave={() => setHoveredIdx(null)}
+                    onClick={() => onSelectReason(r.reason)}
+                  >
+                    <title>{`${r.reason}: ${r.count} (${r.percentage}%)`}</title>
+                  </circle>
+                );
+              })}
+            </svg>
+
+            {/* Texto en el centro de la torta */}
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none px-3"
+              style={{ borderRadius: '50%' }}
+            >
+              {hoveredIdx !== null && reasons[hoveredIdx] ? (
+                <>
+                  <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-tight line-clamp-1 max-w-[110px]">
+                    {reasons[hoveredIdx].reason}
+                  </span>
+                  <span className="text-lg font-black text-zinc-950 font-mono">
+                    {reasons[hoveredIdx].count}
+                  </span>
+                  <span className="text-[10px] font-bold text-rose-600 font-mono">
+                    {reasons[hoveredIdx].percentage}%
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider">
+                    Total
+                  </span>
+                  <span className="text-xl font-black text-zinc-950 font-mono">
+                    {totalCancelled}
+                  </span>
+                  <span className="text-[9px] font-bold text-rose-600 uppercase tracking-wide">
+                    Descartes
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+          <span className="text-[9px] text-zinc-400 mt-1 font-medium no-print">
+            👆 Toca una porción para filtrar
+          </span>
+        </div>
+
+        {/* LEYENDA INTERACTIVA CON % Y CONTEO */}
+        <div className="sm:col-span-7 flex flex-col justify-center space-y-1">
+          {reasons.map((r, i) => {
+            const colorInfo = getReasonColor(r.reason);
+            const isHovered = hoveredIdx === i;
+            return (
+              <div
+                key={r.reason}
+                onClick={() => onSelectReason(r.reason)}
+                onMouseEnter={() => setHoveredIdx(i)}
+                onMouseLeave={() => setHoveredIdx(null)}
+                className={`flex items-center justify-between p-1.5 px-2 rounded-lg border text-xs cursor-pointer transition-all duration-150 ${
+                  isHovered
+                    ? 'bg-rose-50 border-rose-300 shadow-xs translate-x-0.5'
+                    : 'bg-zinc-50 hover:bg-zinc-100/80 border-zinc-200'
+                }`}
+                title={`Ver los ${r.count} clientes descartados por: ${r.reason}`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs"
+                    style={{ backgroundColor: colorInfo.hex }}
+                  />
+                  <span className="font-semibold text-zinc-900 truncate text-[10px]">
+                    {r.reason}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="font-mono font-bold text-zinc-950 text-[10px]">
+                    {r.count}
+                  </span>
+                  <span
+                    className="font-mono font-bold text-[9px] px-1.5 py-0.2 rounded text-white shadow-xs"
+                    style={{ backgroundColor: colorInfo.hex }}
+                  >
+                    {r.percentage}%
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface CommercialReportViewProps {
   companyId: string;
   currentUserName?: string;
@@ -76,11 +288,24 @@ export function CommercialReportView({
   const [loading, setLoading] = useState(true);
   const [analyzingAi, setAnalyzingAi] = useState(false);
   const [previewMode, setPreviewMode] = useState<'official' | 'crm'>('official');
-  const [reportSubTab, setReportSubTab] = useState<'official_doc' | 'daily_activity' | 'marketing_pautas'>('official_doc');
+  const [reportSubTab, setReportSubTab] = useState<
+    'official_doc' | 'cancellations' | 'visits_appointments' | 'daily_activity' | 'marketing_pautas'
+  >('official_doc');
   const [pendingPrint, setPendingPrint] = useState(false);
   const [marketingFilter, setMarketingFilter] = useState<'all' | 'pauta' | 'organico'>('all');
   const [marketingSearch, setMarketingSearch] = useState('');
   const [expandedCampaignKey, setExpandedCampaignKey] = useState<string | null>(null);
+
+  // Filtros interactivos para Cancelaciones
+  const [cancelAdvisorFilter, setCancelAdvisorFilter] = useState<string>('all');
+  const [cancelReasonFilter, setCancelReasonFilter] = useState<string>('all');
+  const [cancelSearch, setCancelSearch] = useState<string>('');
+
+  // Filtros interactivos para Visitas y Citas
+  const [visitsAdvisorFilter, setVisitsAdvisorFilter] = useState<string>('all');
+  const [visitsTypeFilter, setVisitsTypeFilter] = useState<'all' | 'visita' | 'cita'>('all');
+  const [visitsStatusFilter, setVisitsStatusFilter] = useState<string>('all');
+  const [visitsSearch, setVisitsSearch] = useState<string>('');
   const [reportData, setReportData] = useState<CommercialExecutiveReportData | null>(null);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [selectedCampaignModal, setSelectedCampaignModal] = useState<any>(null);
@@ -106,6 +331,28 @@ export function CommercialReportView({
     filter: 'all',
     category: 'period_leads',
   });
+
+  // Modal interactivo de prospectos cancelados y descartados
+  const [cancellationModal, setCancellationModal] = useState<{
+    isOpen: boolean;
+    advisorFilter: string;
+    reasonFilter: string;
+    search: string;
+  }>({
+    isOpen: false,
+    advisorFilter: 'all',
+    reasonFilter: 'all',
+    search: '',
+  });
+
+  const handleOpenCancellationDrilldown = (advisor: string = 'all', reason: string = 'all') => {
+    setCancellationModal({
+      isOpen: true,
+      advisorFilter: advisor,
+      reasonFilter: reason,
+      search: '',
+    });
+  };
 
   const handleOpenAdvisorDrilldown = (options: {
     advisorId?: string;
@@ -166,6 +413,127 @@ export function CommercialReportView({
       return true;
     });
   }, [selectedCampaignModal, modalAdvisorFilter, modalLeadSearch]);
+
+  // Prospectos cancelados para el modal interactivo de Section 6
+  const modalFilteredCancellations = useMemo(() => {
+    if (!reportData?.cancellationsReport?.items) return [];
+    const q = cancellationModal.search.toLowerCase().trim();
+    const advTarget = cancellationModal.advisorFilter.toLowerCase().trim();
+    const reasonTarget = cancellationModal.reasonFilter.toLowerCase().trim();
+
+    return reportData.cancellationsReport.items.filter((item) => {
+      if (advTarget !== 'all') {
+        const itemAdv = (item.advisorName || '').toLowerCase().trim();
+        const itemAdvId = (item.advisorId || '').toLowerCase().trim();
+        if (!itemAdv.includes(advTarget) && !advTarget.includes(itemAdv) && itemAdvId !== advTarget) {
+          return false;
+        }
+      }
+      if (reasonTarget !== 'all') {
+        if (item.reason.toLowerCase().trim() !== reasonTarget) {
+          return false;
+        }
+      }
+      if (q) {
+        const name = (item.clientName || '').toLowerCase();
+        const phone = (item.phone || '').toLowerCase();
+        const adv = (item.advisorName || '').toLowerCase();
+        const note = (item.notes || '').toLowerCase();
+        const proj = (item.project || '').toLowerCase();
+        const reason = (item.reason || '').toLowerCase();
+        if (
+          !name.includes(q) &&
+          !phone.includes(q) &&
+          !adv.includes(q) &&
+          !note.includes(q) &&
+          !proj.includes(q) &&
+          !reason.includes(q)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [reportData?.cancellationsReport?.items, cancellationModal]);
+
+  // Prospectos cancelados filtrados por asesor, motivo y búsqueda
+  const filteredCancellations = useMemo(() => {
+    if (!reportData?.cancellationsReport) return [];
+    return reportData.cancellationsReport.items.filter((item) => {
+      if (cancelAdvisorFilter !== 'all') {
+        const itemAdv = (item.advisorName || '').toLowerCase().trim();
+        const targetAdv = cancelAdvisorFilter.toLowerCase().trim();
+        if (item.advisorId !== cancelAdvisorFilter && !itemAdv.includes(targetAdv) && !targetAdv.includes(itemAdv)) {
+          return false;
+        }
+      }
+      if (cancelReasonFilter !== 'all' && item.reason !== cancelReasonFilter) {
+        return false;
+      }
+      if (cancelSearch.trim()) {
+        const q = cancelSearch.toLowerCase().trim();
+        const name = (item.clientName || '').toLowerCase();
+        const phone = (item.phone || '').toLowerCase();
+        const adv = (item.advisorName || '').toLowerCase();
+        const note = (item.notes || '').toLowerCase();
+        const proj = (item.project || '').toLowerCase();
+        const reason = (item.reason || '').toLowerCase();
+        if (
+          !name.includes(q) &&
+          !phone.includes(q) &&
+          !adv.includes(q) &&
+          !note.includes(q) &&
+          !proj.includes(q) &&
+          !reason.includes(q)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [reportData?.cancellationsReport, cancelAdvisorFilter, cancelReasonFilter, cancelSearch]);
+
+  // Visitas y citas filtradas por asesor, tipo, estado y búsqueda
+  const filteredVisits = useMemo(() => {
+    if (!reportData?.visitsAppointmentsReport) return [];
+    return reportData.visitsAppointmentsReport.items.filter((item) => {
+      if (visitsAdvisorFilter !== 'all') {
+        const itemAdv = (item.advisorName || '').toLowerCase().trim();
+        const targetAdv = visitsAdvisorFilter.toLowerCase().trim();
+        if (item.advisorId !== visitsAdvisorFilter && !itemAdv.includes(targetAdv) && !targetAdv.includes(itemAdv)) {
+          return false;
+        }
+      }
+      if (visitsTypeFilter !== 'all' && item.type !== visitsTypeFilter) {
+        return false;
+      }
+      if (visitsStatusFilter !== 'all' && item.status.toLowerCase() !== visitsStatusFilter.toLowerCase()) {
+        return false;
+      }
+      if (visitsSearch.trim()) {
+        const q = visitsSearch.toLowerCase().trim();
+        const name = (item.clientName || '').toLowerCase();
+        const phone = (item.phone || '').toLowerCase();
+        const adv = (item.advisorName || '').toLowerCase();
+        const note = (item.notes || '').toLowerCase();
+        const proj = (item.project || '').toLowerCase();
+        const typeLbl = (item.typeLabel || '').toLowerCase();
+        const status = (item.status || '').toLowerCase();
+        if (
+          !name.includes(q) &&
+          !phone.includes(q) &&
+          !adv.includes(q) &&
+          !note.includes(q) &&
+          !proj.includes(q) &&
+          !typeLbl.includes(q) &&
+          !status.includes(q)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [reportData?.visitsAppointmentsReport, visitsAdvisorFilter, visitsTypeFilter, visitsStatusFilter, visitsSearch]);
 
   // Listener para cerrar modal con tecla ESC
   useEffect(() => {
@@ -674,7 +1042,7 @@ export function CommercialReportView({
 
             <div className="h-6 w-px bg-zinc-800 mx-1 hidden sm:block" />
 
-            {/* Alternador de pestaña: Informe Oficial (Principal) vs Marketing y Pautas vs Desglose Día a Día */}
+            {/* Alternador de pestaña: Informe Oficial (Principal) vs Cancelaciones vs Visitas & Citas vs Marketing vs Desglose Día a Día */}
             <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded-xl p-1 text-[11px] font-semibold flex-wrap gap-1">
               <button
                 type="button"
@@ -687,6 +1055,30 @@ export function CommercialReportView({
               >
                 <FileText size={13} />
                 <span>Informe Oficial Meraki</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportSubTab('cancellations')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                  reportSubTab === 'cancellations'
+                    ? 'bg-rose-500 text-white font-black shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <XCircle size={13} />
+                <span>Cancelaciones ({reportData?.cancellationsReport?.totalCancelled ?? 0})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportSubTab('visits_appointments')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                  reportSubTab === 'visits_appointments'
+                    ? 'bg-emerald-500 text-zinc-950 font-black shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <CalendarCheck size={13} />
+                <span>Visitas & Citas ({reportData?.visitsAppointmentsReport?.totalTotal ?? 0})</span>
               </button>
               <button
                 type="button"
@@ -1673,8 +2065,744 @@ export function CommercialReportView({
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
-          VISTA 2: INFORME OFICIAL MERAKI (A4 PIXEL-PERFECT PARA IMPRIMIR)
+          VISTA: CONTROL INTERACTIVO DE CANCELACIONES Y PROSPECTOS DESCARTADOS
          ════════════════════════════════════════════════════════════════════════ */}
+      {reportSubTab === 'cancellations' && reportData && (
+        <div className="space-y-6 animate-fade-in">
+          {/* HEADER PRINCIPAL */}
+          <div className="p-6 rounded-3xl bg-gradient-to-br from-rose-950/40 via-zinc-900 to-amber-950/30 border border-rose-500/30 shadow-xl">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <span className="p-3 rounded-2xl bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                  <XCircle size={24} />
+                </span>
+                <div>
+                  <h2 className="text-base sm:text-lg font-black text-zinc-100 flex items-center gap-2">
+                    <span>Cancelaciones & Prospectos Descartados por Asesor</span>
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-mono font-bold border border-rose-500/30">
+                      {reportData.cancellationsReport?.totalCancelled ?? 0} Descartes
+                    </span>
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Detalle automático de prospectos descartados en <strong className="text-zinc-200">{reportData.periodLabel}</strong>: motivos clasificados y lo que cada asesor escribió en la ficha.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* KPIS DE CANCELACIONES */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
+              <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Total Descartes Período
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-rose-400 font-mono">
+                  {reportData.cancellationsReport?.totalCancelled ?? 0}
+                </span>
+                <span className="text-[11px] text-zinc-500 block mt-1">
+                  Prospectos clasificados como descartados
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-rose-950/30 border border-rose-500/30">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-300 block mb-1">
+                  Causa Principal #1
+                </span>
+                <span className="text-sm sm:text-base font-black text-zinc-100 line-clamp-1" title={reportData.cancellationsReport?.reasonsSummary[0]?.reason}>
+                  {reportData.cancellationsReport?.reasonsSummary[0]?.reason || 'Sin descartes'}
+                </span>
+                <span className="text-[11px] text-rose-300/80 block mt-1">
+                  {reportData.cancellationsReport?.reasonsSummary[0] ? `${reportData.cancellationsReport.reasonsSummary[0].count} leads (${reportData.cancellationsReport.reasonsSummary[0].percentage}%)` : 'N/A'}
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
+                  Asesor con Más Descartes
+                </span>
+                <span className="text-sm sm:text-base font-black text-zinc-200 line-clamp-1">
+                  {reportData.cancellationsReport?.byAdvisor[0]?.advisorName || 'N/A'}
+                </span>
+                <span className="text-[11px] text-zinc-500 block mt-1">
+                  {reportData.cancellationsReport?.byAdvisor[0] ? `${reportData.cancellationsReport.byAdvisor[0].totalCancelled} prospectos descartados` : '0'}
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block mb-1">
+                  Trazabilidad Cualitativa
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-zinc-100 font-mono">
+                  100%
+                </span>
+                <span className="text-[11px] text-zinc-500 block mt-1">
+                  Con bitácora escrita extraída
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* TABLA RESUMEN POR ASESOR */}
+          <div className="p-6 rounded-3xl bg-zinc-900/90 border border-zinc-800 shadow-xl space-y-4">
+            <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
+              <Users size={16} className="text-rose-400" />
+              <span>Resumen de Descartes por Asesor</span>
+            </h3>
+
+            <div className="overflow-x-auto rounded-2xl border border-zinc-800/80">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] font-bold border-b border-zinc-800">
+                  <tr>
+                    <th className="py-3 px-4">Asesor</th>
+                    <th className="py-3 px-3 text-center">Total Descartes</th>
+                    <th className="py-3 px-4">Principales Motivos</th>
+                    <th className="py-3 px-3 text-right">Acción Rápida</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60 bg-zinc-900/40">
+                  {(!reportData.cancellationsReport || reportData.cancellationsReport.byAdvisor.length === 0) ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 px-4 text-center text-zinc-500 italic">
+                        No hay prospectos descartados registrados en este período.
+                      </td>
+                    </tr>
+                  ) : (
+                    reportData.cancellationsReport.byAdvisor.map((adv) => (
+                      <tr key={adv.advisorId} className="hover:bg-zinc-800/50 transition">
+                        <td className="py-3 px-4 font-bold text-zinc-100">
+                          {adv.advisorName}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-rose-400 bg-rose-950/20">
+                          {adv.totalCancelled}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {adv.topReasons.map((r, i) => (
+                              <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-300">
+                                <span>{r.reason}:</span>
+                                <strong className="text-zinc-100 font-mono">{r.count}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setCancelAdvisorFilter(cancelAdvisorFilter === adv.advisorName ? 'all' : adv.advisorName)}
+                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                              cancelAdvisorFilter === adv.advisorName
+                                ? 'bg-rose-500 text-white font-bold'
+                                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                            }`}
+                          >
+                            {cancelAdvisorFilter === adv.advisorName ? 'Quitar Filtro' : 'Filtrar Asesor'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* FILTROS INTERACTIVOS Y BUSCADOR */}
+          <div className="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              {/* FILTRO ASESOR */}
+              <div className="flex items-center gap-1.5 flex-wrap flex-1">
+                <span className="text-xs font-bold text-zinc-400 flex items-center gap-1 mr-1">
+                  <Filter size={13} className="text-rose-400" />
+                  <span>Asesor:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCancelAdvisorFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    cancelAdvisorFilter === 'all'
+                      ? 'bg-rose-500 text-white shadow-sm'
+                      : 'bg-zinc-950 text-zinc-300 hover:bg-zinc-800 border border-zinc-800'
+                  }`}
+                >
+                  Todos ({reportData.cancellationsReport?.totalCancelled ?? 0})
+                </button>
+                {reportData.cancellationsReport?.byAdvisor.map((adv) => {
+                  const isSelected = cancelAdvisorFilter.toLowerCase().trim() === adv.advisorName.toLowerCase().trim();
+                  return (
+                    <button
+                      key={adv.advisorId}
+                      type="button"
+                      onClick={() => setCancelAdvisorFilter(isSelected ? 'all' : adv.advisorName)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-rose-500 text-white font-bold shadow-sm'
+                          : 'bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
+                      }`}
+                    >
+                      <span>{adv.advisorName}:</span>
+                      <strong className={isSelected ? 'text-white' : 'text-rose-400 font-mono'}>{adv.totalCancelled}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* BUSCADOR */}
+              <div className="relative min-w-[260px]">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input
+                  type="text"
+                  value={cancelSearch}
+                  onChange={(e) => setCancelSearch(e.target.value)}
+                  placeholder="Buscar cliente, teléfono, nota o motivo..."
+                  className="w-full pl-9 pr-8 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-rose-500/50"
+                />
+                {cancelSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setCancelSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* FILTROS DE MOTIVOS */}
+            {reportData.cancellationsReport && reportData.cancellationsReport.reasonsSummary.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-zinc-800/60">
+                <span className="text-[11px] font-bold text-zinc-400 mr-1">Motivo:</span>
+                <button
+                  type="button"
+                  onClick={() => setCancelReasonFilter('all')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition ${
+                    cancelReasonFilter === 'all'
+                      ? 'bg-zinc-700 text-white font-bold'
+                      : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  Todos los motivos
+                </button>
+                {reportData.cancellationsReport.reasonsSummary.map((r, i) => {
+                  const isSel = cancelReasonFilter === r.reason;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setCancelReasonFilter(isSel ? 'all' : r.reason)}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] transition ${
+                        isSel
+                          ? 'bg-rose-500/30 text-rose-200 border border-rose-500/50 font-bold'
+                          : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800 border border-zinc-800'
+                      }`}
+                    >
+                      <span>{r.reason}</span>
+                      <strong className="text-rose-400 font-mono text-[10px]">({r.count})</strong>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* LISTA DE PROSPECTOS DESCARTADOS */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
+              <span>
+                Mostrando <strong className="text-zinc-200">{filteredCancellations.length}</strong> de <strong className="text-zinc-200">{reportData.cancellationsReport?.totalCancelled ?? 0}</strong> prospectos descartados
+              </span>
+            </div>
+
+            {filteredCancellations.length === 0 ? (
+              <div className="py-12 text-center text-zinc-500 bg-zinc-900/60 rounded-3xl border border-zinc-800 space-y-2">
+                <Search size={32} className="mx-auto opacity-30" />
+                <p className="text-sm font-semibold">No se encontraron prospectos con los filtros seleccionados</p>
+                <p className="text-xs">Prueba seleccionando "Todos" o cambiando el término de búsqueda.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {filteredCancellations.map((item, idx) => {
+                  const waUrl = buildWhatsAppUrl(item.phone);
+                  return (
+                    <div
+                      key={item.leadId || idx}
+                      className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 transition space-y-2.5 shadow-md"
+                    >
+                      {/* ENCABEZADO DE LA TARJETA */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                            <span>{item.clientName}</span>
+                          </h4>
+                          <span className="text-[11px] text-zinc-500 block">
+                            Fecha de descarte: {item.cancelledAtFormatted}
+                          </span>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                          {item.reason}
+                        </span>
+                      </div>
+
+                      {/* DETALLES: ASESOR, PROYECTO, TELÉFONO */}
+                      <div className="flex items-center gap-2 flex-wrap text-xs">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-300">
+                          <User size={12} className="text-amber-400" />
+                          <span>Asesor: <strong>{item.advisorName}</strong></span>
+                        </span>
+
+                        {item.project && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-amber-300 text-[11px]">
+                            <MapPin size={11} />
+                            <span>{item.project}</span>
+                          </span>
+                        )}
+
+                        {waUrl ? (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-mono font-bold transition"
+                            title="Abrir chat en WhatsApp"
+                          >
+                            <Phone size={11} />
+                            <span>{item.phone}</span>
+                            <ExternalLink size={10} className="opacity-70" />
+                          </a>
+                        ) : (
+                          <span className="text-zinc-500 font-mono text-[11px]">
+                            {item.phone || 'Sin teléfono'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* LO QUE ESCRIBIÓ EL ASESOR */}
+                      <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/80 text-xs text-zinc-300 leading-relaxed space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-rose-400 block flex items-center gap-1.5">
+                          <MessageSquare size={12} />
+                          <span>Lo que escribió el asesor en la ficha / bitácora:</span>
+                        </span>
+                        <p className="italic text-zinc-200">
+                          "{item.notes || 'Sin nota explicativa registrada'}"
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          VISTA: CONTROL INTERACTIVO DE VISITAS Y CITAS COMERCIALES
+         ════════════════════════════════════════════════════════════════════════ */}
+      {reportSubTab === 'visits_appointments' && reportData && (
+        <div className="space-y-6 animate-fade-in">
+          {/* HEADER PRINCIPAL */}
+          <div className="p-6 rounded-3xl bg-gradient-to-br from-emerald-950/40 via-zinc-900 to-teal-950/30 border border-emerald-500/30 shadow-xl">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <span className="p-3 rounded-2xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  <CalendarCheck size={24} />
+                </span>
+                <div>
+                  <h2 className="text-base sm:text-lg font-black text-zinc-100 flex items-center gap-2">
+                    <span>Visitas a Terreno & Citas Comerciales por Asesor</span>
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono font-bold border border-emerald-500/30">
+                      {reportData.visitsAppointmentsReport?.totalTotal ?? 0} Gestiones
+                    </span>
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Detalle automático de visitas y citas agendadas en <strong className="text-zinc-200">{reportData.periodLabel}</strong>: presenciales a terreno / sala de ventas y virtuales / telefónicas con notas de ficha técnica.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* KPIS DE VISITAS Y CITAS */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
+              <div className="p-4 rounded-2xl bg-emerald-950/30 border border-emerald-500/30">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block mb-1">
+                  Visitas a Terreno
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-emerald-300 font-mono">
+                  {reportData.visitsAppointmentsReport?.totalVisitas ?? 0}
+                </span>
+                <span className="text-[11px] text-emerald-400/80 block mt-1">
+                  Presenciales en obra / sala
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400 block mb-1">
+                  Citas / Videollamadas
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-violet-300 font-mono">
+                  {reportData.visitsAppointmentsReport?.totalCitas ?? 0}
+                </span>
+                <span className="text-[11px] text-zinc-500 block mt-1">
+                  Virtuales y telefónicas
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
+                  Total Gestiones
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-zinc-100 font-mono">
+                  {reportData.visitsAppointmentsReport?.totalTotal ?? 0}
+                </span>
+                <span className="text-[11px] text-zinc-500 block mt-1">
+                  Visitas + Citas efectivas
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Asesor Líder en Gestiones
+                </span>
+                <span className="text-sm sm:text-base font-black text-zinc-200 line-clamp-1">
+                  {reportData.visitsAppointmentsReport?.byAdvisor[0]?.advisorName || 'N/A'}
+                </span>
+                <span className="text-[11px] text-zinc-500 block mt-1">
+                  {reportData.visitsAppointmentsReport?.byAdvisor[0]
+                    ? `${reportData.visitsAppointmentsReport.byAdvisor[0].totalGestiones} gestiones (${reportData.visitsAppointmentsReport.byAdvisor[0].totalVisitas} visitas)`
+                    : '0 gestiones'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* TABLA RESUMEN POR ASESOR */}
+          <div className="p-6 rounded-3xl bg-zinc-900/90 border border-zinc-800 shadow-xl space-y-4">
+            <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
+              <Users size={16} className="text-emerald-400" />
+              <span>Resumen de Visitas y Citas por Asesor</span>
+            </h3>
+
+            <div className="overflow-x-auto rounded-2xl border border-zinc-800/80">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] font-bold border-b border-zinc-800">
+                  <tr>
+                    <th className="py-3 px-4">Asesor</th>
+                    <th className="py-3 px-3 text-center">Visitas a Terreno</th>
+                    <th className="py-3 px-3 text-center">Citas Virtuales / Tel.</th>
+                    <th className="py-3 px-3 text-center">Total Gestiones</th>
+                    <th className="py-3 px-3 text-right">Acción Rápida</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60 bg-zinc-900/40">
+                  {(!reportData.visitsAppointmentsReport || reportData.visitsAppointmentsReport.byAdvisor.length === 0) ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 px-4 text-center text-zinc-500 italic">
+                        No hay visitas o citas registradas en este período.
+                      </td>
+                    </tr>
+                  ) : (
+                    reportData.visitsAppointmentsReport.byAdvisor.map((adv) => (
+                      <tr key={adv.advisorId} className="hover:bg-zinc-800/50 transition">
+                        <td className="py-3 px-4 font-bold text-zinc-100">
+                          {adv.advisorName}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-emerald-400 bg-emerald-950/20">
+                          {adv.totalVisitas}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-violet-400 bg-violet-950/20">
+                          {adv.totalCitas}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono font-black text-amber-300 bg-zinc-950/40">
+                          {adv.totalGestiones}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setVisitsAdvisorFilter(visitsAdvisorFilter === adv.advisorName ? 'all' : adv.advisorName)}
+                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                              visitsAdvisorFilter === adv.advisorName
+                                ? 'bg-emerald-500 text-zinc-950 font-bold'
+                                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                            }`}
+                          >
+                            {visitsAdvisorFilter === adv.advisorName ? 'Quitar Filtro' : 'Filtrar Asesor'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* FILTROS INTERACTIVOS Y BUSCADOR */}
+          <div className="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              {/* FILTRO ASESOR */}
+              <div className="flex items-center gap-1.5 flex-wrap flex-1">
+                <span className="text-xs font-bold text-zinc-400 flex items-center gap-1 mr-1">
+                  <Filter size={13} className="text-emerald-400" />
+                  <span>Asesor:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setVisitsAdvisorFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    visitsAdvisorFilter === 'all'
+                      ? 'bg-emerald-500 text-zinc-950 shadow-sm'
+                      : 'bg-zinc-950 text-zinc-300 hover:bg-zinc-800 border border-zinc-800'
+                  }`}
+                >
+                  Todos ({reportData.visitsAppointmentsReport?.totalTotal ?? 0})
+                </button>
+                {reportData.visitsAppointmentsReport?.byAdvisor.map((adv) => {
+                  const isSelected = visitsAdvisorFilter.toLowerCase().trim() === adv.advisorName.toLowerCase().trim();
+                  return (
+                    <button
+                      key={adv.advisorId}
+                      type="button"
+                      onClick={() => setVisitsAdvisorFilter(isSelected ? 'all' : adv.advisorName)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-500 text-zinc-950 font-bold shadow-sm'
+                          : 'bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
+                      }`}
+                    >
+                      <span>{adv.advisorName}:</span>
+                      <strong className={isSelected ? 'text-zinc-950' : 'text-emerald-400 font-mono'}>{adv.totalGestiones}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* BUSCADOR */}
+              <div className="relative min-w-[260px]">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input
+                  type="text"
+                  value={visitsSearch}
+                  onChange={(e) => setVisitsSearch(e.target.value)}
+                  placeholder="Buscar cliente, teléfono, asesor, nota..."
+                  className="w-full pl-9 pr-8 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500/50"
+                />
+                {visitsSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setVisitsSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* FILTROS POR TIPO Y ESTADO */}
+            <div className="flex items-center justify-between gap-3 flex-wrap pt-2 border-t border-zinc-800/60 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-zinc-400 mr-1">Modalidad:</span>
+                <button
+                  type="button"
+                  onClick={() => setVisitsTypeFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                    visitsTypeFilter === 'all'
+                      ? 'bg-zinc-700 text-white font-bold'
+                      : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  Todas ({reportData.visitsAppointmentsReport?.totalTotal ?? 0})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisitsTypeFilter('visita')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                    visitsTypeFilter === 'visita'
+                      ? 'bg-emerald-500 text-zinc-950 font-bold'
+                      : 'bg-zinc-950 text-zinc-300 hover:bg-zinc-800 border border-zinc-800'
+                  }`}
+                >
+                  Visitas a Terreno ({reportData.visitsAppointmentsReport?.totalVisitas ?? 0})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisitsTypeFilter('cita')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                    visitsTypeFilter === 'cita'
+                      ? 'bg-violet-600 text-white font-bold'
+                      : 'bg-zinc-950 text-zinc-300 hover:bg-zinc-800 border border-zinc-800'
+                  }`}
+                >
+                  Citas / Videollamadas ({reportData.visitsAppointmentsReport?.totalCitas ?? 0})
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-zinc-400 mr-1">Estado:</span>
+                <button
+                  type="button"
+                  onClick={() => setVisitsStatusFilter('all')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition ${
+                    visitsStatusFilter === 'all'
+                      ? 'bg-zinc-700 text-white font-bold'
+                      : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  Todos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisitsStatusFilter(visitsStatusFilter === 'scheduled' ? 'all' : 'scheduled')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] transition ${
+                    visitsStatusFilter === 'scheduled'
+                      ? 'bg-amber-500/30 text-amber-200 border border-amber-500/50 font-bold'
+                      : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  Agendadas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisitsStatusFilter(visitsStatusFilter === 'completed' ? 'all' : 'completed')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] transition ${
+                    visitsStatusFilter === 'completed'
+                      ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-500/50 font-bold'
+                      : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  Completadas / Asistió
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisitsStatusFilter(visitsStatusFilter === 'canceled' ? 'all' : 'canceled')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] transition ${
+                    visitsStatusFilter === 'canceled'
+                      ? 'bg-rose-500/30 text-rose-200 border border-rose-500/50 font-bold'
+                      : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  Canceladas
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* LISTA DE VISITAS Y CITAS */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
+              <span>
+                Mostrando <strong className="text-zinc-200">{filteredVisits.length}</strong> de <strong className="text-zinc-200">{reportData.visitsAppointmentsReport?.totalTotal ?? 0}</strong> gestiones registradas
+              </span>
+            </div>
+
+            {filteredVisits.length === 0 ? (
+              <div className="py-12 text-center text-zinc-500 bg-zinc-900/60 rounded-3xl border border-zinc-800 space-y-2">
+                <Search size={32} className="mx-auto opacity-30" />
+                <p className="text-sm font-semibold">No se encontraron visitas ni citas con los filtros seleccionados</p>
+                <p className="text-xs">Prueba seleccionando "Todas" o cambiando el término de búsqueda.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {filteredVisits.map((item, idx) => {
+                  const waUrl = buildWhatsAppUrl(item.phone);
+                  return (
+                    <div
+                      key={item.id || idx}
+                      className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 transition space-y-2.5 shadow-md"
+                    >
+                      {/* ENCABEZADO DE LA TARJETA */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                            <span>{item.clientName}</span>
+                          </h4>
+                          <span className="text-[11px] text-zinc-500 block flex items-center gap-1 mt-0.5">
+                            <Clock size={11} className="text-zinc-400" />
+                            <span>{item.dateFormatted}</span>
+                          </span>
+                        </div>
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                            item.type === 'visita'
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                          }`}
+                        >
+                          {item.typeLabel}
+                        </span>
+                      </div>
+
+                      {/* DETALLES: ASESOR, PROYECTO, TELÉFONO, ESTADO */}
+                      <div className="flex items-center gap-2 flex-wrap text-xs">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-300">
+                          <User size={12} className="text-amber-400" />
+                          <span>Asesor: <strong>{item.advisorName}</strong></span>
+                        </span>
+
+                        {item.project && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-amber-300 text-[11px]">
+                            <MapPin size={11} />
+                            <span>{item.project}</span>
+                          </span>
+                        )}
+
+                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                          item.status.toLowerCase().includes('complet') || item.status.toLowerCase().includes('asist')
+                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                            : item.status.toLowerCase().includes('cancel') || item.status.toLowerCase().includes('no asist')
+                            ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                            : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {item.status}
+                        </span>
+
+                        {waUrl ? (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-mono font-bold transition"
+                            title="Abrir chat en WhatsApp"
+                          >
+                            <Phone size={11} />
+                            <span>{item.phone}</span>
+                            <ExternalLink size={10} className="opacity-70" />
+                          </a>
+                        ) : (
+                          <span className="text-zinc-500 font-mono text-[11px]">
+                            {item.phone || 'Sin teléfono'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* LO QUE ESCRIBIÓ EL ASESOR */}
+                      <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/80 text-xs text-zinc-300 leading-relaxed space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-emerald-400 block flex items-center gap-1.5">
+                          <FileText size={12} />
+                          <span>Ficha Técnica / Bitácora registrada:</span>
+                        </span>
+                        <p className="italic text-zinc-200">
+                          "{item.notes || 'Sin anotaciones registradas'}"
+                        </p>
+                        {(item.result || item.nextAction) && (
+                          <div className="pt-2 mt-1 border-t border-zinc-800 flex items-center gap-3 text-[11px] text-zinc-400 flex-wrap">
+                            {item.result && (
+                              <span><strong className="text-zinc-300">Resultado:</strong> {item.result}</span>
+                            )}
+                            {item.nextAction && (
+                              <span><strong className="text-zinc-300">Próximo paso:</strong> {item.nextAction}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {reportSubTab === 'official_doc' && (
         <div className="flex justify-center">
           <div
@@ -2215,7 +3343,7 @@ export function CommercialReportView({
                   <span>servicioalcliente.grupomeraki@gmail.com</span>
                   <span>314 786 80 69</span>
                   <span>www.grupoconstructormeraki.com.co</span>
-                  <span className="official-page-number font-bold text-zinc-700">Pág. 1 de 2</span>
+                  <span className="official-page-number font-bold text-zinc-700">Pág. 1 de 3</span>
                 </div>
               </div>
             </div>
@@ -2476,8 +3604,282 @@ export function CommercialReportView({
                     ))}
                   </div>
                 </div>
+              </div>
 
-                {/* SECCIÓN 5: CRITERIOS USADOS (REGLAS DE NEGOCIO Y METODOLOGÍA) */}
+              {/* PIE DE PÁGINA 2 */}
+              <div className="pt-4 mt-auto border-t border-zinc-200">
+                <p className="text-center text-sm font-serif italic font-bold text-zinc-800 mb-2">
+                  "Nunca nos cansaremos de mejorar para ti."
+                </p>
+                <div className="flex items-center justify-between text-[9px] text-zinc-500">
+                  <span>Carrera 3 # 42 - 92 Barrio Casa Club</span>
+                  <span>servicioalcliente.grupomeraki@gmail.com</span>
+                  <span>314 786 80 69</span>
+                  <span>www.grupoconstructormeraki.com.co</span>
+                  <span className="official-page-number font-bold text-zinc-700">Pág. 2 de 3</span>
+                </div>
+              </div>
+            </div>
+
+            {/* SALTO DE PÁGINA PARA IMPRESIÓN OFICIAL: PÁGINA 3 */}
+            <div className="page-break my-8 border-b-2 border-dashed border-zinc-300 print:hidden" />
+
+            {/* PÁGINA 3 */}
+            <div className="official-page min-h-[1050px] flex flex-col justify-between print:pt-4">
+              <div>
+                {/* ENCABEZADO CORTO PÁGINA 3 */}
+                <div className="flex items-center justify-between border-b border-zinc-200 pb-2 mb-4">
+                  <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
+                    Informe de Gestión Comercial — Cancelaciones, Visitas & Citas (Continuación)
+                  </span>
+                  <span className="text-[11px] font-semibold text-zinc-700">{reportData.periodLabel}</span>
+                </div>
+
+                {/* SECCIÓN 6: CANCELACIONES Y PROSPECTOS DESCARTADOS POR ASESOR */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                    <h2 className="text-sm font-black text-zinc-950 uppercase tracking-wide flex items-center gap-2">
+                      <span>6. Cancelaciones y Prospectos Descartados por Asesor</span>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCancellationDrilldown('all', 'all')}
+                        className="text-xs px-2.5 py-0.5 rounded-full bg-rose-500/15 text-rose-950 font-mono font-bold hover:bg-rose-500/25 transition cursor-pointer flex items-center gap-1"
+                        title="Clic para ver el detalle interactivo de todos los descartes"
+                      >
+                        <span>{reportData.cancellationsReport?.totalCancelled ?? 0} descartes</span>
+                        <ExternalLink size={10} className="no-print" />
+                      </button>
+                    </h2>
+                    <span className="text-[10px] text-zinc-500 font-medium">
+                      Motivo y bitácora escrita por cada asesor
+                    </span>
+                  </div>
+
+                  {/* NOTA INTERACTIVA VISIBLE EN PANTALLA */}
+                  <div className="flex items-center justify-between text-[11px] text-rose-950 bg-rose-50/90 border border-rose-300 rounded-lg px-3 py-1.5 mb-2.5 no-print shadow-xs">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <MousePointerClick size={13} className="text-rose-600 shrink-0" />
+                      <span><strong>Torta y Tabla Interactiva:</strong> Toca cualquier porción de la torta, motivo o cifra de descarte para abrir la lista completa con números de WhatsApp y lo que escribió cada asesor.</span>
+                    </span>
+                    <span className="text-[10px] text-rose-800 font-bold shrink-0 hidden sm:inline bg-rose-100 px-2 py-0.5 rounded-full border border-rose-300">
+                      👆 Clic en las cifras
+                    </span>
+                  </div>
+
+                  {/* GRÁFICA DE TORTA DE CANCELACIONES (DONUT CHART CON TOTAL Y %) */}
+                  {reportData.cancellationsReport && reportData.cancellationsReport.reasonsSummary.length > 0 && (
+                    <CancellationsDonutChart
+                      reasons={reportData.cancellationsReport.reasonsSummary}
+                      totalCancelled={reportData.cancellationsReport.totalCancelled}
+                      onSelectReason={(reason) => handleOpenCancellationDrilldown('all', reason)}
+                    />
+                  )}
+
+                  {/* TABLA RESUMEN POR ASESOR */}
+                  <div className="overflow-x-auto rounded-lg border border-zinc-300 shadow-sm mb-3">
+                    <table className="w-full text-[10px] sm:text-[11px] border-collapse">
+                      <thead>
+                        <tr className="bg-zinc-900 text-zinc-100 font-bold uppercase text-[9px] tracking-wider">
+                          <th className="py-1.5 px-3 text-left">Asesor</th>
+                          <th className="py-1.5 px-2 text-center w-24">Total Descartes</th>
+                          <th className="py-1.5 px-3 text-left">Principales Motivos Registrados</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-200 bg-white">
+                        {(!reportData.cancellationsReport || reportData.cancellationsReport.byAdvisor.length === 0) ? (
+                          <tr>
+                            <td colSpan={3} className="py-2.5 px-3 text-center text-zinc-500 italic">
+                              No se registraron prospectos descartados o cancelados en este período.
+                            </td>
+                          </tr>
+                        ) : (
+                          reportData.cancellationsReport.byAdvisor.map((adv) => (
+                            <tr key={adv.advisorId} className="hover:bg-zinc-50 transition">
+                              <td
+                                onClick={() => handleOpenCancellationDrilldown(adv.advisorName, 'all')}
+                                className="py-1.5 px-3 font-bold text-zinc-900 cursor-pointer hover:text-rose-700 hover:underline transition"
+                                title={`Ver descartes de ${adv.advisorName}`}
+                              >
+                                {adv.advisorName}
+                              </td>
+                              <td
+                                onClick={() => handleOpenCancellationDrilldown(adv.advisorName, 'all')}
+                                className="py-1.5 px-2 text-center font-mono font-bold text-rose-600 bg-rose-50/50 cursor-pointer hover:bg-rose-100/70 hover:underline transition active:scale-95"
+                                title={`Clic para ver los ${adv.totalCancelled} descartes de ${adv.advisorName}`}
+                              >
+                                {adv.totalCancelled}
+                              </td>
+                              <td className="py-1.5 px-3 text-zinc-700">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {adv.topReasons.slice(0, 3).map((r, i) => (
+                                    <button
+                                      key={i}
+                                      type="button"
+                                      onClick={() => handleOpenCancellationDrilldown(adv.advisorName, r.reason)}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-zinc-100 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-900 border border-zinc-200 text-zinc-800 transition cursor-pointer"
+                                      title={`Ver descartes de ${adv.advisorName} por: ${r.reason}`}
+                                    >
+                                      <span>{r.reason}:</span>
+                                      <strong className="text-zinc-950 font-mono">{r.count}</strong>
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* MUESTRA DETALLADA DE LO QUE ESCRIBIÓ CADA ASESOR */}
+                  {reportData.cancellationsReport && reportData.cancellationsReport.items.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-zinc-700 uppercase tracking-wider mb-1">
+                        <span>Muestra de motivos y observaciones registradas por asesor:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCancellationDrilldown('all', 'all')}
+                          className="no-print text-rose-600 hover:text-rose-800 hover:underline font-bold normal-case cursor-pointer text-[10px] flex items-center gap-1"
+                        >
+                          <span>Ver todos ({reportData.cancellationsReport.totalCancelled}) en modal interactivo →</span>
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {reportData.cancellationsReport.items.slice(0, 6).map((c, idx) => (
+                          <div
+                            key={c.leadId || idx}
+                            onClick={() => handleOpenCancellationDrilldown(c.advisorName, c.reason)}
+                            className="p-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[10px] space-y-1 cursor-pointer hover:border-rose-300 hover:bg-rose-50/30 transition"
+                            title="Clic para ver detalle"
+                          >
+                            <div className="flex items-center justify-between gap-1 flex-wrap">
+                              <span className="font-bold text-zinc-950 truncate">{c.clientName}</span>
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                {c.reason}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[9px] text-zinc-500">
+                              <span className="font-medium text-zinc-700">Asesor: {c.advisorName}</span>
+                              <span>{c.cancelledAtFormatted}</span>
+                            </div>
+                            <div className="p-1.5 rounded bg-white border border-zinc-200 text-zinc-700 italic">
+                              <strong className="not-italic text-zinc-900 text-[9px]">Bitácora: </strong>
+                              "{c.notes || 'Sin nota adicional'}"
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {reportData.cancellationsReport.items.length > 6 && (
+                        <p className="text-[9px] text-zinc-500 text-right italic no-print">
+                          Mostrando 6 de {reportData.cancellationsReport.items.length} descartes en el documento impreso. (Haz clic en cualquier cifra o en la torta para ver la lista interactiva completa).
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* SECCIÓN 7: VISITAS A TERRENO Y SALA DE VENTAS CONFIRMADAS POR ASESOR */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                    <h2 className="text-sm font-black text-zinc-950 uppercase tracking-wide flex items-center gap-2">
+                      <span>7. Visitas a Terreno y Sala de Ventas Confirmadas por Asesor</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-950 font-mono font-bold">
+                        {reportData.visitsAppointmentsReport?.totalTotal ?? 0} visitas confirmadas
+                      </span>
+                    </h2>
+                    <span className="text-[10px] text-zinc-500 font-medium">
+                      {reportData.visitsAppointmentsReport?.totalVisitas ?? 0} en terreno · {reportData.visitsAppointmentsReport?.totalCitas ?? 0} en sala de ventas
+                    </span>
+                  </div>
+
+                  {/* AVISO DE VALIDACIÓN RIGUROSA CON IA */}
+                  <div className="flex items-center justify-between text-[10px] text-emerald-950 bg-emerald-50/80 border border-emerald-300 rounded-lg px-3 py-1.5 mb-2.5 shadow-xs">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                      <span><strong>Validación estricta de visitas:</strong> Solo se contabilizan visitas presenciales realizadas y confirmadas en el período. Se excluyen llamadas telefónicas, invitaciones a eventos y recordatorios agendados a futuro.</span>
+                    </span>
+                  </div>
+
+                  {/* TABLA RESUMEN POR ASESOR */}
+                  <div className="overflow-x-auto rounded-lg border border-zinc-300 shadow-sm mb-3">
+                    <table className="w-full text-[10px] sm:text-[11px] border-collapse">
+                      <thead>
+                        <tr className="bg-zinc-900 text-zinc-100 font-bold uppercase text-[9px] tracking-wider">
+                          <th className="py-1.5 px-3 text-left">Asesor</th>
+                          <th className="py-1.5 px-2 text-center w-28">Visitas Terreno Confirmadas</th>
+                          <th className="py-1.5 px-2 text-center w-28">Visitas Sala de Ventas Confirmadas</th>
+                          <th className="py-1.5 px-2 text-center w-20">Total Visitas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-200 bg-white">
+                        {(!reportData.visitsAppointmentsReport || reportData.visitsAppointmentsReport.byAdvisor.length === 0) ? (
+                          <tr>
+                            <td colSpan={4} className="py-2.5 px-3 text-center text-zinc-500 italic">
+                              No se registraron visitas confirmadas en este período.
+                            </td>
+                          </tr>
+                        ) : (
+                          reportData.visitsAppointmentsReport.byAdvisor.map((adv) => (
+                            <tr key={adv.advisorId} className="hover:bg-zinc-50 transition">
+                              <td className="py-1.5 px-3 font-bold text-zinc-900">{adv.advisorName}</td>
+                              <td className="py-1.5 px-2 text-center font-mono font-bold text-emerald-700 bg-emerald-50/40">
+                                {adv.totalVisitas}
+                              </td>
+                              <td className="py-1.5 px-2 text-center font-mono font-bold text-teal-700 bg-teal-50/40">
+                                {adv.totalCitas}
+                              </td>
+                              <td className="py-1.5 px-2 text-center font-mono font-black text-zinc-950 bg-zinc-100">
+                                {adv.totalGestiones}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* MUESTRA DETALLADA DE VISITAS CONFIRMADAS */}
+                  {reportData.visitsAppointmentsReport && reportData.visitsAppointmentsReport.items.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-bold text-zinc-700 uppercase tracking-wider mb-1">
+                        Muestra de visitas presenciales confirmadas y bitácora técnica registrada:
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {reportData.visitsAppointmentsReport.items.slice(0, 6).map((v, idx) => (
+                          <div key={v.id || idx} className="p-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[10px] space-y-1">
+                            <div className="flex items-center justify-between gap-1 flex-wrap">
+                              <span className="font-bold text-zinc-950 truncate">{v.clientName}</span>
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                {v.typeLabel || 'Visita Confirmada'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[9px] text-zinc-500">
+                              <span className="font-medium text-zinc-700">Asesor: {v.advisorName}</span>
+                              <span>{v.dateFormatted}</span>
+                            </div>
+                            {v.project && (
+                              <div className="text-[9px] text-amber-700 font-semibold">
+                                Proyecto: {v.project}
+                              </div>
+                            )}
+                            <div className="p-1.5 rounded bg-white border border-zinc-200 text-zinc-700 italic">
+                              <strong className="not-italic text-zinc-900 text-[9px]">Ficha / Bitácora: </strong>
+                              "{v.notes || 'Visita presencial confirmada en terreno / sala.'}"
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {reportData.visitsAppointmentsReport.items.length > 6 && (
+                        <p className="text-[9px] text-zinc-500 text-right italic no-print">
+                          Mostrando 6 de {reportData.visitsAppointmentsReport.items.length} visitas confirmadas en el documento impreso.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* CRITERIOS USADOS (REGLAS DE NEGOCIO Y METODOLOGÍA) */}
                 <div className="mb-6">
                   <div className="bg-zinc-100 border border-zinc-300 rounded-xl p-3 text-[10px] text-zinc-700 leading-relaxed">
                     <p className="font-bold text-zinc-900 mb-1 uppercase tracking-wider text-[10px]">
@@ -2487,7 +3889,7 @@ export function CommercialReportView({
                   </div>
                 </div>
 
-                {/* SECCIÓN 6: RECOMENDACIONES ESTRATÉGICAS */}
+                {/* CONCLUSIONES & ACCIONES RECOMENDADAS */}
                 <div className="mb-4">
                   <h3 className="text-xs font-bold text-zinc-950 uppercase tracking-wide mb-1.5">
                     Conclusiones & Acciones Recomendadas
@@ -2503,7 +3905,7 @@ export function CommercialReportView({
                 </div>
               </div>
 
-              {/* PIE DE PÁGINA 2 */}
+              {/* PIE DE PÁGINA 3 */}
               <div className="pt-4 mt-auto border-t border-zinc-200">
                 <p className="text-center text-sm font-serif italic font-bold text-zinc-800 mb-2">
                   "Nunca nos cansaremos de mejorar para ti."
@@ -2513,7 +3915,7 @@ export function CommercialReportView({
                   <span>servicioalcliente.grupomeraki@gmail.com</span>
                   <span>314 786 80 69</span>
                   <span>www.grupoconstructormeraki.com.co</span>
-                  <span className="official-page-number font-bold text-zinc-700">Pág. 2 de 2</span>
+                  <span className="official-page-number font-bold text-zinc-700">Pág. 3 de 3</span>
                 </div>
               </div>
             </div>
@@ -2892,6 +4294,228 @@ export function CommercialReportView({
           isAdmin={isAdmin}
           lockedAdvisorId={!isAdmin ? (reportData.targetAdvisorName || currentUserId || currentUserName) : undefined}
         />
+      )}
+
+      {/* MODAL INTERACTIVO DE DETALLE DE CANCELACIONES Y DESCARTES */}
+      {cancellationModal.isOpen && reportData?.cancellationsReport && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-fade-in print:hidden">
+          <div className="w-full max-w-5xl max-h-[90vh] bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-zinc-100">
+            {/* CABECERA DEL MODAL */}
+            <div className="p-4 sm:p-5 border-b border-zinc-800 flex items-start justify-between gap-3 bg-gradient-to-r from-rose-950/40 via-zinc-900 to-zinc-900">
+              <div className="flex items-center gap-3">
+                <span className="p-2.5 rounded-2xl bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                  <XCircle size={22} />
+                </span>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2 flex-wrap">
+                    <span>Detalle de Cancelaciones & Prospectos Descartados</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      {modalFilteredCancellations.length} de {reportData.cancellationsReport.totalCancelled} descartes
+                    </span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Período: <strong className="text-zinc-200">{reportData.periodLabel}</strong> · Clic en WhatsApp para abrir conversación directa
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancellationModal((prev) => ({ ...prev, isOpen: false }))}
+                className="p-1.5 rounded-xl hover:bg-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
+                title="Cerrar modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* CONTROLES Y FILTROS RÁPIDOS */}
+            <div className="p-3 sm:p-4 border-b border-zinc-800/80 bg-zinc-900/60 space-y-2.5">
+              {/* Barra de búsqueda */}
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input
+                  type="text"
+                  value={cancellationModal.search}
+                  onChange={(e) => setCancellationModal((prev) => ({ ...prev, search: e.target.value }))}
+                  placeholder="Buscar por cliente, teléfono, asesor, proyecto o lo que escribió en la bitácora..."
+                  className="w-full pl-9 pr-8 py-2 text-xs bg-zinc-900 border border-zinc-700 rounded-xl text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition"
+                />
+                {cancellationModal.search && (
+                  <button
+                    type="button"
+                    onClick={() => setCancellationModal((prev) => ({ ...prev, search: '' }))}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs cursor-pointer"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+
+              {/* Filtros por Motivo */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider shrink-0 mr-1 flex items-center gap-1">
+                  <Filter size={11} /> Motivo:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCancellationModal((prev) => ({ ...prev, reasonFilter: 'all' }))}
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 transition cursor-pointer ${
+                    cancellationModal.reasonFilter === 'all'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                  }`}
+                >
+                  Todos ({reportData.cancellationsReport.totalCancelled})
+                </button>
+                {reportData.cancellationsReport.reasonsSummary.map((r) => {
+                  const isSelected = cancellationModal.reasonFilter.toLowerCase() === r.reason.toLowerCase();
+                  return (
+                    <button
+                      key={r.reason}
+                      type="button"
+                      onClick={() => setCancellationModal((prev) => ({ ...prev, reasonFilter: isSelected ? 'all' : r.reason }))}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'bg-zinc-800/90 text-zinc-300 hover:bg-zinc-700 border border-zinc-700/60'
+                      }`}
+                    >
+                      <span>{r.reason}</span>
+                      <span className="ml-1 opacity-75 font-mono">({r.count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Filtros por Asesor */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider shrink-0 mr-1 flex items-center gap-1">
+                  <User size={11} /> Asesor:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCancellationModal((prev) => ({ ...prev, advisorFilter: 'all' }))}
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 transition cursor-pointer ${
+                    cancellationModal.advisorFilter === 'all'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                  }`}
+                >
+                  Todos
+                </button>
+                {reportData.cancellationsReport.byAdvisor.map((adv) => {
+                  const isSelected =
+                    cancellationModal.advisorFilter.toLowerCase() === adv.advisorName.toLowerCase() ||
+                    cancellationModal.advisorFilter === adv.advisorId;
+                  return (
+                    <button
+                      key={adv.advisorId}
+                      type="button"
+                      onClick={() => setCancellationModal((prev) => ({ ...prev, advisorFilter: isSelected ? 'all' : adv.advisorName }))}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold shrink-0 transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-zinc-800/90 text-zinc-300 hover:bg-zinc-700 border border-zinc-700/60'
+                      }`}
+                    >
+                      <span>{adv.advisorName}</span>
+                      <span className="ml-1 opacity-75 font-mono">({adv.totalCancelled})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* LISTA DE PROSPECTOS DESCARTADOS */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+              {modalFilteredCancellations.length === 0 ? (
+                <div className="py-12 text-center text-zinc-500 text-xs">
+                  No se encontraron prospectos descartados con los filtros seleccionados.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {modalFilteredCancellations.map((item, idx) => {
+                    const waUrl = buildWhatsAppUrl(item.phoneRaw || item.phone);
+                    const colorInfo = getReasonColor(item.reason);
+                    return (
+                      <div
+                        key={item.leadId ? `${item.leadId}_${idx}` : idx}
+                        className="p-3 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition flex flex-col justify-between gap-2 shadow-xs"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex items-start justify-between gap-2 flex-wrap">
+                            <span className="font-bold text-white text-xs truncate max-w-[200px]">
+                              {item.clientName}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[9px] font-bold border ${colorInfo.bg} ${colorInfo.text} ${colorInfo.border}`}
+                            >
+                              {item.reason}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] text-zinc-400 gap-2 flex-wrap">
+                            <span className="flex items-center gap-1">
+                              <User size={11} className="text-zinc-500" />
+                              <strong className="text-zinc-300">{item.advisorName}</strong>
+                            </span>
+                            <span className="text-zinc-500 text-[9px] flex items-center gap-1">
+                              <Clock size={10} />
+                              {item.cancelledAtFormatted}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] text-zinc-400 gap-2 flex-wrap">
+                            <span className="flex items-center gap-1 text-amber-400 font-medium text-[9px]">
+                              <MapPin size={10} /> {item.project || 'Proyecto Meraki'}
+                            </span>
+                            {waUrl && (
+                              <a
+                                href={waUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30 transition cursor-pointer"
+                                title="Abrir chat de WhatsApp"
+                              >
+                                <Phone size={10} />
+                                <span>{item.phone}</span>
+                                <ExternalLink size={9} />
+                              </a>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Lo que escribió el asesor en la bitácora */}
+                        <div className="p-2 rounded-xl bg-zinc-950/80 border border-zinc-800/90 text-zinc-300 text-[11px] leading-relaxed">
+                          <span className="font-semibold text-rose-400 block text-[9px] mb-0.5 flex items-center gap-1">
+                            <Edit3 size={10} />
+                            <span>Observación / Bitácora del asesor:</span>
+                          </span>
+                          <span className="italic">"{item.notes || 'Descarte registrado sin comentarios adicionales.'}"</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* PIE DEL MODAL */}
+            <div className="p-3 sm:p-4 border-t border-zinc-800 bg-zinc-900/90 flex items-center justify-between text-xs text-zinc-400">
+              <span className="text-[11px]">
+                Mostrando <strong className="text-white">{modalFilteredCancellations.length}</strong> de{' '}
+                <strong className="text-white">{reportData.cancellationsReport.totalCancelled}</strong> descartes.
+              </span>
+              <button
+                type="button"
+                onClick={() => setCancellationModal((prev) => ({ ...prev, isOpen: false }))}
+                className="px-4 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs transition cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

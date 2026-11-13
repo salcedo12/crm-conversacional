@@ -184,7 +184,7 @@ export function CommercialLeadsTable({
             key={lead.id}
             className={`rounded-2xl border p-3.5 sm:p-4 transition-all hover:border-zinc-700 bg-zinc-900/50 flex flex-col gap-3 min-w-0 w-full overflow-hidden ${
               isMissingFollowUp
-                ? 'border-rose-500/50 bg-gradient-to-r from-rose-950/25 via-zinc-900/70 to-zinc-900/50 shadow-md ring-1 ring-rose-500/20'
+                ? 'border-rose-500/40 bg-zinc-900/50 shadow-sm hover:border-rose-500/60'
                 : lead.isOverdue
                 ? 'border-rose-500/30 bg-rose-950/10'
                 : lead.isToday
@@ -211,8 +211,8 @@ export function CommercialLeadsTable({
 
                   {/* Badge Falta Seguimiento Semana */}
                   {isMissingFollowUp && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/25 text-rose-300 border border-rose-500/50 shrink-0">
-                      <AlertCircle size={11} className="text-rose-400 shrink-0 animate-pulse" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30 shrink-0">
+                      <AlertCircle size={11} className="text-rose-500 shrink-0" />
                       <span>Falta seguimiento semana</span>
                     </span>
                   )}
@@ -416,8 +416,8 @@ export function CommercialLeadsTable({
                       )}
                     </div>
                   ) : (
-                    <div className="text-xs text-sky-300 flex items-center gap-1.5 flex-wrap min-w-0">
-                      <AlertTriangle size={13} className="text-sky-400 shrink-0" />
+                    <div className="text-xs text-sky-700 dark:text-sky-300 flex items-center gap-1.5 flex-wrap min-w-0">
+                      <AlertTriangle size={13} className="text-sky-600 dark:text-sky-400 shrink-0" />
                       <span className="font-medium">Sin ficha técnica registrada aún. Registra el primer contacto.</span>
                     </div>
                   )}
@@ -454,12 +454,12 @@ export function CommercialLeadsTable({
 
                 {/* Alerta Destacada: Falta Seguimiento de la Semana */}
                 {isMissingFollowUp && (
-                  <div className="mt-1.5 text-xs text-rose-300 bg-rose-500/15 border border-rose-500/40 rounded-xl p-2.5 flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <AlertCircle size={15} className="text-rose-400 shrink-0" />
+                  <div className="mt-1.5 text-xs bg-rose-500/10 border border-rose-500/30 rounded-xl p-2.5 sm:p-3 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <AlertCircle size={15} className="text-rose-500 shrink-0" />
                       <div className="min-w-0">
-                        <strong className="text-rose-200">FALTA SEGUIMIENTO:</strong>{' '}
-                        <span className="text-rose-300/90">
+                        <strong className="text-rose-700 dark:text-rose-300 font-bold">FALTA SEGUIMIENTO:</strong>{' '}
+                        <span className="text-zinc-800 dark:text-zinc-200 font-normal">
                           Prospecto captado esta semana sin llamadas ni bitácoras comerciales registradas.
                         </span>
                       </div>
@@ -467,9 +467,11 @@ export function CommercialLeadsTable({
                     <button
                       type="button"
                       onClick={() => onOpenFicha(lead)}
-                      className="px-2.5 py-1 rounded-lg bg-rose-500/30 hover:bg-rose-500/50 text-rose-100 font-bold text-[11px] border border-rose-400/40 transition cursor-pointer shrink-0"
+                      className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 font-bold text-xs shadow-sm transition-all cursor-pointer shrink-0 flex items-center gap-1.5"
+                      style={{ color: '#ffffff' }}
                     >
-                      Diligenciar gestión ahora →
+                      <span>Diligenciar gestión ahora</span>
+                      <span className="text-sm">→</span>
                     </button>
                   </div>
                 )}
@@ -484,7 +486,7 @@ export function CommercialLeadsTable({
                     onClick={() => handleQuickNoContesto(lead)}
                     disabled={isBusy}
                     title="Registrar que no contestó y reprogramar recordatorio"
-                    className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-rose-300 hover:text-rose-200 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
+                    className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
                   >
                     <PhoneMissed size={13} />
                     <span>No contestó</span>
@@ -496,9 +498,9 @@ export function CommercialLeadsTable({
                   type="button"
                   onClick={() => window.open(`/dashboard/inbox?lead=${encodeURIComponent(lead.id)}`, '_blank')}
                   title="Abrir este contacto en otra página (Bandeja CRM)"
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-sky-500/30 bg-sky-950/30 hover:bg-sky-900/50 text-sky-300 text-xs font-semibold transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 text-sky-700 dark:text-sky-300 text-xs font-semibold transition-colors cursor-pointer"
                 >
-                  <MessageSquare size={14} className="text-sky-400 shrink-0" />
+                  <MessageSquare size={14} className="text-sky-600 dark:text-sky-400 shrink-0" />
                   <span className="hidden xl:inline">Ver contacto</span>
                   <ExternalLink size={11} className="opacity-70 shrink-0" />
                 </button>
@@ -531,7 +533,8 @@ export function CommercialLeadsTable({
                 <button
                   type="button"
                   onClick={() => onOpenFicha(lead)}
-                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 font-bold text-xs shadow-md transition-all cursor-pointer"
+                  style={{ color: '#ffffff' }}
                 >
                   <ClipboardList size={14} />
                   <span>{lead.hasFicha || (lead.bitacoras?.length || 0) > 0 ? 'Actualizar Ficha' : 'Diligenciar Ficha'}</span>
@@ -609,7 +612,8 @@ export function CommercialLeadsTable({
               <button
                 type="button"
                 onClick={() => onOpenFicha(lead)}
-                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 font-bold text-xs shadow-md transition-all cursor-pointer"
+                style={{ color: '#ffffff' }}
               >
                 <ClipboardList size={15} />
                 <span>{lead.hasFicha || (lead.bitacoras?.length || 0) > 0 ? 'Actualizar Ficha Técnica' : 'Diligenciar Ficha Técnica'}</span>

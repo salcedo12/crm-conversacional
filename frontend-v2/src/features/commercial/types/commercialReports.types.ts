@@ -208,6 +208,12 @@ export interface CommercialExecutiveReportData {
   // Auditoría y Atribución de Marketing / Pautas
   marketingReport?: MarketingPeriodReportData;
 
+  // 6. Cancelaciones y Prospectos Descartados por Asesor
+  cancellationsReport?: CancellationsReportData;
+
+  // 7. Visitas a Terreno y Citas Comerciales por Asesor
+  visitsAppointmentsReport?: VisitsAppointmentsReportData;
+
   // Metadatos de alcance y permisos (Individual vs Consolidado)
   isIndividualReport?: boolean;
   targetAdvisorName?: string;
@@ -266,4 +272,75 @@ export interface MarketingPeriodReportData {
   topCampaignName: string;
   coberturaSeguimientoPautaPct: number;
   campaigns: MarketingCampaignReportItem[];
+}
+
+// ── 6. CANCELACIONES Y PROSPECTOS DESCARTADOS POR ASESOR ──
+export interface CancelledLeadItem {
+  leadId: string;
+  clientName: string;
+  phone: string;
+  phoneRaw?: string;
+  advisorId: string;
+  advisorName: string;
+  project?: string;
+  source?: string;
+  cancelledAt: number;
+  cancelledAtFormatted: string;
+  reason: string;
+  notes: string;
+  statusRaw?: string;
+}
+
+export interface AdvisorCancellationSummary {
+  advisorId: string;
+  advisorName: string;
+  totalCancelled: number;
+  items: CancelledLeadItem[];
+  topReasons: Array<{ reason: string; count: number }>;
+}
+
+export interface CancellationsReportData {
+  totalCancelled: number;
+  items: CancelledLeadItem[];
+  byAdvisor: AdvisorCancellationSummary[];
+  reasonsSummary: Array<{ reason: string; count: number; percentage: number }>;
+}
+
+// ── 7. VISITAS A TERRENO Y CITAS COMERCIALES POR ASESOR ──
+export interface AppointmentVisitReportItem {
+  id: string;
+  leadId: string;
+  clientName: string;
+  phone: string;
+  phoneRaw?: string;
+  advisorId: string;
+  advisorName: string;
+  project?: string;
+  type: 'visita' | 'cita';
+  typeLabel: string;
+  date: number;
+  dateFormatted: string;
+  status: string;
+  attended?: boolean;
+  notes: string;
+  result?: string;
+  nextAction?: string;
+  source?: string;
+}
+
+export interface AdvisorVisitsSummary {
+  advisorId: string;
+  advisorName: string;
+  totalVisitas: number;
+  totalCitas: number;
+  totalGestiones: number;
+  items: AppointmentVisitReportItem[];
+}
+
+export interface VisitsAppointmentsReportData {
+  totalVisitas: number;
+  totalCitas: number;
+  totalTotal: number;
+  items: AppointmentVisitReportItem[];
+  byAdvisor: AdvisorVisitsSummary[];
 }

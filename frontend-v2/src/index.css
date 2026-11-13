@@ -399,15 +399,24 @@ html.light .bg-green-400,
   background-color: #16a34a !important;
 }
 
+html.light .text-rose-100,
+html.light .text-rose-200,
 html.light .text-rose-300,
 html.light .text-rose-400,
-html.light .text-rose-200,
 html.light .text-red-400,
+[data-theme="light"] .text-rose-100,
+[data-theme="light"] .text-rose-200,
 [data-theme="light"] .text-rose-300,
 [data-theme="light"] .text-rose-400,
-[data-theme="light"] .text-rose-200,
 [data-theme="light"] .text-red-400 {
   color: #b91c1c !important;
+}
+
+html.light button.text-white,
+html.light a.text-white,
+[data-theme="light"] button.text-white,
+[data-theme="light"] a.text-white {
+  color: #ffffff !important;
 }
 
 html.light .bg-rose-500\/20,

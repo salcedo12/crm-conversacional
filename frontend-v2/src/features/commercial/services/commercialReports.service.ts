@@ -29,6 +29,12 @@ import type {
   MarketingAdvisorAssignment,
   MarketingCampaignReportItem,
   MarketingPeriodReportData,
+  CancelledLeadItem,
+  AdvisorCancellationSummary,
+  CancellationsReportData,
+  AppointmentVisitReportItem,
+  AdvisorVisitsSummary,
+  VisitsAppointmentsReportData,
 } from '../types/commercialReports.types';
 
 // Meses en español
@@ -314,6 +320,238 @@ function isExcludedNonAdvisorUser(id: string, u: any): boolean {
   const norm = normalizeStr(rawName);
   if (!norm || NON_ADVISOR_NORM_NAMES.has(norm)) return true;
   return false;
+}
+
+/**
+ * Normaliza y clasifica el motivo de descarte / cancelación en categorías
+ * ejecutivas estandarizadas para el informe comercial Meraki.
+ */
+export function cleanCancellationReason(act?: string, desc?: string, stage?: string, motivo?: string): string {
+  const combined = `${act || ''} ${desc || ''} ${stage || ''} ${motivo || ''}`.toLowerCase();
+  if (
+    combined.includes('presupuesto') ||
+    combined.includes('dinero') ||
+    combined.includes('costo') ||
+    combined.includes('caro') ||
+    combined.includes('no_interesado_dinero')
+  ) {
+    return 'Fuera de Presupuesto';
+  }
+  if (
+    combined.includes('ubicacion') ||
+    combined.includes('ubicación') ||
+    combined.includes('lejos') ||
+    combined.includes('zona') ||
+    combined.includes('no_interesado_ubicacion')
+  ) {
+    return 'No le Interesa la Ubicación';
+  }
+  if (combined.includes('proveedor') || combined.includes('ofreciendo servicio') || combined.includes('ofrecer servicio')) {
+    return 'Proveedor Ofreciendo Servicios';
+  }
+  if (combined.includes('trabajo') || combined.includes('empleo') || combined.includes('hoja de vida')) {
+    return 'Solicitud de Empleo';
+  }
+  if (
+    combined.includes('no solicito') ||
+    combined.includes('no solicitó') ||
+    combined.includes('equivocad') ||
+    combined.includes('no solicito informacion')
+  ) {
+    return 'No Solicitó Información / Equivocado';
+  }
+  if (combined.includes('otra area') || combined.includes('otra área') || combined.includes('diferente a comercial')) {
+    return 'Contacto para Otra Área (No Comercial)';
+  }
+  if (
+    combined.includes('no contesta') ||
+    combined.includes('no responde') ||
+    combined.includes('buzon') ||
+    combined.includes('dejo de contestar') ||
+    combined.includes('deja de responder')
+  ) {
+    return 'No Contesta tras Seguimiento';
+  }
+  if (combined.includes('desist')) {
+    return 'Desistimiento Personal';
+  }
+  if (act && act.includes('[NO INTERESADO]')) {
+    const after = act.split('[NO INTERESADO]')[1].replace(/[\]_]/g, '').trim();
+    if (after) {
+      return after.charAt(0).toUpperCase() + after.slice(1).toLowerCase();
+    }
+  }
+  if (motivo && motivo.trim() && !motivo.toLowerCase().includes('se agrega')) {
+    return motivo.trim();
+  }
+  return 'Descarte Comercial General';
+}
+
+/**
+ * Limpia y extrae la nota u observación real que escribió el asesor comercial
+ * retirando textos automáticos de sistema o marcadores de plantilla.
+ */
+export function cleanAdvisorWrittenNote(raw?: string): string {
+  if (!raw) return 'Descarte registrado sin comentarios adicionales.';
+  let cleaned = raw
+    .replace(/—\s*Próximo paso:\s*Sin Próximo Contacto.*$/i, '')
+    .replace(/Próximo paso:\s*Sin Próximo Contacto.*$/i, '')
+    .replace(/^Seguimiento Comercial:\s*\[NO INTERESADO\][^:]*:\s*/i, '')
+    .replace(/^Seguimiento Comercial:\s*[^:]*:\s*/i, '')
+    .replace(/^CITA PROGRAMADA IA:\s*Comercial\s*/i, '')
+    .replace(/^Movido a No Interesado:\s*/i, '')
+    .replace(/Se ha actualizado la información del prospecto\.\s*Atendido En:\s*WhatsApp/i, '')
+    .trim();
+
+  if (!cleaned || cleaned.toLowerCase() === 'cliente no interesado.') {
+    return raw.trim() || 'Descarte registrado (Sin Próximo Contacto).';
+  }
+  return cleaned;
+}
+
+/**
+ * Separa la nota u observación redactada por el asesor del próximo paso agendado
+ * (evita que un recordatorio o cita a futuro contamine la clasificación de la gestión actual).
+ */
+export function extractMainGestionNote(text?: string): { mainNote: string; nextStep: string } {
+  if (!text) return { mainNote: '', nextStep: '' };
+  const splitRegex = /\s*—?\s*(?:Próximo paso|Proximo paso|Next step):\s*/i;
+  const parts = text.split(splitRegex);
+  return {
+    mainNote: (parts[0] || '').trim(),
+    nextStep: (parts[1] || '').trim(),
+  };
+}
+
+/**
+ * Valida de forma estricta e inteligente si una gestión o bitácora
+ * corresponde a una VISITA REAL Y CONFIRMADA (a Terreno o Sala de Ventas)
+ * que efectivamente se llevó a cabo en el período, excluyendo llamadas,
+ * recordatorios, invitaciones y visitas agendadas a futuro.
+ */
+export function isConfirmedRealizedVisit(
+  actionRaw?: string,
+  descRaw?: string,
+  dateMillis?: number
+): { isConfirmed: boolean; visitType: 'terreno' | 'sala'; cleanNote: string } {
+  const act = (actionRaw || '').trim();
+  const desc = (descRaw || '').trim();
+  const { mainNote, nextStep } = extractMainGestionNote(desc);
+
+  const actLower = act.toLowerCase();
+  const descLower = desc.toLowerCase();
+  const mainLower = mainNote.toLowerCase();
+
+  // 1. Excluir si la fecha es futura (no se ha realizado aún)
+  if (dateMillis && dateMillis > Date.now() + 5 * 60 * 1000) {
+    return { isConfirmed: false, visitType: 'terreno', cleanNote: '' };
+  }
+
+  // 2. Excluir explícitamente no asistió (No-Show), cancelaciones, reprogramaciones
+  const isNegative =
+    actLower.includes('no asist') ||
+    actLower.includes('no-show') ||
+    actLower.includes('cancel') ||
+    actLower.includes('reprogram') ||
+    mainLower.includes('no asist') ||
+    mainLower.includes('no-show') ||
+    mainLower.includes('canceló') ||
+    mainLower.includes('cancelo') ||
+    mainLower.includes('reprogramó');
+
+  if (isNegative) {
+    return { isConfirmed: false, visitType: 'terreno', cleanNote: '' };
+  }
+
+  // 3. Criterio A: Acción explícita de visita realizada en Ficha Técnica CRM
+  // En Meraki FichaTecnica: actionType === 'visita_terreno' registra "Visita a Terreno: Asistió a sala de ventas / terreno"
+  const isExplicitVisitAction =
+    (actLower.includes('visita a terreno') ||
+      actLower.includes('visita sala') ||
+      actLower.includes('visita terreno') ||
+      actLower.includes('visita_terreno') ||
+      (actLower.startsWith('visita') && !actLower.includes('agend') && !actLower.includes('program')));
+
+  // 4. Criterio B: La nota u observación redactada por el asesor (SIN el próximo paso) confirma asistencia presencial
+  const hasPhysicalPresenceKeywords =
+    mainLower.includes('asistió a la visita') ||
+    mainLower.includes('asistio a la visita') ||
+    mainLower.includes('asistió a sala') ||
+    mainLower.includes('asistio a sala') ||
+    mainLower.includes('asistió al terreno') ||
+    mainLower.includes('asistio al terreno') ||
+    mainLower.includes('visitó la sala') ||
+    mainLower.includes('visito la sala') ||
+    mainLower.includes('visitó el terreno') ||
+    mainLower.includes('visito el terreno') ||
+    mainLower.includes('visitó el proyecto') ||
+    mainLower.includes('visito el proyecto') ||
+    mainLower.includes('recorrido en terreno') ||
+    mainLower.includes('recorrido del terreno') ||
+    mainLower.includes('recorrió el lote') ||
+    mainLower.includes('recorrio el lote') ||
+    mainLower.includes('estuvo en la sala') ||
+    mainLower.includes('estuvo en el terreno') ||
+    mainLower.includes('vino a la sala') ||
+    mainLower.includes('vino a conocer') ||
+    mainLower.includes('se atendió en sala') ||
+    mainLower.includes('se atendio en sala') ||
+    mainLower.includes('se atendió en terreno') ||
+    mainLower.includes('se atendio en terreno') ||
+    mainLower.includes('recorrimos el proyecto') ||
+    mainLower.includes('recorrido con el cliente');
+
+  // Si la nota solo indica invitación, propuesta, o llamada para agendar: NO es visita confirmada
+  const isFutureOrInvitationOnly =
+    mainLower.includes('se invita') ||
+    mainLower.includes('invita al evento') ||
+    mainLower.includes('se agend') ||
+    mainLower.includes('se program') ||
+    mainLower.includes('llamada de seguimiento') ||
+    mainLower.includes('llamada telefonica') ||
+    mainLower.includes('llamada telefónica') ||
+    mainLower.includes('se llama al cliente') ||
+    mainLower.includes('se contacta');
+
+  // Si es acción explícita de visita realizada O tiene confirmación física y NO es solo llamada/invitación
+  const isConfirmed =
+    (isExplicitVisitAction && !isFutureOrInvitationOnly) ||
+    (!isExplicitVisitAction && hasPhysicalPresenceKeywords && !isFutureOrInvitationOnly);
+
+  if (!isConfirmed) {
+    return { isConfirmed: false, visitType: 'terreno', cleanNote: '' };
+  }
+
+  const isSala = actLower.includes('sala') || mainLower.includes('sala');
+  const visitType: 'terreno' | 'sala' = isSala ? 'sala' : 'terreno';
+
+  const cleanNote = mainNote || cleanAdvisorWrittenNote(desc || act);
+  return { isConfirmed: true, visitType, cleanNote };
+}
+
+/**
+ * Parsea el campo description estructurado de una cita o recordatorio
+ * para extraer las notas escritas por el asesor, el proyecto y la acción.
+ */
+export function parseAppointmentDescription(desc?: string): { notes: string; project?: string; action?: string } {
+  let notes = '';
+  let project = '';
+  let action = '';
+  if (!desc) return { notes, project, action };
+
+  const notesMatch = desc.match(/📝\s*Notas:\s*([\s\S]*?)(?=\nAsesor responsable:|\n\nAgendado|$)/i);
+  if (notesMatch) notes = notesMatch[1].trim();
+
+  const projMatch = desc.match(/🏢\s*Proyecto:\s*(.*?)(?=\n|$)/i);
+  if (projMatch) project = projMatch[1].trim();
+
+  const actMatch = desc.match(/🎯\s*Acción:\s*(.*?)(?=\n|$)/i);
+  if (actMatch) action = actMatch[1].trim();
+
+  if (!notes) {
+    notes = desc.replace(/Agendado desde CRM.*$/i, '').trim();
+  }
+  return { notes, project, action };
 }
 
 export interface CompileReportOptions {
@@ -2028,6 +2266,376 @@ export async function compileCommercialReportData(
     campaigns: campaignsArray,
   };
 
+  // ── 9b. CONSULTAR CITAS Y VISITAS DESDE COLECCIÓN APPOINTMENTS ──
+  let appointmentsStartSnap: any = { docs: [] };
+  let appointmentsCreatedSnap: any = { docs: [] };
+  try {
+    appointmentsStartSnap = await getDocs(
+      query(
+        collection(db, 'companies', companyId, 'appointments'),
+        where('startTime', '>=', startTs),
+        where('startTime', '<=', endTs)
+      )
+    );
+  } catch (err) {
+    console.warn('[CommercialReports] Fallback appointments por startTime:', err);
+  }
+
+  try {
+    appointmentsCreatedSnap = await getDocs(
+      query(
+        collection(db, 'companies', companyId, 'appointments'),
+        where('createdAt', '>=', startTs),
+        where('createdAt', '<=', endTs)
+      )
+    );
+  } catch (err) {
+    console.warn('[CommercialReports] Fallback appointments por createdAt:', err);
+  }
+
+  const rawAppointmentsMap = new Map<string, any>();
+  appointmentsStartSnap.docs.forEach((d: any) => rawAppointmentsMap.set(d.id, { id: d.id, ...d.data() }));
+  appointmentsCreatedSnap.docs.forEach((d: any) => {
+    if (!rawAppointmentsMap.has(d.id)) {
+      rawAppointmentsMap.set(d.id, { id: d.id, ...d.data() });
+    }
+  });
+
+  const rawVisitsAppointments: AppointmentVisitReportItem[] = [];
+  const seenApptKeys = new Set<string>();
+
+  for (const [apptId, appt] of rawAppointmentsMap.entries()) {
+    // Descartar recordatorios internos automáticos generados por fichas técnicas
+    if (appt.isInternalReminder || appt.source === 'ficha_tecnica') continue;
+
+    const sDate = parseDateAny(appt.startTime) || parseDateAny(appt.createdAt);
+    if (!sDate) continue;
+    if (sDate < startPeriod || sDate > endPeriod) continue;
+    // Si la fecha es futura, no se ha realizado
+    if (sDate.getTime() > Date.now() + 5 * 60 * 1000) continue;
+
+    const titleLower = (appt.title || '').toLowerCase();
+    const descLower = (appt.description || '').toLowerCase();
+    const isVisita =
+      appt.modality === 'visita_terreno' ||
+      titleLower.includes('visita a terreno') ||
+      titleLower.includes('visita sala') ||
+      titleLower.includes('visita proyecto') ||
+      descLower.includes('visita a terreno');
+
+    if (!isVisita) continue;
+
+    const isCompleted =
+      appt.status === 'completed' ||
+      titleLower.includes('asistió') ||
+      titleLower.includes('asistio') ||
+      descLower.includes('asistió') ||
+      descLower.includes('asistio') ||
+      descLower.includes('realizada');
+
+    if (!isCompleted || appt.status === 'canceled' || titleLower.includes('no asist')) continue;
+
+    const resolvedAdv = resolveAdvisor(appt.advisorId);
+    const advId = resolvedAdv ? resolvedAdv.id : (appt.advisorId || 'unassigned');
+    const advName = resolvedAdv ? resolvedAdv.name : 'Asesor';
+
+    const parsed = parseAppointmentDescription(appt.description);
+    const cleanClientPhone = cleanDigits(appt.leadPhone);
+    const clientName = appt.leadName || 'Cliente sin nombre';
+    const project = appt.project || parsed.project || 'Proyecto Meraki';
+
+    const isSala = titleLower.includes('sala') || descLower.includes('sala');
+    const typeLabel = isSala ? 'Visita Sala de Ventas' : 'Visita a Terreno';
+
+    const apptKey = `${cleanClientPhone || appt.leadId || apptId}_visita_${formatDateBogota(sDate)}`;
+    if (seenApptKeys.has(apptKey)) continue;
+    seenApptKeys.add(apptKey);
+
+    rawVisitsAppointments.push({
+      id: apptId,
+      leadId: appt.leadId || apptId,
+      clientName,
+      phone: appt.leadPhone || 'Sin teléfono',
+      phoneRaw: cleanClientPhone,
+      advisorId: advId,
+      advisorName: advName,
+      project,
+      type: 'visita',
+      typeLabel,
+      date: sDate.getTime(),
+      dateFormatted: formatDateBogotaTime(sDate),
+      status: 'Confirmada / Realizada',
+      attended: true,
+      notes: parsed.notes || appt.title || 'Visita presencial confirmada',
+      result: parsed.action || undefined,
+      nextAction: appt.title,
+      source: 'Agenda CRM Confirmada',
+    });
+  }
+
+  // Complementar con bitácoras de los leads únicos
+  for (const [leadDocId, lead] of uniqueLeadsMap.entries()) {
+    const rawBits = [
+      ...(Array.isArray(lead.bitacoras) ? lead.bitacoras : []),
+      ...(Array.isArray(lead.metadata?.smarthomeBitacoras) ? lead.metadata.smarthomeBitacoras : []),
+    ];
+
+    const cleanLeadPhone = cleanDigits(lead.phone || lead.normalizedPhone);
+    const clientName = lead.name || lead.fullName || 'Cliente sin registrar';
+    const project =
+      lead.project ||
+      lead.metadata?.['¿qué_proyecto_te_interesa_más?'] ||
+      lead.metadata?.loteInteres ||
+      lead.metadata?.proyecto ||
+      'Proyecto Meraki';
+
+    for (const b of rawBits) {
+      const bDateStr = b.fecha || b.date || b.lastDate;
+      if (!bDateStr) continue;
+      const bDate = parseDateAny(bDateStr);
+      if (!bDate || bDate < startPeriod || bDate > endPeriod) continue;
+
+      const check = isConfirmedRealizedVisit(b.action, b.description, bDate.getTime());
+      if (!check.isConfirmed) continue;
+
+      const type: 'visita' | 'cita' = 'visita';
+      const typeLabel = check.visitType === 'sala' ? 'Visita Sala de Ventas' : 'Visita a Terreno';
+
+      const apptKey = `${cleanLeadPhone || leadDocId}_visita_${formatDateBogota(bDate)}`;
+      if (seenApptKeys.has(apptKey)) continue;
+      seenApptKeys.add(apptKey);
+
+      const resolvedAdv = resolveAdvisor(b.asesor || lead.assignedTo || lead.smartHomeAdvisorName);
+      const advId = resolvedAdv ? resolvedAdv.id : (lead.assignedTo || 'unassigned');
+      const advName = resolvedAdv ? resolvedAdv.name : (b.asesor || 'Asesor');
+
+      rawVisitsAppointments.push({
+        id: `bit_${leadDocId}_${bDate.getTime()}`,
+        leadId: leadDocId,
+        clientName,
+        phone: lead.phone || lead.normalizedPhone || 'Sin teléfono',
+        phoneRaw: cleanLeadPhone,
+        advisorId: advId,
+        advisorName: advName,
+        project,
+        type,
+        typeLabel,
+        date: bDate.getTime(),
+        dateFormatted: formatDateBogotaTime(bDate),
+        status: 'Confirmada / Realizada',
+        attended: true,
+        notes: check.cleanNote,
+        result: b.action,
+        source: 'Bitácora CRM / Ficha Técnica',
+      });
+    }
+  }
+
+  rawVisitsAppointments.sort((a, b) => b.date - a.date);
+
+  // ── 9c. CONSULTAR CANCELACIONES Y PROSPECTOS DESCARTADOS EN EL PERÍODO ──
+  const rawCancellations: CancelledLeadItem[] = [];
+  const seenCancelLeadIds = new Set<string>();
+
+  for (const [leadDocId, lead] of uniqueLeadsMap.entries()) {
+    const rawBits = [
+      ...(Array.isArray(lead.bitacoras) ? lead.bitacoras : []),
+      ...(Array.isArray(lead.metadata?.smarthomeBitacoras) ? lead.metadata.smarthomeBitacoras : []),
+    ];
+
+    const cleanLeadPhone = cleanDigits(lead.phone || lead.normalizedPhone);
+    const clientName = lead.name || lead.fullName || 'Cliente sin registrar';
+    const project =
+      lead.project ||
+      lead.metadata?.['¿qué_proyecto_te_interesa_más?'] ||
+      lead.metadata?.loteInteres ||
+      lead.metadata?.proyecto ||
+      'Proyecto Meraki';
+    const source = lead.source || lead.metadata?.fuente || 'Sin Fuente';
+
+    let foundBitacoraCancel = false;
+
+    for (const b of rawBits) {
+      const bDateStr = b.fecha || b.date || b.lastDate;
+      if (!bDateStr) continue;
+      const bDate = parseDateAny(bDateStr);
+      if (!bDate || bDate < startPeriod || bDate > endPeriod) continue;
+
+      const bAct = (b.action || '').trim();
+      const bDesc = (b.description || '').trim();
+      const bActLower = bAct.toLowerCase();
+      const bDescLower = bDesc.toLowerCase();
+
+      const isCancelAction =
+        bActLower.includes('no interesado') ||
+        bActLower.includes('no_interesado') ||
+        bActLower.includes('descarte') ||
+        bActLower.includes('desist') ||
+        bActLower.includes('cancel') ||
+        bActLower.includes('no le interesa') ||
+        bDescLower.includes('no interesado') ||
+        bDescLower.includes('sin próximo contacto (no interesado)') ||
+        bDescLower.includes('desist');
+
+      if (!isCancelAction) continue;
+
+      const cancelKey = cleanLeadPhone || leadDocId;
+      if (seenCancelLeadIds.has(cancelKey)) continue;
+      seenCancelLeadIds.add(cancelKey);
+
+      foundBitacoraCancel = true;
+      const resolvedAdv = resolveAdvisor(b.asesor || lead.assignedTo || lead.smartHomeAdvisorName);
+      const advId = resolvedAdv ? resolvedAdv.id : (lead.assignedTo || 'unassigned');
+      const advName = resolvedAdv ? resolvedAdv.name : (b.asesor || 'Asesor');
+
+      const reason = cleanCancellationReason(bAct, bDesc, lead.pipelineStage, lead.motivoDesistimiento);
+      const notes = cleanAdvisorWrittenNote(bDesc || bAct);
+
+      rawCancellations.push({
+        leadId: leadDocId,
+        clientName,
+        phone: lead.phone || lead.normalizedPhone || 'Sin teléfono',
+        phoneRaw: cleanLeadPhone,
+        advisorId: advId,
+        advisorName: advName,
+        project,
+        source,
+        cancelledAt: bDate.getTime(),
+        cancelledAtFormatted: formatDateBogotaTime(bDate),
+        reason,
+        notes,
+        statusRaw: bAct,
+      });
+      break;
+    }
+
+    if (!foundBitacoraCancel) {
+      const st = String(lead.pipelineStage || lead.status || '').toLowerCase();
+      if (st.includes('no_interes') || st.includes('desist') || st.includes('lost') || st.includes('cancel')) {
+        const lfu = parseDateAny(lead.lastFollowUpAt || lead.updatedAt);
+        if (lfu && lfu >= startPeriod && lfu <= endPeriod) {
+          const cancelKey = cleanLeadPhone || leadDocId;
+          if (!seenCancelLeadIds.has(cancelKey)) {
+            seenCancelLeadIds.add(cancelKey);
+            const resolvedAdv = resolveAdvisor(lead.lastFollowUpAuthor || lead.assignedTo || lead.smartHomeAdvisorName);
+            const advId = resolvedAdv ? resolvedAdv.id : (lead.assignedTo || 'unassigned');
+            const advName = resolvedAdv ? resolvedAdv.name : (lead.lastFollowUpAuthor || 'Asesor');
+
+            const reason = cleanCancellationReason(
+              lead.lastFollowUpAction,
+              lead.lastFollowUpSummary,
+              lead.pipelineStage,
+              lead.motivoDesistimiento
+            );
+            const notes = cleanAdvisorWrittenNote(lead.lastFollowUpSummary || lead.lastFollowUpAction || 'Descarte registrado en ficha');
+
+            rawCancellations.push({
+              leadId: leadDocId,
+              clientName,
+              phone: lead.phone || lead.normalizedPhone || 'Sin teléfono',
+              phoneRaw: cleanLeadPhone,
+              advisorId: advId,
+              advisorName: advName,
+              project,
+              source,
+              cancelledAt: lfu.getTime(),
+              cancelledAtFormatted: formatDateBogotaTime(lfu),
+              reason,
+              notes,
+              statusRaw: lead.pipelineStage || lead.status,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  rawCancellations.sort((a, b) => b.cancelledAt - a.cancelledAt);
+
+  // Agrupar Cancelaciones por Asesor
+  const cancellationsByAdvisorMap = new Map<string, CancelledLeadItem[]>();
+  rawCancellations.forEach((item) => {
+    if (!cancellationsByAdvisorMap.has(item.advisorId)) {
+      cancellationsByAdvisorMap.set(item.advisorId, []);
+    }
+    cancellationsByAdvisorMap.get(item.advisorId)!.push(item);
+  });
+
+  const cancellationsByAdvisor: AdvisorCancellationSummary[] = advisorRows.map((adv) => {
+    const items = cancellationsByAdvisorMap.get(adv.advisorId) || [];
+    const reasonCounts: Record<string, number> = {};
+    items.forEach((it) => {
+      reasonCounts[it.reason] = (reasonCounts[it.reason] || 0) + 1;
+    });
+    const topReasons = Object.entries(reasonCounts)
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      advisorId: adv.advisorId,
+      advisorName: adv.advisorName,
+      totalCancelled: items.length,
+      items,
+      topReasons,
+    };
+  }).sort((a, b) => b.totalCancelled - a.totalCancelled);
+
+  const allReasonsCount: Record<string, number> = {};
+  rawCancellations.forEach((it) => {
+    allReasonsCount[it.reason] = (allReasonsCount[it.reason] || 0) + 1;
+  });
+  const reasonsSummary = Object.entries(allReasonsCount)
+    .map(([reason, count]) => ({
+      reason,
+      count,
+      percentage: rawCancellations.length > 0 ? Math.round((count / rawCancellations.length) * 100) : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const cancellationsReport: CancellationsReportData = {
+    totalCancelled: rawCancellations.length,
+    items: rawCancellations,
+    byAdvisor: cancellationsByAdvisor,
+    reasonsSummary,
+  };
+
+  // Agrupar Visitas y Citas por Asesor
+  const visitsByAdvisorMap = new Map<string, AppointmentVisitReportItem[]>();
+  rawVisitsAppointments.forEach((item) => {
+    if (!visitsByAdvisorMap.has(item.advisorId)) {
+      visitsByAdvisorMap.set(item.advisorId, []);
+    }
+    visitsByAdvisorMap.get(item.advisorId)!.push(item);
+  });
+
+  let totalGlobalTerreno = 0;
+  let totalGlobalSala = 0;
+
+  const visitsByAdvisor: AdvisorVisitsSummary[] = advisorRows.map((adv) => {
+    const items = visitsByAdvisorMap.get(adv.advisorId) || [];
+    const visitasTerreno = items.filter((x) => x.typeLabel.toLowerCase().includes('terreno')).length;
+    const visitasSala = items.filter((x) => x.typeLabel.toLowerCase().includes('sala')).length;
+    totalGlobalTerreno += visitasTerreno;
+    totalGlobalSala += visitasSala;
+
+    return {
+      advisorId: adv.advisorId,
+      advisorName: adv.advisorName,
+      totalVisitas: visitasTerreno,
+      totalCitas: visitasSala,
+      totalGestiones: items.length,
+      items,
+    };
+  }).sort((a, b) => b.totalGestiones - a.totalGestiones);
+
+  const visitsAppointmentsReport: VisitsAppointmentsReportData = {
+    totalVisitas: totalGlobalTerreno,
+    totalCitas: totalGlobalSala,
+    totalTotal: rawVisitsAppointments.length,
+    items: rawVisitsAppointments,
+    byAdvisor: visitsByAdvisor,
+  };
+
   // ════════════════════════════════════════════════════════════════════════════
   // FILTRADO ESTRICTO INDIVIDUAL (SI EL REPORTE ES PARA UN ASESOR ESPECÍFICO)
   // ════════════════════════════════════════════════════════════════════════════
@@ -2057,6 +2665,8 @@ export async function compileCommercialReportData(
   let finalDataQuality = dataQuality;
   let finalDailyActivities = dailyActivities;
   let finalMarketingReport: MarketingPeriodReportData | undefined = marketingReport;
+  let finalCancellationsReport = cancellationsReport;
+  let finalVisitsAppointmentsReport = visitsAppointmentsReport;
 
   if (isIndividual) {
     const singleRow = advisorRows.find(
@@ -2247,6 +2857,61 @@ export async function compileCommercialReportData(
         campaigns: indCampaigns,
       };
     }
+
+    // Filtrar cancelaciones para el asesor individual
+    const indCancellations = rawCancellations.filter(
+      (c) => c.advisorId === targetAdvisorId || isAdvisorMatch(c.advisorName, targetAdvisorName)
+    );
+    const indReasonsCount: Record<string, number> = {};
+    indCancellations.forEach((it) => {
+      indReasonsCount[it.reason] = (indReasonsCount[it.reason] || 0) + 1;
+    });
+    const indReasonsSummary = Object.entries(indReasonsCount)
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        percentage: indCancellations.length > 0 ? Math.round((count / indCancellations.length) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    finalCancellationsReport = {
+      totalCancelled: indCancellations.length,
+      items: indCancellations,
+      byAdvisor: [
+        {
+          advisorId: targetAdvisorId,
+          advisorName: targetAdvisorName,
+          totalCancelled: indCancellations.length,
+          items: indCancellations,
+          topReasons: indReasonsSummary.map((x) => ({ reason: x.reason, count: x.count })),
+        },
+      ],
+      reasonsSummary: indReasonsSummary,
+    };
+
+    // Filtrar visitas y citas para el asesor individual
+    const indVisits = rawVisitsAppointments.filter(
+      (v) => v.advisorId === targetAdvisorId || isAdvisorMatch(v.advisorName, targetAdvisorName)
+    );
+    const indTerrenoCount = indVisits.filter((x) => x.typeLabel.toLowerCase().includes('terreno')).length;
+    const indSalaCount = indVisits.filter((x) => x.typeLabel.toLowerCase().includes('sala')).length;
+
+    finalVisitsAppointmentsReport = {
+      totalVisitas: indTerrenoCount,
+      totalCitas: indSalaCount,
+      totalTotal: indVisits.length,
+      items: indVisits,
+      byAdvisor: [
+        {
+          advisorId: targetAdvisorId,
+          advisorName: targetAdvisorName,
+          totalVisitas: indTerrenoCount,
+          totalCitas: indSalaCount,
+          totalGestiones: indVisits.length,
+          items: indVisits,
+        },
+      ],
+    };
   }
 
   const finalTitle = isIndividual
@@ -2304,6 +2969,8 @@ export async function compileCommercialReportData(
     capturedBySource: finalCapturedBySource,
     dataQuality: finalDataQuality,
     marketingReport: finalMarketingReport,
+    cancellationsReport: finalCancellationsReport,
+    visitsAppointmentsReport: finalVisitsAppointmentsReport,
     isIndividualReport: isIndividual,
     targetAdvisorName: isIndividual ? targetAdvisorName : undefined,
     allAdvisorsList: (() => {
@@ -2497,11 +3164,36 @@ export function exportReportToCsv(reportData: CommercialExecutiveReportData): vo
   }
   lines.push('');
 
-  // 4. Puntos de atención
-  lines.push('"4. PUNTOS DE ATENCIÓN"');
+  // 5. Puntos de atención
+  lines.push('"5. PUNTOS DE ATENCIÓN"');
   reportData.attentionPoints.forEach((p) => {
     lines.push(`"${p.advisorName}","${p.text.replace(/"/g, '""')}"`);
   });
+  lines.push('');
+
+  // 6. Cancelaciones y Prospectos Descartados
+  if (reportData.cancellationsReport && reportData.cancellationsReport.items.length > 0) {
+    lines.push('"6. CANCELACIONES Y PROSPECTOS DESCARTADOS DEL PERIODO"');
+    lines.push('"Fecha","Asesor","Cliente","Teléfono","Proyecto","Motivo Descarte","Observaciones / Notas del Asesor"');
+    reportData.cancellationsReport.items.forEach((c) => {
+      lines.push(
+        `"${c.cancelledAtFormatted}","${c.advisorName}","${c.clientName}","${c.phone}","${c.project || 'Sin Proyecto'}","${c.reason}","${c.notes.replace(/"/g, '""')}"`
+      );
+    });
+    lines.push('');
+  }
+
+  // 7. Visitas a Terreno y Citas Comerciales
+  if (reportData.visitsAppointmentsReport && reportData.visitsAppointmentsReport.items.length > 0) {
+    lines.push('"7. VISITAS A TERRENO Y CITAS COMERCIALES DEL PERIODO"');
+    lines.push('"Fecha","Asesor","Cliente","Teléfono","Proyecto","Tipo de Gestión","Estado","Lo que Escribió el Asesor en Ficha Técnica"');
+    reportData.visitsAppointmentsReport.items.forEach((v) => {
+      lines.push(
+        `"${v.dateFormatted}","${v.advisorName}","${v.clientName}","${v.phone}","${v.project || 'Sin Proyecto'}","${v.typeLabel}","${v.status}","${v.notes.replace(/"/g, '""')}"`
+      );
+    });
+    lines.push('');
+  }
 
   const csvContent = '\uFEFF' + lines.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -2554,11 +3246,35 @@ export function formatReportForWhatsApp(reportData: CommercialExecutiveReportDat
     text += `\n`;
   }
 
-  text += `*4. PUNTOS DE ATENCIÓN CLAVE*\n`;
+  text += `*5. PUNTOS DE ATENCIÓN CLAVE*\n`;
   reportData.attentionPoints.slice(0, 4).forEach((p) => {
     text += `▪️ *${p.advisorName}:* ${p.text}\n`;
   });
   text += `\n`;
+
+  if (reportData.cancellationsReport && reportData.cancellationsReport.totalCancelled > 0) {
+    text += `*6. CANCELACIONES & DESCARTES DEL PERÍODO (${reportData.cancellationsReport.totalCancelled})*\n`;
+    reportData.cancellationsReport.byAdvisor
+      .filter((a) => a.totalCancelled > 0)
+      .slice(0, 5)
+      .forEach((a) => {
+        const topR = a.topReasons[0] ? ` (Motivo: ${a.topReasons[0].reason})` : '';
+        text += `❌ *${a.advisorName}:* ${a.totalCancelled} descartados${topR}\n`;
+      });
+    text += `\n`;
+  }
+
+  if (reportData.visitsAppointmentsReport && reportData.visitsAppointmentsReport.totalTotal > 0) {
+    const va = reportData.visitsAppointmentsReport;
+    text += `*7. VISITAS & CITAS DEL PERÍODO (${va.totalVisitas} visitas a terreno | ${va.totalCitas} citas)*\n`;
+    va.byAdvisor
+      .filter((a) => a.totalGestiones > 0)
+      .slice(0, 5)
+      .forEach((a) => {
+        text += `🏡 *${a.advisorName}:* ${a.totalVisitas} visitas a terreno / sala | ${a.totalCitas} citas comerciales\n`;
+      });
+    text += `\n`;
+  }
 
   text += `_Grupo Constructor Meraki — "Nunca nos cansaremos de mejorar para ti."_`;
   return text;
