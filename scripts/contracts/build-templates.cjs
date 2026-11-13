@@ -181,6 +181,115 @@ function checkWellFormed(name, xml) {
   if (stack.length) throw new Error(`${name}: XML roto, quedaron etiquetas sin cerrar`);
 }
 
+const BANNER_PREVENTA = path.join(__dirname, 'moderno', 'banner-preventa.png');
+
+function configurePreventaHeaders(zip) {
+  if (fs.existsSync(BANNER_PREVENTA)) {
+    zip.file('word/media/banner-preventa.png', fs.readFileSync(BANNER_PREVENTA));
+  }
+  let contentTypes = zip.file('[Content_Types].xml').asText();
+  if (!contentTypes.includes('Extension="png"')) {
+    contentTypes = contentTypes.replace('<Types', '<Types><Default Extension="png" ContentType="image/png"/>');
+  }
+  if (!contentTypes.includes('/word/header2.xml')) {
+    contentTypes = contentTypes.replace('</Types>', '<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>');
+  }
+  zip.file('[Content_Types].xml', contentTypes);
+
+  // Vaciar header1.xml para que las páginas 2 en adelante no lleven encabezado
+  const emptyHdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p>' +
+    '</w:hdr>';
+  zip.file('word/header1.xml', emptyHdr);
+
+  // header2.xml con el banner de preventa solo para la primera hoja
+  const header2Xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<w:hdr xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" mc:Ignorable="w14 w15 wp14">' +
+    '<w:p w14:paraId="75B33CB6" w14:textId="77777777" w:rsidR="000D1F05" w:rsidRDefault="00000000">' +
+    '<w:pPr>' +
+    '<w:pBdr><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:between w:val="nil"/></w:pBdr>' +
+    '<w:tabs><w:tab w:val="center" w:pos="4419"/><w:tab w:val="right" w:pos="8838"/></w:tabs>' +
+    '<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>' +
+    '<w:jc w:val="center"/>' +
+    '<w:rPr><w:color w:val="000000"/></w:rPr>' +
+    '</w:pPr>' +
+    '<w:r>' +
+    '<w:rPr><w:noProof/></w:rPr>' +
+    '<w:drawing>' +
+    '<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" hidden="0" allowOverlap="1" wp14:anchorId="19E8B95D" wp14:editId="101BC217">' +
+    '<wp:simplePos x="0" y="0"/>' +
+    '<wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>' +
+    '<wp:positionV relativeFrom="paragraph"><wp:posOffset>-28225</wp:posOffset></wp:positionV>' +
+    '<wp:extent cx="5850890" cy="691240"/>' +
+    '<wp:effectExtent l="0" t="0" r="0" b="0"/>' +
+    '<wp:wrapSquare wrapText="bothSides" distT="0" distB="0" distL="114300" distR="114300"/>' +
+    '<wp:docPr id="101" name="banner-preventa.png"/>' +
+    '<wp:cNvGraphicFramePr/>' +
+    '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+    '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+    '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+    '<pic:nvPicPr><pic:cNvPr id="0" name="banner-preventa.png"/><pic:cNvPicPr preferRelativeResize="0"/></pic:nvPicPr>' +
+    '<pic:blipFill><a:blip r:embed="rId1"/><a:srcRect/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+    '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="5850890" cy="691240"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln/></pic:spPr>' +
+    '</pic:pic>' +
+    '</a:graphicData>' +
+    '</a:graphic>' +
+    '</wp:anchor>' +
+    '</w:drawing>' +
+    '</w:r>' +
+    '</w:p>' +
+    '</w:hdr>';
+  zip.file('word/header2.xml', header2Xml);
+
+  const header2Rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/banner-preventa.png"/>' +
+    '</Relationships>';
+  zip.file('word/_rels/header2.xml.rels', header2Rels);
+
+  let docRels = zip.file('word/_rels/document.xml.rels').asText();
+  if (!docRels.includes('Target="header2.xml"')) {
+    docRels = docRels.replace('</Relationships>', '<Relationship Id="rId14" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/></Relationships>');
+    zip.file('word/_rels/document.xml.rels', docRels);
+  }
+
+  let docXml = zip.file('word/document.xml').asText();
+  docXml = docXml.replace(/<w:sectPr(\b[^>]*)>([\s\S]*?)<\/w:sectPr>/, (match, attrs, body) => {
+    let clean = body.replace(/<w:headerReference[^>]*\/>/g, '')
+                    .replace(/<w:footerReference[^>]*\/>/g, '')
+                    .replace(/<w:titlePg[^>]*\/>/g, '');
+    const headers = '<w:headerReference w:type="default" r:id="rId10"/>' +
+                    '<w:headerReference w:type="first" r:id="rId14"/>' +
+                    '<w:footerReference w:type="default" r:id="rId11"/>' +
+                    '<w:footerReference w:type="first" r:id="rId11"/>';
+    return `<w:sectPr${attrs}>${headers}${clean}<w:titlePg/></w:sectPr>`;
+  });
+  zip.file('word/document.xml', docXml);
+}
+
+function configurePromesaHeaders(zip) {
+  const emptyHdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p>' +
+    '</w:hdr>';
+  zip.file('word/header1.xml', emptyHdr);
+  zip.file('word/header3.xml', emptyHdr);
+
+  let docXml = zip.file('word/document.xml').asText();
+  docXml = docXml.replace(/<w:sectPr(\b[^>]*)>([\s\S]*?)<\/w:sectPr>/, (match, attrs, body) => {
+    let clean = body.replace(/<w:headerReference[^>]*\/>/g, '')
+                    .replace(/<w:footerReference[^>]*\/>/g, '')
+                    .replace(/<w:titlePg[^>]*\/>/g, '');
+    const headers = '<w:headerReference w:type="default" r:id="rId12"/>' +
+                    '<w:headerReference w:type="first" r:id="rId11"/>' +
+                    '<w:footerReference w:type="default" r:id="rId15"/>' +
+                    '<w:footerReference w:type="first" r:id="rId15"/>';
+    return `<w:sectPr${attrs}>${headers}${clean}<w:titlePg/></w:sectPr>`;
+  });
+  zip.file('word/document.xml', docXml);
+}
+
 function build(src, outName, convert) {
   const zip = new PizZip(fs.readFileSync(src));
   let xml = convert(zip.file('word/document.xml').asText());
@@ -196,6 +305,11 @@ function build(src, outName, convert) {
   xml = xml.replace(/ w14:(?:paraId|textId)="[^"]*"/g, '');
   checkWellFormed(outName, xml);
   zip.file('word/document.xml', xml);
+  if (outName === 'preventa-2026.docx') {
+    configurePreventaHeaders(zip);
+  } else if (outName === 'promesa-2026.docx') {
+    configurePromesaHeaders(zip);
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const out = path.join(OUT_DIR, outName);
   fs.writeFileSync(out, zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));

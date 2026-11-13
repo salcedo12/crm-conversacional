@@ -34,6 +34,17 @@ function configureSeparationRows(xml) {
 }
 
 function convertPromesa(xml) {
+  // ── Pre-título: elimina Grupo 3 e image1.jpg del cuerpo para que el banner esté solo en el encabezado de la primera hoja ──
+  const titleText = 'CONTRATO DE PROMESA DE COMPRAVENTA';
+  const titleIdx = xml.indexOf(titleText);
+  if (titleIdx >= 0) {
+    const bodyStart = xml.indexOf('<w:body>') + 8;
+    const titleParaStart = xml.lastIndexOf('<w:p ', titleIdx);
+    if (titleParaStart > bodyStart) {
+      xml = xml.slice(0, bodyStart) + xml.slice(titleParaStart);
+    }
+  }
+
   // ── Tablas ──
   xml = setCellText(xml, 0, 0, 1, '{nombreCompleto}');               // compradores
   xml = setCellText(xml, 0, 1, 0, '{etiquetaId}:');
