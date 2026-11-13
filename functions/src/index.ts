@@ -59,7 +59,7 @@ export {
   getDealLotStatus,
 } from './http/dealLots.function';
 export { getDealPriceOptions, saveDealPlan } from './http/dealPlan.function';
-export { generateDealDocument, downloadDealDocument } from './http/dealDocuments.function';
+export { generateDealDocument, downloadDealDocument, deleteDealDocument } from './http/dealDocuments.function';
 export {
   getDealSignatureOptions,
   sendDealToSignature,

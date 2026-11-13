@@ -8,6 +8,7 @@ export type DealActivityEvent =
   | 'lot_released'
   | 'plan_saved'
   | 'document_generated'
+  | 'document_deleted'
   | 'attachment_uploaded'
   | 'attachment_deleted'
   | 'cancelled'

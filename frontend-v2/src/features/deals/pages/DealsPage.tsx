@@ -9,6 +9,7 @@ import { isAdminRole } from '@/features/auth/types';
 import {
   DEAL_STATUS_LABELS,
   deleteDealAttachment,
+  deleteDealDocument,
   downloadDealAttachment,
   downloadDealDocument,
   fetchDealDocumentPdf,
@@ -554,6 +555,23 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
     finally { setDownloadingDocument(null); }
   };
 
+  const handleDeleteDocument = async (kind: DealDocumentKind, version: number) => {
+    const label = `${kind === 'preventa' ? 'el Contrato de preventa' : 'la Promesa de compraventa'} v${version}`;
+    if (!window.confirm(`¿Seguro que deseas eliminar ${label}? Esta acción no se puede deshacer.`)) return;
+    const key = `del-${kind}-${version}`;
+    setDownloadingDocument(key); setError(null);
+    try {
+      await deleteDealDocument(companyId, deal.id, kind, version);
+      const remainingDocs = (deal.documents ?? []).filter((d) => !(d.kind === kind && d.version === version));
+      onChanged({ ...deal, documents: remainingDocs, updatedAt: Date.now() });
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo eliminar el documento.');
+    } finally {
+      setDownloadingDocument(null);
+    }
+  };
+
   return (
     <div className="deal-touch fixed inset-0 z-50 flex items-stretch justify-center bg-black/75 sm:items-center sm:p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       {preview && <DealDocumentPreview title={preview.title} pdf={preview.pdf} onDownloadWord={isAdmin ? () => downloadDealDocument(companyId, deal.id, preview.kind, preview.version) : undefined} onClose={() => setPreview(null)} />}
@@ -648,6 +666,17 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
                           className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
                         >
                           {downloadingDocument === `${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Word
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteDocument(document.kind, document.version)}
+                          disabled={downloadingDocument === `del-${document.kind}-${document.version}`}
+                          title="Eliminar este contrato"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-400 hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+                        >
+                          {downloadingDocument === `del-${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Borrar
                         </button>
                       )}
                     </div>

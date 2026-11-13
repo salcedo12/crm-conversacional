@@ -230,3 +230,74 @@ export const downloadDealDocument = onCall({ region: 'us-central1', timeoutSecon
   const [buffer] = await bucket.file(doc.docxStoragePath).download();
   return { fileName: name, mimeType: DOCX_MIME, base64: buffer.toString('base64') };
 });
+
+const DeleteDocumentSchema = z.object({
+  companyId: z.string().min(1),
+  dealId:    z.string().min(1),
+  kind:      z.enum(['preventa', 'promesa']),
+  version:   z.number().int().min(1),
+});
+
+/**
+ * Permite a un administrador eliminar una versión de preventa o promesa de un negocio.
+ * Borra los archivos asociados en Storage (Word, JSON, PDF) y actualiza el array de documentos.
+ */
+export const deleteDealDocument = onCall({ region: 'us-central1', timeoutSeconds: 60, memory: '512MiB' }, async (request) => {
+  const ctx = requireAuth(request);
+  requireRole(ctx, ADMIN_ROLES);
+  const data = parseInput(DeleteDocumentSchema, request.data, 'eliminar el documento');
+  assertCompany(ctx, data.companyId);
+
+  const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
+  const documents = deal.documents ?? [];
+  const target = documents.find((d) => d.kind === data.kind && d.version === data.version);
+  if (!target) throw new HttpsError('not-found', 'Documento no encontrado.');
+
+  if (target.signatureStatus === 'firmado') {
+    throw new HttpsError('failed-precondition', 'No se puede eliminar un documento que ya fue firmado legalmente.');
+  }
+
+  // Borrar archivos asociados en Storage
+  const bucket = storage.bucket();
+  const pathsToDelete = [
+    target.docxStoragePath,
+    target.dataStoragePath,
+    target.pdfStoragePath,
+    target.signedPdfStoragePath,
+    target.docxStoragePath ? target.docxStoragePath.replace(/\.docx$/, '.pdf') : null,
+  ].filter((p): p is string => Boolean(p));
+
+  await Promise.all(
+    pathsToDelete.map(async (filePath) => {
+      try {
+        const file = bucket.file(filePath);
+        const [exists] = await file.exists();
+        if (exists) await file.delete();
+      } catch (err) {
+        logger.warn('[DealDocuments] Error eliminando archivo de Storage', { filePath, error: String(err) });
+      }
+    }),
+  );
+
+  const remaining = documents.filter((d) => !(d.kind === data.kind && d.version === data.version));
+  const now = Timestamp.now();
+  const actor = await userDisplayName(data.companyId, ctx.uid);
+
+  const batch = db.batch();
+  batch.update(ref, { documents: remaining, updatedAt: now });
+  batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'document_deleted',
+    title: data.kind === 'preventa' ? 'Contrato de preventa eliminado' : 'Promesa de compraventa eliminada',
+    lines: [`Versión ${data.version} eliminada por el administrador`],
+    createdAt: now,
+  }));
+  await batch.commit();
+
+  logger.info('[DealDocuments] Documento eliminado', { dealId: deal.id, kind: data.kind, version: data.version });
+  return { ok: true, remainingCount: remaining.length };
+});

@@ -459,6 +459,15 @@ export async function generateDealDocument(companyId: string, dealId: string, ki
   return (await _generate({ companyId, dealId, kind })).data;
 }
 
+const _deleteDocument = httpsCallable<
+  { companyId: string; dealId: string; kind: DealDocumentKind; version: number },
+  { ok: boolean; remainingCount: number }
+>(functions, 'deleteDealDocument');
+
+export async function deleteDealDocument(companyId: string, dealId: string, kind: DealDocumentKind, version: number) {
+  return (await _deleteDocument({ companyId, dealId, kind, version })).data;
+}
+
 /** El documento generado como PDF (convertido en nuestro servidor) para verlo tal como se imprime. */
 export async function fetchDealDocumentPdf(companyId: string, dealId: string, kind: DealDocumentKind, version: number, signed = false): Promise<{ fileName: string; blob: Blob }> {
   const { fileName, mimeType, base64 } = (await _download({ companyId, dealId, kind, version, format: signed ? 'signed' : 'pdf' })).data;
