@@ -8,7 +8,7 @@ import { clientsCol, loadDeal, parseInput, userDisplayName } from '../modules/de
 import { getProjectLegalProfile, SELLERS } from '../modules/deals/legalProfiles';
 import { bogotaNow, buildContractData, dataHash, type ContractData } from '../modules/contracts/contractData';
 import { fechaCorta, fechaEnLetras, formatDMY } from '../modules/deals/civilDate';
-import { pesosEnLetras } from '../modules/deals/numeroALetras';
+import { formatoPesos, pesosEnLetras } from '../modules/deals/numeroALetras';
 import { renderContract } from '../modules/contracts/contractRenderer';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind } from '../modules/deals/deals.types';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
@@ -39,6 +39,15 @@ async function buyersOf(companyId: string, deal: Deal): Promise<ClientProfile[]>
   return snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() } as ClientProfile));
 }
 
+const pesos = (n: number) => formatoPesos(n).replace('$ ', '$\u00a0');
+
+function extractNumber(val: unknown): number {
+  if (!val) return 0;
+  const clean = String(val).replace(/[^0-9]/g, '');
+  const num = Number(clean);
+  return Number.isFinite(num) ? num : 0;
+}
+
 /** Cambia solo las fechas de emisión de unos datos ya guardados y asegura campos calculados de la promesa. */
 export function withIssueDate(data: ContractData, issuedAt: { date: string; time: string }): ContractData {
   const f = fechaEnLetras(issuedAt.date);
@@ -51,15 +60,16 @@ export function withIssueDate(data: ContractData, issuedAt: { date: string; time
     'fecha.anio': f.anio,
     'fecha.diligenciamiento': `${formatDMY(issuedAt.date)} ${issuedAt.time}`,
   };
-  // Si la preventa se guardó sin soporte explícito de bono o sin bonoLetras, hidratarlo desde plan.bono o plan.beneficio
-  const bonoVal = updated['plan.bono'] || updated['plan.beneficio'];
-  if (bonoVal && bonoVal !== '$ 0' && bonoVal !== '$\u00a00') {
+  // Hidratar bono si viene de plan.beneficio o plan.bono (para promesas generadas desde preventas viejas)
+  const bonoNum = extractNumber(updated['plan.bono']) || extractNumber(updated['plan.beneficio']);
+  if (bonoNum > 0) {
     updated['plan.tieneBono'] = true;
-    updated['plan.bono'] = bonoVal;
-    if (!updated['plan.bonoLetras']) {
-      const num = Number(String(bonoVal).replace(/[^0-9]/g, ''));
-      updated['plan.bonoLetras'] = num > 0 ? pesosEnLetras(num) : '';
-    }
+    updated['plan.bono'] = pesos(bonoNum);
+    updated['plan.bonoLetras'] = pesosEnLetras(bonoNum);
+  } else {
+    updated['plan.tieneBono'] = false;
+    updated['plan.bono'] = '$ 0';
+    updated['plan.bonoLetras'] = '';
   }
   return updated;
 }

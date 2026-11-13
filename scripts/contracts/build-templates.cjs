@@ -328,6 +328,14 @@ function configurePromesaHeaders(zip) {
   zip.file('word/header1.xml', emptyHdr);
   zip.file('word/header3.xml', emptyHdr);
 
+  for (const name of ['word/footer1.xml', 'word/footer2.xml', 'word/footer3.xml']) {
+    if (zip.file(name)) {
+      let fxml = zip.file(name).asText();
+      fxml = fxml.replace(/https:\/\/smart-home\.com\.co[^\s<]*/g, '');
+      zip.file(name, fxml);
+    }
+  }
+
   let docXml = zip.file('word/document.xml').asText();
   docXml = docXml.replace(/<w:pgMar[^>]*\/>/, '<w:pgMar w:top="992" w:right="1417" w:bottom="992" w:left="1417" w:header="360" w:footer="360" w:gutter="0"/>');
   docXml = docXml.replace(/<w:sectPr(\b[^>]*)>([\s\S]*?)<\/w:sectPr>/, (match, attrs, body) => {
