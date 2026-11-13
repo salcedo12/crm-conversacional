@@ -12,7 +12,10 @@
 const fs = require('fs');
 const path = require('path');
 const PizZip = require(path.join(__dirname, '..', '..', 'functions', 'node_modules', 'pizzip'));
-const { replaceText, setCellText, wrapCell, deleteRow, textOf, innermostParagraphs } = require('./docxXml.cjs');
+const {
+  replaceText, setCellText, wrapCell, deleteRow, textOf, innermostParagraphs,
+  ensureAllTablesCantSplit, makeTableHeader, addKeepNextToParagraphs,
+} = require('./docxXml.cjs');
 const { prepareSignatureBoxes } = require('./signatureBoxes.cjs');
 
 const OUT_DIR = path.join(__dirname, '..', '..', 'functions', 'templates');
@@ -73,7 +76,8 @@ function convertPreventa(xml) {
   xml = setCellText(xml, 7, 1, 0,
     'En la ciudad de Ibagué, departamento del Tolima {fecha.texto}, entre los suscritos a saber ' +
     '{vendedor.representacion}, quien obra en condición de representante legal, quienes en el presente ' +
-    'contrato se denominará EL PROMITENTE VENDEDOR, y por la otra parte:');
+    'contrato se denominará EL PROMITENTE VENDEDOR, y por la otra parte:',
+    { bold: false, sz: '20', lineSpacing: '240' });
   xml = setCellText(xml, 7, 2, 1,
     '{vendedor.razonSocial} www.grupoconstructormeraki.com.co/pagos Convenio Banco Davivienda {vendedor.convenio}');
 
@@ -117,6 +121,23 @@ function convertPreventa(xml) {
   xml = setCellText(xml, 13, 0, 1, '{plan.valorTotal}');
   xml = setCellText(xml, 14, 0, 1, '{plan.referido}');
   xml = setCellText(xml, 14, 1, 1, '{plan.observaciones}');
+
+  // Encabezado de la tabla de cuotas repetible y con keepNext (no se parte sola al fondo de página)
+  xml = makeTableHeader(xml, 11, 0);
+
+  // Evitar títulos huérfanos y cortes indebidos
+  xml = addKeepNextToParagraphs(xml, '1.4 CONTRATO DE PREVENTA DE BIEN INMUEBLE SOBRE PLANOS');
+  xml = addKeepNextToParagraphs(xml, 'CIERRE DEL NEGOCIO');
+  xml = addKeepNextToParagraphs(xml, 'Realizadas las precisiones anteriores');
+
+  // Asegurar cantSplit en TODAS las filas de TODAS las tablas
+  xml = ensureAllTablesCantSplit(xml);
+
+  // Unificar colores de todas las tablas con el oro oficial Meraki (#D5B545)
+  xml = xml.replace(/w:fill="B7871C"/gi, 'w:fill="D5B545"');
+
+  // Quitar marcas de salto de página heredadas del Word de edición de jurídica
+  xml = xml.replace(/<w:lastRenderedPageBreak\/>/g, '');
 
   // ── Textos dentro de párrafos ──
   xml = replaceText(xml,
@@ -196,10 +217,10 @@ function configurePreventaHeaders(zip) {
   }
   zip.file('[Content_Types].xml', contentTypes);
 
-  // Vaciar header1.xml para que las páginas 2 en adelante no lleven encabezado
+  // Vaciar header1.xml para que las páginas 2 en adelante no lleven encabezado ni ocupen espacio vertical
   const emptyHdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
     '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
-    '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p>' +
+    '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>' +
     '</w:hdr>';
   zip.file('word/header1.xml', emptyHdr);
 
@@ -255,6 +276,7 @@ function configurePreventaHeaders(zip) {
   }
 
   let docXml = zip.file('word/document.xml').asText();
+  docXml = docXml.replace(/<w:pgMar[^>]*\/>/, '<w:pgMar w:top="992" w:right="1417" w:bottom="992" w:left="1417" w:header="360" w:footer="360" w:gutter="0"/>');
   docXml = docXml.replace(/<w:sectPr(\b[^>]*)>([\s\S]*?)<\/w:sectPr>/, (match, attrs, body) => {
     let clean = body.replace(/<w:headerReference[^>]*\/>/g, '')
                     .replace(/<w:footerReference[^>]*\/>/g, '')
@@ -271,12 +293,13 @@ function configurePreventaHeaders(zip) {
 function configurePromesaHeaders(zip) {
   const emptyHdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
     '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
-    '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p>' +
+    '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>' +
     '</w:hdr>';
   zip.file('word/header1.xml', emptyHdr);
   zip.file('word/header3.xml', emptyHdr);
 
   let docXml = zip.file('word/document.xml').asText();
+  docXml = docXml.replace(/<w:pgMar[^>]*\/>/, '<w:pgMar w:top="992" w:right="1417" w:bottom="992" w:left="1417" w:header="360" w:footer="360" w:gutter="0"/>');
   docXml = docXml.replace(/<w:sectPr(\b[^>]*)>([\s\S]*?)<\/w:sectPr>/, (match, attrs, body) => {
     let clean = body.replace(/<w:headerReference[^>]*\/>/g, '')
                     .replace(/<w:footerReference[^>]*\/>/g, '')

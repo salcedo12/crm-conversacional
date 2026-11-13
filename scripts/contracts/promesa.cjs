@@ -4,7 +4,7 @@
  *   {#vendedor.esSM} / {^vendedor.esSM}  → Cañón (S+M) / resto (ZOMAC)
  *   {#proyecto.esCanon} {#proyecto.esRioClaro} {#proyecto.esLagunaMar} {#proyecto.esLlanoGrande}
  */
-const { replaceText, setCellText, wrapCell, deleteRow, wrapBlock, clearParagraphs, centerTableCells, setTableGrid, centerTable, tidyTable } = require('./docxXml.cjs');
+const { replaceText, setCellText, wrapCell, deleteRow, wrapBlock, clearParagraphs, centerTableCells, setTableGrid, centerTable, tidyTable, ensureAllTablesCantSplit } = require('./docxXml.cjs');
 const { prepareSignatureBoxes } = require('./signatureBoxes.cjs');
 
 const MARK_CANON = '(Texto para el proyecto CAÑON DE ARIZONA)';
@@ -168,6 +168,8 @@ function convertPromesa(xml) {
     /(<w:pPr><w:spacing [^>]*\/>)<w:ind w:left="610" w:right="0" w:firstLine="600"\/>(<w:jc w:val="center"\/><w:textDirection w:val="btLr"\/><\/w:pPr>(?:(?!<\/w:p>)[\s\S])*?>FIRMA<)/g,
     '$1$2');
   xml = prepareSignatureBoxes(xml, { heading: 'PROMITENTE COMPRADOR', sellerLines: 3 });
+  xml = ensureAllTablesCantSplit(xml);
+  xml = xml.replace(/<w:lastRenderedPageBreak\/>/g, '');
   return xml;
 }
 

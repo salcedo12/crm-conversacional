@@ -118,7 +118,7 @@ function replaceText(xml, search, replacement, { nth = null, min = 1 } = {}) {
  * Deja una celda con un solo texto: conserva el primer párrafo y su primer run (formato),
  * borra el resto de runs y párrafos.
  */
-function setCellText(xml, tableIndex, rowIndex, cellIndex, text) {
+function setCellText(xml, tableIndex, rowIndex, cellIndex, text, options = {}) {
   const table = topTables(xml)[tableIndex];
   if (!table) throw new Error(`No existe la tabla ${tableIndex}`);
   const row = rowsOf(xml, table)[rowIndex];
@@ -130,9 +130,32 @@ function setCellText(xml, tableIndex, rowIndex, cellIndex, text) {
   const tcPrEnd = cellXml.indexOf('</w:tcPr>');
   const head = cellXml.slice(0, paras.length ? paras[0].start : (tcPrEnd >= 0 ? tcPrEnd + 9 : cellXml.indexOf('>') + 1));
   let para = paras.length ? cellXml.slice(paras[0].start, paras[0].end) : '<w:p></w:p>';
-  const pPr = (para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [''])[0];
+  let pPr = (para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [''])[0];
   const firstRun = para.match(/<w:r(?=[ >])[\s\S]*?<\/w:r>/);
-  const rPr = firstRun ? (firstRun[0].match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [''])[0] : '';
+  let rPr = firstRun ? (firstRun[0].match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [''])[0] : '';
+
+  if (options.bold === false) {
+    pPr = pPr.replace(/<w:b(?:\b[^>]*)?\/>/g, '').replace(/<w:bCs(?:\b[^>]*)?\/>/g, '');
+    rPr = rPr.replace(/<w:b(?:\b[^>]*)?\/>/g, '').replace(/<w:bCs(?:\b[^>]*)?\/>/g, '');
+  } else if (options.bold === true) {
+    if (!rPr.includes('<w:b/>')) {
+      rPr = rPr ? rPr.replace('</w:rPr>', '<w:b/><w:bCs/></w:rPr>') : '<w:rPr><w:b/><w:bCs/></w:rPr>';
+    }
+  }
+
+  if (options.sz) {
+    pPr = pPr.replace(/<w:sz(?:\b[^>]*)?\/>/g, '').replace(/<w:szCs(?:\b[^>]*)?\/>/g, '');
+    rPr = rPr.replace(/<w:sz(?:\b[^>]*)?\/>/g, '').replace(/<w:szCs(?:\b[^>]*)?\/>/g, '');
+    const szTag = `<w:sz w:val="${options.sz}"/><w:szCs w:val="${options.sz}"/>`;
+    rPr = rPr ? rPr.replace('</w:rPr>', `${szTag}</w:rPr>`) : `<w:rPr>${szTag}</w:rPr>`;
+  }
+
+  if (options.lineSpacing) {
+    pPr = pPr.replace(/<w:spacing(?:\b[^>]*)?\/>/g, '');
+    const spTag = `<w:spacing w:line="${options.lineSpacing}" w:lineRule="auto"/>`;
+    pPr = pPr ? pPr.replace('</w:pPr>', `${spTag}</w:pPr>`) : `<w:pPr>${spTag}</w:pPr>`;
+  }
+
   const pOpen = para.match(/^<w:p(?: [^>]*)?>/)[0].replace('/>', '>');
   para = `${pOpen}${pPr}<w:r>${rPr}${T(text)}</w:r></w:p>`;
   return xml.slice(0, cell.start) + head + para + '</w:tc>' + xml.slice(cell.end);
@@ -305,6 +328,59 @@ function tidyTable(xml, tableIndex, sideMargin = 70) {
   return xml.slice(0, t.start) + tbl + xml.slice(t.end);
 }
 
+/** Asegura que todas las filas de todas las tablas tengan cantSplit (no se parten entre páginas). */
+function ensureAllTablesCantSplit(xml) {
+  return xml.replace(/<w:tr(?=[ >])([\s\S]*?)<\/w:tr>/g, (tr) => {
+    if (tr.includes('<w:cantSplit/>')) return tr;
+    if (tr.includes('<w:trPr>')) {
+      return tr.replace('<w:trPr>', '<w:trPr><w:cantSplit/>');
+    }
+    return tr.replace(/^(<w:tr(?: [^>]*)?>)/, '$1<w:trPr><w:cantSplit/></w:trPr>');
+  });
+}
+
+/** Configura una fila de tabla como encabezado repetible con keepNext para que no se separe de las filas siguientes. */
+function makeTableHeader(xml, tableIndex, rowIndex = 0) {
+  const table = topTables(xml)[tableIndex];
+  if (!table) return xml;
+  const row = rowsOf(xml, table)[rowIndex];
+  if (!row) return xml;
+  let rowXml = xml.slice(row.start, row.end);
+  if (!rowXml.includes('<w:tblHeader/>')) {
+    if (rowXml.includes('<w:trPr>')) {
+      rowXml = rowXml.replace('<w:trPr>', '<w:trPr><w:tblHeader/><w:cantSplit/>');
+    } else {
+      rowXml = rowXml.replace(/^(<w:tr(?: [^>]*)?>)/, '$1<w:trPr><w:tblHeader/><w:cantSplit/></w:trPr>');
+    }
+  }
+  // Añadir keepNext a todos los párrafos de la fila
+  rowXml = rowXml.replace(/<w:p(?=[ >])([^>]*)>(<w:pPr>[\s\S]*?<\/w:pPr>)?/g, (_m, attrs, pPr) => {
+    if (!pPr) return `<w:p${attrs}><w:pPr><w:keepNext/></w:pPr>`;
+    if (pPr.includes('<w:keepNext/>')) return `<w:p${attrs}>${pPr}`;
+    return `<w:p${attrs}>${pPr.replace('<w:pPr>', '<w:pPr><w:keepNext/>')}`;
+  });
+  return xml.slice(0, row.start) + rowXml + xml.slice(row.end);
+}
+
+/** Añade w:keepNext a los párrafos que contengan determinado texto para evitar títulos huérfanos al fondo de página. */
+function addKeepNextToParagraphs(xml, search) {
+  const ps = innermostParagraphs(xml).reverse();
+  const hits = ps.filter((p) => textOf(xml.slice(p.start, p.end)).includes(search));
+  let out = xml;
+  for (const p of hits) {
+    let pXml = out.slice(p.start, p.end);
+    if (!pXml.includes('<w:keepNext/>')) {
+      if (pXml.includes('<w:pPr>')) {
+        pXml = pXml.replace('<w:pPr>', '<w:pPr><w:keepNext/>');
+      } else {
+        pXml = pXml.replace(/^(<w:p(?: [^>]*)?>)/, '$1<w:pPr><w:keepNext/></w:pPr>');
+      }
+      out = out.slice(0, p.start) + pXml + out.slice(p.end);
+    }
+  }
+  return out;
+}
+
 /** Texto de cada tabla/fila/celda (para depurar). */
 function describeTables(xml) {
   return topTables(xml).map((t, ti) => rowsOf(xml, t).map((r, ri) =>
@@ -315,4 +391,5 @@ module.exports = {
   elements, innermostParagraphs, textOf, replaceText, setCellText, wrapCell, deleteRow, describeTables,
   topTables, rowsOf, cellsOf, paragraphsWithText, wrapBlock, clearParagraphs,
   bodyElements, replaceRegion, centerTableCells, setTableGrid, centerTable, tidyTable,
+  ensureAllTablesCantSplit, makeTableHeader, addKeepNextToParagraphs,
 };
