@@ -14,7 +14,8 @@ const path = require('path');
 const PizZip = require(path.join(__dirname, '..', '..', 'functions', 'node_modules', 'pizzip'));
 const {
   replaceText, setCellText, wrapCell, deleteRow, textOf, innermostParagraphs,
-  ensureAllTablesCantSplit, makeTableHeader, addKeepNextToParagraphs,
+  ensureAllTablesCantSplit, makeTableHeader, addKeepNextToParagraphs, addPageBreakBefore,
+  setTableColumnWidths, setTableRowFontSize, keepTableTogether,
 } = require('./docxXml.cjs');
 const { prepareSignatureBoxes } = require('./signatureBoxes.cjs');
 
@@ -124,6 +125,35 @@ function convertPreventa(xml) {
 
   // Encabezado de la tabla de cuotas repetible y con keepNext (no se parte sola al fondo de página)
   xml = makeTableHeader(xml, 11, 0);
+
+  // ── Calibración de anchos y tamaños en Tabla de Cuotas (Table 11) ──
+  // Garantiza que las fechas (09/01/2027, etc.) no se corten en dos renglones en ninguna columna
+  // y que los títulos (CUOTAS, EXTRAORDINARIAS, etc.) no se partan.
+  const t11Widths = [
+    768, 1301, 1240, // Grupo 1: CUOTAS (768), SEPARACIÓN (1301), FECHA (1240) -> Total 3309
+    112,             // Espacio separador 1
+    750, 1435, 1240, // Grupo 2: CUOTAS (750), ORDINARIAS (1435), FECHA (1240) -> Total 3425
+    141,             // Espacio separador 2
+    750, 1507, 1240  // Grupo 3: CUOTAS (750), EXTRAORDINARIAS (1507), FECHA (1240) -> Total 3497
+  ];
+  xml = setTableColumnWidths(xml, 11, t11Widths, 50);
+  xml = setTableRowFontSize(xml, 11, 0, '15'); // 7.5pt para títulos de encabezado
+
+  // ── Mantener CIERRE DEL NEGOCIO y plan de pagos completamente unidos ──
+  // Evita que Table 10 se parta a la mitad o quede huérfana de la tabla de cuotas
+  xml = keepTableTogether(xml, 10, true);
+  xml = keepTableTogether(xml, 11, true);
+  xml = keepTableTogether(xml, 12, true);
+  xml = keepTableTogether(xml, 13, true);
+
+  // Iniciar el bloque económico en página limpia para que todas las tablas quepan unidas
+  xml = addPageBreakBefore(xml, 'Realizadas las precisiones anteriores');
+
+  // Compactar párrafo entre Table 10 y Table 11
+  xml = xml.replace(/(<\/w:tbl>)(<w:p\b[^>]*><w:pPr>[\s\S]*?<\/w:pPr><\/w:p>)(<w:tbl[\s\S]*?CUOTAS)/, (_m, tbl1, _p, tbl2) => {
+    const compactP = '<w:p><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="40" w:line="80" w:lineRule="exact"/><w:rPr><w:sz w:val="8"/></w:rPr></w:pPr></w:p>';
+    return `${tbl1}${compactP}${tbl2}`;
+  });
 
   // Evitar títulos huérfanos y cortes indebidos
   xml = addKeepNextToParagraphs(xml, '1.4 CONTRATO DE PREVENTA DE BIEN INMUEBLE SOBRE PLANOS');
