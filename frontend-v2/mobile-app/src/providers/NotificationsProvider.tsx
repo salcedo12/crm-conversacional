@@ -16,12 +16,22 @@ async function openLead(
   platformAdmin?: boolean
 ) {
   if (!leadId || !navigationRef.isReady()) return;
-  const snapshot = await firestore()
-    .collection('companies')
-    .doc(companyId)
-    .collection('leads')
-    .doc(leadId)
-    .get();
+  let snapshot;
+  try {
+    snapshot = await firestore()
+      .collection('companies')
+      .doc(companyId)
+      .collection('leads')
+      .doc(leadId)
+      .get();
+  } catch (err: any) {
+    // Seguridad (R05): si el lead ya no es del asesor, las reglas niegan la lectura.
+    if (err?.code === 'firestore/permission-denied') {
+      Alert.alert('Prospecto reasignado', 'Este prospecto ya no está asignado a tu cuenta.');
+      return;
+    }
+    throw err;
+  }
   const exists = typeof snapshot.exists === 'function' ? snapshot.exists() : Boolean(snapshot.exists);
   if (!exists) return;
 

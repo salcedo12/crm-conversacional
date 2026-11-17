@@ -901,10 +901,16 @@ export async function fetchCommercialManagementData(
     const endTs = firestore.Timestamp.fromDate(effectiveEnd);
 
     try {
+      // Seguridad (R05): un asesor solo consulta sus leads asignados.
+      const periodBase = firestore().collection('companies').doc(companyId).collection('leads');
+      const periodCol: FirebaseFirestoreTypes.Query =
+        !isUserAdmin && effectiveAdvisorId && effectiveAdvisorId !== 'all'
+          ? periodBase.where('assignedTo', '==', effectiveAdvisorId)
+          : periodBase;
       const periodQueries = [
-        firestore().collection('companies').doc(companyId).collection('leads').where('createdAt', '>=', startTs).where('createdAt', '<=', endTs).get(),
-        firestore().collection('companies').doc(companyId).collection('leads').where('advisorAssignedAt', '>=', startTs).where('advisorAssignedAt', '<=', endTs).get(),
-        firestore().collection('companies').doc(companyId).collection('leads').where('lastFollowUpAt', '>=', startTs).where('lastFollowUpAt', '<=', endTs).get(),
+        periodCol.where('createdAt', '>=', startTs).where('createdAt', '<=', endTs).get(),
+        periodCol.where('advisorAssignedAt', '>=', startTs).where('advisorAssignedAt', '<=', endTs).get(),
+        periodCol.where('lastFollowUpAt', '>=', startTs).where('lastFollowUpAt', '<=', endTs).get(),
       ];
 
       const results = await Promise.allSettled(periodQueries);
@@ -1112,7 +1118,13 @@ export async function searchCommercialLeads(
     });
   } catch {}
 
-  const leadCol = firestore().collection('companies').doc(companyId).collection('leads');
+  // Seguridad (R05): un asesor busca solo dentro de sus leads asignados; las reglas
+  // rechazan cualquier consulta que pueda devolver leads ajenos.
+  const baseCol = firestore().collection('companies').doc(companyId).collection('leads');
+  const leadCol: FirebaseFirestoreTypes.Query =
+    !isUserAdmin && effectiveAdvisorId && effectiveAdvisorId !== 'all'
+      ? baseCol.where('assignedTo', '==', effectiveAdvisorId)
+      : baseCol;
   const docsMap = new Map<string, Record<string, any>>();
   const cleanDigits = term.replace(/\D/g, '');
 
