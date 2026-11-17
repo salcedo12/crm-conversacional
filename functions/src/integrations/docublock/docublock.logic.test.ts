@@ -39,6 +39,17 @@ test('usuario de Meraki en DocuBlock → firmante (secuencia 2, sin foto)', () =
   };
   const e = userEndorsement(user, { typeSign: 'PROMITENTE VENDEDOR', iteration: 2 });
   expect(e).toMatchObject({ firstName: 'JHON ESPER', identification: '12207629', expeditionDate: '1990-01-01', reqDocument: false, iteration: 2, cellphone: '3001112233' });
+  const oidUser = {
+    ...user,
+    identificationType: '661a27059d979c2242a463a5',
+    city: { _id: 'c1', name: 'Ibagué' },
+    country: { _id: '661a1fb2a0e9e20423fe6cc8', name: 'Colombia' },
+  };
+  expect(userEndorsement(oidUser, { typeSign: 'PROMITENTE VENDEDOR', iteration: 2 })).toMatchObject({
+    identificationKind: 'CC',
+    city: 'Ibagué',
+    country: 'Colombia',
+  });
   expect(userRoleName(user)).toBe('Administrador');
   expect(missingSignerData({ ...e, email: '', identification: '' })).toEqual(['número de documento', 'correo']);
 });

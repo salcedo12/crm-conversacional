@@ -160,6 +160,14 @@ async function buildSignersCore<T extends { source: 'buyer' | 'docublock_user'; 
       if (!companySignerFor(userFullName(user))) { problems.push(`${userFullName(user)} no es firmante de la empresa`); continue; }
       endorsement = userEndorsement(user, { typeSign, iteration: choice.iteration });
       name = userFullName(user);
+      logger.info('[DealSignature] docublock_user raw', {
+        idType: typeof user.identificationType,
+        idStr: typeof user.identificationType === 'string' ? user.identificationType : Object.keys((user.identificationType ?? {}) as object),
+        cityType: typeof user.city,
+        expCityType: typeof user.expeditionCity,
+        countryType: typeof user.country,
+        resolvedKind: endorsement.identificationKind,
+      });
     }
     // Ciudades con el nombre exacto de DocuBlock (si no, DocuBlock rechaza el envío).
     for (const field of ['city', 'expeditionCity'] as const) {
@@ -181,6 +189,16 @@ async function buildSignersCore<T extends { source: 'buyer' | 'docublock_user'; 
     const missing = missingSignerData(endorsement);
     if (missing.length) problems.push(`${name}: falta ${missing.join(', ')}`);
     endorsements.push(endorsement);
+    logger.info('[DealSignature] endorsement normalized', {
+      source: choice.source,
+      identificationKind: endorsement.identificationKind,
+      country: endorsement.country,
+      hasCity: Boolean(endorsement.city),
+      hasExpCity: Boolean(endorsement.expeditionCity),
+      cellLen: endorsement.cellphone.length,
+      kindPerson: endorsement.kindPerson,
+      iteration: endorsement.iteration,
+    });
     signers.push({ source: choice.source, refId: choice.refId, name, email: endorsement.email, typeSign, iteration: choice.iteration, signed: false });
   }
   const typesUsed = endorsements.map((e) => e.typeSign);

@@ -38,12 +38,12 @@ export interface DocuBlockUser {
   surNames?:           string;
   email?:              string;
   phone?:              string;
-  identificationType?: string;
+  identificationType?: string | { _id?: string; abbreviation?: string; name?: string };
   identification?:     string;
   expeditionDate?:     string;
-  expeditionCity?:     string;
-  city?:               string;
-  country?:            string;
+  expeditionCity?:     string | { _id?: string; name?: string };
+  city?:               string | { _id?: string; name?: string };
+  country?:            string | { _id?: string; name?: string; abbreviation?: string };
   organizations?:      Array<{ organization?: string | { _id?: string }; role?: string | { name?: string } }>;
 }
 
@@ -105,18 +105,42 @@ export function buyerEndorsement(
   };
 }
 
+/** Extrae nombre/texto de un campo que en la API puede venir como string u objeto poblado de Mongoose. */
+function fieldText(v: unknown, preferAbbrev = false): string {
+  if (typeof v === 'string') return clean(v);
+  if (v && typeof v === 'object') {
+    const obj = v as { abbreviation?: string; name?: string; _id?: string };
+    return clean(preferAbbrev ? (obj.abbreviation ?? obj.name ?? obj._id) : (obj.name ?? obj.abbreviation ?? obj._id));
+  }
+  return '';
+}
+
+const VALID_ID_KINDS = new Set(['CC', 'CE', 'NIT', 'PAS', 'PA', 'PPT', 'TI', 'RUT']);
+
+function normalizeUserIdKind(v: unknown): string {
+  const raw = fieldText(v, true).toUpperCase();
+  if (VALID_ID_KINDS.has(raw)) return raw === 'PA' ? 'PAS' : raw;
+  if (raw.includes('EXTRANJER')) return 'CE';
+  if (raw.includes('PASAPORT')) return 'PAS';
+  if (raw.includes('NIT')) return 'NIT';
+  // Si viene como ObjectId (ej. 661a27059d979c2242a463a5 = CC en DocuBlock) o vacío, usar 'CC'.
+  return 'CC';
+}
+
 export function userEndorsement(user: DocuBlockUser, opts: { typeSign: string; iteration: number }): EndorsementInput {
+  const city = fieldText(user.city);
+  const expCity = fieldText(user.expeditionCity) || city;
   return {
     firstName: clean(user.names),
     lastName: clean(user.surNames),
     identification: clean(user.identification),
     reqDocument: false,
     expeditionDate: isoDate(user.expeditionDate),
-    expeditionCity: clean(user.expeditionCity) || clean(user.city),
-    identificationKind: clean(user.identificationType) || 'CC',
+    expeditionCity: expCity,
+    identificationKind: normalizeUserIdKind(user.identificationType),
     email: clean(user.email).toLowerCase(),
-    city: clean(user.city),
-    country: clean(user.country) || 'Colombia',
+    city,
+    country: fieldText(user.country) || 'Colombia',
     cellphone: localCellphone(user.phone ?? ''),
     principalSigner: false,
     typeSign: opts.typeSign,
@@ -217,6 +241,13 @@ export function countryCode(countryName: string | undefined, countries: DocuBloc
  * repetidos (p. ej. "Sahagun"/"Sahagún") se prefiere el que lleva tilde.
  */
 export function matchCity(name: string, cities: DocuBlockCity[], countries: DocuBlockCountry[], countryName?: string): PlaceMatch | null {
+  const cleanId = String(name ?? '').trim();
+  const byId = /^[a-f0-9]{24}$/i.test(cleanId) ? cities.find((c) => c._id === cleanId) : undefined;
+  if (byId) {
+    const cid = cityCountryId(byId);
+    const country = countries.find((c) => c._id === cid)?.name ?? 'Colombia';
+    return { city: byId.name, country };
+  }
   const key = placeKey(name);
   if (!key) return null;
   const same = cities.filter((c) => placeKey(c.name) === key);
