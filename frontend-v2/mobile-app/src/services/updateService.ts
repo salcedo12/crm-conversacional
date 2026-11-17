@@ -15,7 +15,7 @@ export async function checkAndApplyUpdate(silent = true): Promise<boolean> {
     if (!silent) {
       Alert.alert(
         'Modo Desarrollo / Emulador',
-        `Las actualizaciones OTA automáticas están inactivas en modo de desarrollo o emulador.\nVersión compilada: ${Updates.runtimeVersion || '1.0.51'}`
+        `Las actualizaciones OTA automáticas están inactivas en modo de desarrollo o emulador.\nVersión compilada: ${Updates.runtimeVersion || '1.0.52'}`
       );
     }
     return false;
@@ -47,7 +47,7 @@ export async function checkAndApplyUpdate(silent = true): Promise<boolean> {
     } else if (!silent) {
       Alert.alert(
         'Aplicación al día',
-        `Ya cuentas con la versión más reciente instalada (${Updates.runtimeVersion || '1.0.51'}).`
+        `Ya cuentas con la versión más reciente instalada (${Updates.runtimeVersion || '1.0.52'}).`
       );
     }
   } catch (err: any) {
