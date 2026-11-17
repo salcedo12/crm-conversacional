@@ -104,7 +104,9 @@ export function getPeriodDates(preset: PeriodPreset): { startDate: Date | null; 
   const lastFriday = new Date(now);
   lastFriday.setDate(now.getDate() - daysSinceFriday);
   lastFriday.setHours(9, 0, 0, 0);
-  return { startDate: lastFriday, endDate: now };
+  // Igual que la web (CommercialDateFilter): la semana termina al final del día de hoy.
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  return { startDate: lastFriday, endDate: endOfToday };
 }
 
 function parseToMillis(val: any): number {
@@ -626,7 +628,8 @@ export function CommercialManagementScreen() {
   }, [leads, searchQuery, serverSearchResults, categoryFilter, projectFilter, stageFilter, sortBy, periodPreset, selectedAdvisor]);
 
   const focusTargetLeads = useMemo(() => {
-    const urgent = filteredLeads.filter((l) => l.isOverdue || l.isToday || !l.hasFicha);
+    // Igual que la web (CommercialManagementPage): vencidos y de hoy.
+    const urgent = filteredLeads.filter((l) => l.isOverdue || l.isToday);
     return urgent.length > 0 ? urgent : filteredLeads;
   }, [filteredLeads]);
 

@@ -4,6 +4,7 @@ import storage from '@react-native-firebase/storage';
 import { Share, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import type { Lead, WhatsAppTemplate } from '../types';
+import { MERAKI_OFFICIAL_ADVISORS } from './commercialReports';
 
 const fn = getFunctions(undefined, 'us-central1');
 const call = <TInput, TResult>(name: string) => httpsCallable<TInput, TResult>(fn, name);
@@ -541,14 +542,19 @@ export function getCommercialWeekStart(now: Date = new Date()): Date {
   return lastFriday;
 }
 
-function normalizeFollowUpStr(s: string): string {
+// Copia exacta de normalizeStr de la web (commercialReports.service.ts): web y app
+// deben clasificar seguimientos y comparar nombres de asesor igual.
+function normalizeCommercialStr(s: string): string {
   if (!s) return '';
   return s
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
+const normalizeFollowUpStr = normalizeCommercialStr;
 
 /**
  * Bitácora que deja el sistema al aprobar o solicitar un traslado de prospecto
@@ -584,8 +590,10 @@ export function isRealCommercialFollowUp(action?: string | null, text?: string |
   // El traslado aprobado no cuenta como seguimiento del asesor que recibe el prospecto.
   if (isTransferBitacora(rawAction, rawText)) return false;
 
-  const aNorm = normalizeFollowUpStr(rawAction);
-  const dNorm = normalizeFollowUpStr(rawText);
+  // Misma normalización que la web (commercialReports.service.ts → normalizeStr):
+  // quita tildes y signos, para que web y app clasifiquen idéntico.
+  const aNorm = normalizeCommercialStr(rawAction);
+  const dNorm = normalizeCommercialStr(rawText);
 
   const isAdvisorEventInSystem =
     (aNorm === 'evento del sistema' || aNorm === 'captacion') &&
@@ -613,6 +621,24 @@ export function isRealCommercialFollowUp(action?: string | null, text?: string |
 
   if (!dNorm || dNorm.length < 4) return false;
 
+  // Igual que la web: un descarte/no interesado/cancelación registrado por el asesor
+  // siempre cuenta como gestión comercial.
+  const isExplicitDisqualification =
+    aNorm.includes('no interesado') ||
+    aNorm.includes('cancelado') ||
+    aNorm.includes('descarte') ||
+    aNorm.includes('desistimiento') ||
+    dNorm.includes('no interesado') ||
+    dNorm.includes('no le interesa') ||
+    dNorm.includes('cancelado') ||
+    dNorm.includes('descarte') ||
+    dNorm.includes('desistimiento') ||
+    dNorm.includes('numero equivocado') ||
+    dNorm.includes('sin presupuesto') ||
+    dNorm.includes('no contesta') ||
+    dNorm.includes('sin proximo contacto');
+  if (isExplicitDisqualification) return true;
+
   if (
     dNorm.includes('se agrega el cliente al sistema') ||
     dNorm.includes('se agrega el prospecto al sistema') ||
@@ -636,6 +662,14 @@ export function isRealCommercialFollowUp(action?: string | null, text?: string |
     dNorm.includes('webhook') ||
     dNorm.includes('infile') ||
     dNorm.includes('arkdia')
+  ) {
+    return false;
+  }
+
+  // Igual que la web: solo el nombre del proyecto sin observación no es gestión.
+  if (
+    (aNorm === 'canon de arizona' || aNorm === 'llano grande' || aNorm === 'laguna mar' || aNorm === 'rio claro') &&
+    (dNorm.includes('se agrega el cliente') || dNorm.includes('modulo') || dNorm.length < 15)
   ) {
     return false;
   }
@@ -695,15 +729,19 @@ export function leadBelongsToAdvisor(
   return false;
 }
 
-function mapDocToCommercialLeadItem(
+export function mapDocToCommercialLeadItem(
   docId: string,
   data: Record<string, any>,
   advMap: Map<string, string>,
   now: Date,
   weekStart: Date = getCommercialWeekStart(now),
   startDate?: Date | null,
-  endDate?: Date | null
+  endDate?: Date | null,
+  _targetAdvisorId?: string,
+  targetAdvisorName?: string
 ) {
+  // ⚠️ Debe calcular EXACTAMENTE igual que mapDocToCommercialLeadItem de la web
+  // (src/features/commercial/services/commercial.service.ts). Si cambias una, cambia la otra.
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
 
@@ -728,8 +766,12 @@ function mapDocToCommercialLeadItem(
     }
   }
   const hasBitacoras = rawBitacoras.length > 0;
-  const hasExplicitFollowUp = !!data.lastFollowUpAt || !!data.lastFollowUpAction || !!data.smartHomeLastBitacoraAt;
-  const hasFicha = hasBitacoras || hasExplicitFollowUp || !!data.metadata?.hasFicha;
+  // Las auditorías del administrador (cambio de asesor/fuente) no cuentan como ficha técnica.
+  const hasAdvisorBitacoras = rawBitacoras.some((b) => !isTransferBitacora(b.action, b.description));
+  const auditOnlyAction = ['cambio_asesor', 'cambio_fuente'].includes(String(data.lastFollowUpAction || ''));
+  const hasExplicitFollowUp =
+    !!data.lastFollowUpAt || (!!data.lastFollowUpAction && !auditOnlyAction) || !!data.smartHomeLastBitacoraAt;
+  const hasFicha = hasAdvisorBitacoras || hasExplicitFollowUp || !!data.metadata?.hasFicha;
 
   const nextDateStr: string | null = data.nextFollowUpDate || data.metadata?.nextFollowUpDate || null;
   let isOverdue = false;
@@ -761,16 +803,23 @@ function mapDocToCommercialLeadItem(
       !!data.isPeriodAssigned;
   }
 
-  const activeEndWithTolerance = activeEnd ? new Date(activeEnd.getTime() + 6 * 3600 * 1000) : null;
   let hadPeriodFollowUp = false;
 
   if (isHistorical) {
     hadPeriodFollowUp = hasFicha;
-  } else if (activeStart && activeEndWithTolerance) {
+  } else if (activeStart && activeEnd) {
+    // Tolerancia de ±6 h para fechas UTC (igual que la web)
+    const startTolerance = new Date(activeStart.getTime() - 6 * 3600 * 1000);
+    const endTolerance = new Date(activeEnd.getTime() + 6 * 3600 * 1000);
+
     for (const b of rawBitacoras) {
       const bDate = parseAnyDate(b.fecha || b.lastDate || b.date);
-      if (bDate && bDate >= activeStart && bDate <= activeEndWithTolerance) {
+      if (bDate && bDate >= startTolerance && bDate <= endTolerance) {
         if (isRealCommercialFollowUp(b.action, b.description)) {
+          // Si se seleccionó un asesor, la bitácora debe ser de él
+          if (targetAdvisorName && b.asesor && !isAdvisorMatch(b.asesor, targetAdvisorName)) {
+            continue;
+          }
           hadPeriodFollowUp = true;
           break;
         }
@@ -779,7 +828,7 @@ function mapDocToCommercialLeadItem(
 
     if (!hadPeriodFollowUp && (data.lastFollowUpAt || data.smartHomeLastBitacoraAt)) {
       const lfuDate = parseAnyDate(data.lastFollowUpAt || data.smartHomeLastBitacoraAt);
-      if (lfuDate && lfuDate >= activeStart && lfuDate <= activeEndWithTolerance) {
+      if (lfuDate && lfuDate >= startTolerance && lfuDate <= endTolerance) {
         const action = data.lastFollowUpAction || data.smartHomeLastActionLabel || '';
         const desc = (data.lastFollowUpSummary || data.smartHomeLastBitacoraText || data.lastFollowUpAction || '').trim();
         if (isRealCommercialFollowUp(action, desc)) {
@@ -790,13 +839,36 @@ function mapDocToCommercialLeadItem(
   }
 
   const rawStatus = String(data.status || '').toLowerCase();
-  const isLost =
+  const markedLost =
     rawStatus === 'lost' ||
     rawStatus === 'cancelado' ||
     rawStatus === 'cancelled' ||
     rawStatus === 'desistimiento' ||
     rawStatus === 'no_interesado' ||
-    stageConfig.group === 'no_interesado';
+    stageConfig.group === 'no_interesado' ||
+    stageConfig.id.startsWith('no_interesado') ||
+    stageConfig.id === 'cancelado';
+
+  // Igual que la web: un cancelado que un administrador le pasa a OTRO asesor después de su
+  // última gestión real queda reabierto (sale en "Falta seguimiento", no en "Cancelados").
+  let lastRealFollowUp: Date | null = null;
+  for (const b of rawBitacoras) {
+    const bDate = parseAnyDate(b.fecha || b.lastDate || b.date);
+    if (bDate && isRealCommercialFollowUp(b.action, b.description) && (!lastRealFollowUp || bDate > lastRealFollowUp)) {
+      lastRealFollowUp = bDate;
+    }
+  }
+  const lfuAt = parseAnyDate(data.lastFollowUpAt);
+  if (lfuAt && (!lastRealFollowUp || lfuAt > lastRealFollowUp)) lastRealFollowUp = lfuAt;
+  const reopenedByReassign =
+    markedLost &&
+    !!data.previousAdvisorId &&
+    !!data.assignedTo &&
+    data.previousAdvisorId !== data.assignedTo &&
+    !!assignedDate &&
+    (!lastRealFollowUp || assignedDate > lastRealFollowUp);
+  const isLost = markedLost && !reopenedByReassign;
+
   const isClosed = data.status === 'closed' || stageConfig.id === 'firma';
   const missingPeriodFollowUp = isPeriodCreated && !hadPeriodFollowUp && !isLost && !isClosed;
 
@@ -829,7 +901,8 @@ function mapDocToCommercialLeadItem(
     advisorName,
     pipelineStage: stageConfig.id,
     pipelineStageLabel: stageConfig.label,
-    status: data.status || 'new',
+    // Igual que la web: el estado efectivo decide si cuenta como cancelado/cerrado en los KPIs
+    status: isLost ? 'lost' : (isClosed ? 'closed' : (reopenedByReassign ? 'contacted' : (data.status || 'new'))),
     source: data.source || data.metadata?.fuente || data.metadata?.source || 'manual',
     fuenteUbicacion: data.fuenteUbicacion || data.metadata?.fuenteUbicacion || 'Directo',
     hasFicha,
@@ -882,7 +955,22 @@ export async function fetchCommercialManagementData(
     });
   } catch {}
 
-  const effectiveAdvName = effectiveAdvisorId ? (advMap.get(effectiveAdvisorId) || '') : '';
+  // Igual que la web: complementar con la nómina oficial de asesores
+  MERAKI_OFFICIAL_ADVISORS.forEach((offName) => {
+    const alreadyPresent = advisorsList.some((a) => isAdvisorMatch(a.name, offName));
+    if (!alreadyPresent) {
+      const fakeId = `advisor_${offName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      advMap.set(fakeId, offName);
+      advisorsList.push({ id: fakeId, name: offName });
+    }
+  });
+
+  const matchedAdv = advisorsList.find(
+    (a) => a.id === effectiveAdvisorId || (effectiveAdvisorId !== 'all' && isAdvisorMatch(a.id, effectiveAdvisorId))
+  );
+  const effectiveAdvName = matchedAdv
+    ? matchedAdv.name
+    : (effectiveAdvisorId && effectiveAdvisorId !== 'all' ? (advMap.get(effectiveAdvisorId) || '') : '');
   const now = new Date();
   const weekStart = getCommercialWeekStart(now);
 
@@ -932,9 +1020,11 @@ export async function fetchCommercialManagementData(
     q = q.where('assignedTo', '==', effectiveAdvisorId);
   }
 
+  // Igual que la web: los más recientes por último mensaje (antes la app usaba
+  // updatedAt y traía otro grupo de leads, por eso los totales no cuadraban).
   let docs: FirebaseFirestoreTypes.QueryDocumentSnapshot[] = [];
   try {
-    let qOrdered = q.orderBy('updatedAt', 'desc');
+    let qOrdered = q.orderBy('lastMessageAt', 'desc');
     if (startAfterDoc) {
       qOrdered = qOrdered.startAfter(startAfterDoc);
     }
@@ -943,24 +1033,14 @@ export async function fetchCommercialManagementData(
     docs = snap.docs;
   } catch {
     try {
-      let qFallback = q.orderBy('lastMessageAt', 'desc');
+      let qPlain = q;
       if (startAfterDoc) {
-        qFallback = qFallback.startAfter(startAfterDoc);
+        qPlain = qPlain.startAfter(startAfterDoc);
       }
-      qFallback = qFallback.limit(pageSize);
-      const snap = await qFallback.get();
+      qPlain = qPlain.limit(pageSize);
+      const snap = await qPlain.get();
       docs = snap.docs;
-    } catch {
-      try {
-        let qPlain = q;
-        if (startAfterDoc) {
-          qPlain = qPlain.startAfter(startAfterDoc);
-        }
-        qPlain = qPlain.limit(pageSize);
-        const snap = await qPlain.get();
-        docs = snap.docs;
-      } catch {}
-    }
+    } catch {}
   }
 
   const lastVisibleDoc = docs.length > 0 ? docs[docs.length - 1] : null;
@@ -992,7 +1072,17 @@ export async function fetchCommercialManagementData(
   let closedCount = 0;
 
   for (const docSnap of finalDocs) {
-    const mapped = mapDocToCommercialLeadItem(docSnap.id, docSnap.data() || {}, advMap, now, weekStart, startDate, endDate);
+    const mapped = mapDocToCommercialLeadItem(
+      docSnap.id,
+      docSnap.data() || {},
+      advMap,
+      now,
+      weekStart,
+      effectiveStart,
+      effectiveEnd,
+      effectiveAdvisorId,
+      effectiveAdvName
+    );
     const isLost = mapped.item.status === 'lost';
     const isClosed = mapped.item.status === 'closed';
 
