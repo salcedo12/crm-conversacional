@@ -174,6 +174,15 @@ export const GENDER_LABELS: Record<Gender, string> = {
   otro:      'Otro',
 };
 
+/**
+ * Misma regla que en backend (`functions/src/modules/deals/dealStatus.ts`):
+ * en firma, solo administración puede corregir o agregar compradores; en anulado, nadie.
+ */
+export function canEditDealBuyers(status: DealStatus, isAdmin: boolean): boolean {
+  if (status === 'anulado') return false;
+  return status === 'borrador' || status === 'plan_listo' || isAdmin;
+}
+
 const _list   = httpsCallable<{ companyId: string; leadId: string }, { deals: DealSummary[] }>(functions, 'listLeadDeals');
 const _listCompany = httpsCallable<{ companyId: string }, { deals: DealSummary[] }>(functions, 'listCompanyDeals');
 const _get = httpsCallable<{ companyId: string; dealId: string }, { deal: DealSummary }>(functions, 'getDeal');

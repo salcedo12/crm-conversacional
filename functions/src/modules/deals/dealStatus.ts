@@ -5,6 +5,16 @@ import { summarizePlan } from './paymentPlan';
 export const EDITABLE_STATUSES: DealStatus[] = ['borrador', 'plan_listo'];
 
 /**
+ * Permite editar/agregar compradores en borrador o plan_listo a cualquier rol con
+ * escritura, y en estados posteriores (ya en firma) únicamente a administración,
+ * bloqueando siempre los negocios anulados.
+ */
+export function canEditDealBuyers(status: DealStatus, admin: boolean): boolean {
+  if (status === 'anulado') return false;
+  return EDITABLE_STATUSES.includes(status) || admin;
+}
+
+/**
  * Estado de un negocio mientras se arma: "plan_listo" cuando tiene compradores, lote
  * apartado y un plan válido hecho para ese mismo lote; si no, "borrador". Los estados
  * de firma en adelante no se tocan.

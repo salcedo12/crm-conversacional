@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import type { Lead } from '@/features/inbox/types';
 import {
@@ -132,6 +132,11 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
   const missing = buyers.map((b) => missingClientFields(b.data));
   const pendingCount = missing.filter((m) => m.length > 0).length;
   const canSave = pendingCount === 0;
+  const hasContractsOrSignature =
+    !['borrador', 'plan_listo'].includes(deal.status) || (deal.documents?.length ?? 0) > 0;
+  const hasPendingSignature = (deal.documents ?? []).some(
+    (d) => d.signatureStatus === 'en_firma' || d.signatureStatus === 'firmado_parcial',
+  );
 
   const handleSave = async () => {
     setSaving(true);
@@ -173,6 +178,21 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
         />
       }
     >
+      {hasContractsOrSignature && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-400" />
+          <div className="space-y-1">
+            <p className="font-semibold text-amber-100">Este negocio ya tiene contratos generados o en firma</p>
+            <p className="text-[11px] leading-relaxed text-amber-200/90">
+              Guardar aquí actualiza la ficha de los compradores en el CRM, pero <strong>no modifica automáticamente</strong> los documentos ya creados ni los firmantes enviados a DocuBlock.
+              {hasPendingSignature
+                ? ' Para que el cambio quede en el contrato, marca como anulado el envío en firma actual y vuelve a generar Preventa y Promesa desde la pestaña Contratos.'
+                : ' Para que el cambio aparezca en los contratos, vuelve a generar la Preventa (y luego la Promesa) desde la pestaña Contratos.'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {buyers.map(({ key, data: b }, i) => {
         const natural = b.personKind === 'natural';
         const match = found[key];

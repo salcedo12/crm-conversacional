@@ -10,7 +10,7 @@ import type { Deal } from './deals.types';
 export const clientsCol = (companyId: string) => db.collection('companies').doc(companyId).collection('clients');
 export const dealsCol = (companyId: string) => db.collection('companies').doc(companyId).collection('deals');
 
-export { EDITABLE_STATUSES } from './dealStatus';
+export { EDITABLE_STATUSES, canEditDealBuyers } from './dealStatus';
 
 export function parseInput<T>(schema: z.ZodType<T>, input: unknown, what: string): T {
   const parsed = schema.safeParse(input);

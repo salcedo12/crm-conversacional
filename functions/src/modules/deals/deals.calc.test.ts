@@ -282,6 +282,19 @@ test('draftStatusFor: plan listo solo con compradores, lote y plan válido de es
   expect(draftStatusFor({ ...base, status: 'preventa_en_firma' as const })).toBe('preventa_en_firma');
 });
 
+test('canEditDealBuyers: borrador/plan_listo todos, en firma solo admin, anulado nadie', async () => {
+  const { canEditDealBuyers } = await import('./dealStatus');
+  expect(canEditDealBuyers('borrador', false)).toBe(true);
+  expect(canEditDealBuyers('plan_listo', false)).toBe(true);
+  expect(canEditDealBuyers('preventa_en_firma', false)).toBe(false);
+  expect(canEditDealBuyers('preventa_en_firma', true)).toBe(true);
+  expect(canEditDealBuyers('preventa_firmada', true)).toBe(true);
+  expect(canEditDealBuyers('promesa_en_firma', true)).toBe(true);
+  expect(canEditDealBuyers('promesa_firmada', true)).toBe(true);
+  expect(canEditDealBuyers('anulado', false)).toBe(false);
+  expect(canEditDealBuyers('anulado', true)).toBe(false);
+});
+
 // ── Plazo: todas las cuotas deben caber desde la primera ordinaria ───────────
 
 const plazo30 = expandRows([

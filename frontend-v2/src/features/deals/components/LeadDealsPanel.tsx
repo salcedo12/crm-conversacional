@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Ban, Calculator, Loader2, Plus, Users } from 'lucide-react';
 import type { Lead } from '@/features/inbox/types';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isViewerRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import { DealBuyersModal } from './DealBuyersModal';
 import { DealLotSection } from './DealLotSection';
 import { DealPlanModal } from './DealPlanModal';
@@ -11,6 +11,7 @@ import { dealActionCls } from './DealSheet';
 import { formatPesos, summarizePlan } from '../utils/paymentPlan';
 import {
   cancelDeal,
+  canEditDealBuyers,
   createDeal,
   DEAL_STATUS_LABELS,
   listLeadDeals,
@@ -31,6 +32,7 @@ const STATUS_STYLES: Record<DealStatus, string> = {
 /** Negocios del lead (sección del LeadDrawer): crear negocio y registrar sus compradores. */
 export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: Lead }) {
   const { role, platformAdmin } = useAuth();
+  const isAdmin = platformAdmin || isAdminRole(role);
   // "Solo lectura": ve los negocios, pero no crea, edita ni anula.
   const readOnly = !platformAdmin && isViewerRole(role);
   const [deals, setDeals] = useState<DealSummary[]>([]);
@@ -104,6 +106,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
             ? deal.buyerNames
             : deal.buyerProfiles.map((b) => `${b.firstNames} ${b.lastNames}`.trim());
           const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
+          const canEditBuyers = !readOnly && canEditDealBuyers(deal.status, isAdmin);
           return (
             <div key={deal.id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-3 sm:rounded-lg sm:py-2.5">
               <div className="flex items-center justify-between gap-2">
@@ -168,7 +171,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
               )}
               {!readOnly && deal.status !== 'anulado' && cancelingId !== deal.id && (
                 <div className="mt-3 flex flex-wrap gap-2 sm:mt-2 sm:gap-3">
-                  {editable && (
+                  {canEditBuyers && (
                     <button
                       type="button"
                       onClick={() => setEditing(deal)}

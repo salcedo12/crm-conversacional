@@ -22,6 +22,7 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import {
   cancelDeal,
+  canEditDealBuyers,
   DEAL_STATUS_LABELS,
   deleteDealAttachment,
   deleteDealDocument,
@@ -284,6 +285,7 @@ export function DealDetailPage() {
   const attachments = deal.attachments ?? [];
   const stats = supportStats(deal);
   const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
+  const canEditBuyers = !readOnly && canEditDealBuyers(deal.status, isAdmin);
   const canCancelDeal = !readOnly && deal.status !== 'anulado' && (editable || isAdmin);
   const hasPendingSignatures = [...(deal.documents ?? []), ...(deal.extraSignatures ?? [])].some(
     (d) => d.docublockDocumentId && (d.signatureStatus === 'en_firma' || d.signatureStatus === 'firmado_parcial'),
@@ -531,7 +533,7 @@ export function DealDetailPage() {
                       <p className="text-[11px] text-zinc-400">Titular y co-propietarios para la escrituración</p>
                     </div>
                   </div>
-                  {editable && (
+                  {canEditBuyers && (
                     <button
                       type="button"
                       onClick={() => setEditingBuyers(true)}

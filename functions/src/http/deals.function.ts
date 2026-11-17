@@ -7,7 +7,7 @@ import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/aut
 import { leadsRepository } from '../modules/leads/leads.repository';
 import { ClientInputSchema, clientDocId, normalizeIdentification, MAX_BUYERS } from '../modules/deals/clientProfile';
 import type { ClientProfile, Deal, DealAttachment, DealAttachmentCategory } from '../modules/deals/deals.types';
-import { clientsCol, dealsCol, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
+import { canEditDealBuyers, clientsCol, dealsCol, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef, leadRef } from '../modules/deals/dealAudit';
 import { backfillDealLots, lotSnapshot } from '../modules/deals/dealDocumentLot';
 import { isPendingSignature } from '../modules/deals/dealSignature.logic';
@@ -261,8 +261,12 @@ export const saveDealBuyers = onCall({ region: 'us-central1', timeoutSeconds: 30
   }
 
   const { ref: dealRef, deal } = await loadDeal(ctx, data.companyId, data.dealId);
-  if (!EDITABLE_STATUSES.includes(deal.status)) {
-    throw new HttpsError('failed-precondition', 'Este negocio ya tiene documentos generados; los compradores no se pueden cambiar.');
+  if (deal.status === 'anulado') {
+    throw new HttpsError('failed-precondition', 'No se pueden modificar los compradores de un negocio anulado.');
+  }
+  const editingAfterDraft = !EDITABLE_STATUSES.includes(deal.status);
+  if (!canEditDealBuyers(deal.status, isAdmin(ctx))) {
+    throw new HttpsError('failed-precondition', 'Este negocio ya entró a firma; solo administración puede corregir o agregar compradores.');
   }
 
   const now = Timestamp.now();
@@ -358,8 +362,10 @@ export const saveDealBuyers = onCall({ region: 'us-central1', timeoutSeconds: 30
       actorId: ctx.uid,
       actorName: actor.name,
       event: 'buyers_saved',
-      title: 'Compradores guardados y ficha actualizada',
-      lines: auditLines,
+      title: editingAfterDraft ? 'Compradores actualizados por administración (en firma)' : 'Compradores guardados y ficha actualizada',
+      lines: editingAfterDraft
+        ? [`Negocio en estado "${deal.status}": regenerar contratos si aplica.`, ...auditLines]
+        : auditLines,
       createdAt: now,
     }));
   });
