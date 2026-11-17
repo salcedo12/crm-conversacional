@@ -63,7 +63,12 @@ export interface DocuBlockDocument {
   signatureProgress?: number;
   currentOrder?:      number;
   endorsement?:       DocuBlockEndorsement[];
-  versions?:          Array<{ path?: string; expirationSign?: string; signatureProgress?: string }>;
+  versions?:          Array<{
+    path?: string;
+    expirationSign?: string;
+    signatureProgress?: string;
+    _doc?: { path?: string; expirationSign?: string; signatureProgress?: string };
+  }>;
 }
 
 const clean = (value: unknown) => String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -170,7 +175,7 @@ export function documentProgress(doc: DocuBlockDocument, now = new Date()): Docu
     signed: e.checked === 1,
   }));
   const version = doc.versions?.[doc.versions.length - 1];
-  const expiresAt = version?.expirationSign ?? null;
+  const expiresAt = version?.expirationSign ?? version?._doc?.expirationSign ?? null;
   const allSigned = signers.length > 0 && signers.every((s) => s.signed);
 
   let status: SignatureStatus;
@@ -179,7 +184,7 @@ export function documentProgress(doc: DocuBlockDocument, now = new Date()): Docu
   else if (signers.some((s) => s.signed)) status = 'firmado_parcial';
   else status = 'en_firma';
 
-  return { status, signers, fileUrl: version?.path ?? doc.path ?? null, expiresAt };
+  return { status, signers, fileUrl: version?.path ?? version?._doc?.path ?? doc.path ?? null, expiresAt };
 }
 
 // ─── Ciudades y países: deben ir escritos EXACTAMENTE como en DocuBlock ───────

@@ -52,6 +52,13 @@ test('estado de DocuBlock: en firma, parcial, firmado y vencido', () => {
   expect(done).toMatchObject({ status: 'firmado', fileUrl: 'https://s3/firmado.pdf' });
   expect(done.signers.map((s) => s.endorsementId)).toEqual(['s1', 's2']);
   expect(documentProgress({ _id: 'd', signatureProgress: 1, endorsement: [signer(1, 1), signer(0, 2)], versions: [{ expirationSign: '2020-01-01T00:00:00.000Z' }] }).status).toBe('vencido');
+  const wrapped = documentProgress({
+    _id: 'd',
+    signatureProgress: 1,
+    endorsement: [signer(0, 1)],
+    versions: [{ path: 'https://s3/signed.pdf', _doc: { expirationSign: future } }],
+  });
+  expect(wrapped).toMatchObject({ status: 'en_firma', fileUrl: 'https://s3/signed.pdf', expiresAt: future });
 });
 
 test('estado del negocio con preventa y promesa enviadas a la vez', () => {
