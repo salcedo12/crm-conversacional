@@ -190,7 +190,12 @@ export function CommercialManagementPage() {
         dateRange.startDate,
         dateRange.endDate
       );
-      setLeads((prev) => [...prev, ...data.leads]);
+      // Cada lote vuelve a traer los leads del período (creados/asignados/con seguimiento):
+      // agregar solo los que no estaban para no mostrar el mismo prospecto dos veces.
+      setLeads((prev) => {
+        const seen = new Set(prev.map((l) => l.id));
+        return [...prev, ...data.leads.filter((l) => !seen.has(l.id))];
+      });
       setLastVisibleDoc(data.lastVisibleDoc);
       setHasMore(data.hasMore);
     } catch (err) {

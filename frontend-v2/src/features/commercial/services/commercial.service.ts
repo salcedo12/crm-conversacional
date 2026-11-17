@@ -231,7 +231,7 @@ export function mapDocToCommercialLeadItem(
   }
 
   const rawStatus = String(data.status || '').toLowerCase();
-  const isLost =
+  const markedLost =
     rawStatus === 'lost' ||
     rawStatus === 'cancelado' ||
     rawStatus === 'cancelled' ||
@@ -240,6 +240,28 @@ export function mapDocToCommercialLeadItem(
     stageConfig.group === 'no_interesado' ||
     stageConfig.id.startsWith('no_interesado') ||
     stageConfig.id === 'cancelado';
+
+  // Un cancelado que un administrador le pasa a OTRO asesor después de su última gestión real
+  // queda reabierto para el nuevo asesor: debe salir en "Falta seguimiento", no en "Cancelados".
+  // Si el nuevo asesor lo vuelve a descartar, esa gestión es posterior a la asignación y vuelve a cancelado.
+  let lastRealFollowUp: Date | null = null;
+  for (const b of rawBitacoras) {
+    const bDate = parseDate(b.fecha || b.lastDate || b.date);
+    if (bDate && isRealCommercialFollowUp(b.action, b.description) && (!lastRealFollowUp || bDate > lastRealFollowUp)) {
+      lastRealFollowUp = bDate;
+    }
+  }
+  const lfuAt = parseDate(data.lastFollowUpAt);
+  if (lfuAt && (!lastRealFollowUp || lfuAt > lastRealFollowUp)) lastRealFollowUp = lfuAt;
+  const reopenedByReassign =
+    markedLost &&
+    !!data.previousAdvisorId &&
+    !!data.assignedTo &&
+    data.previousAdvisorId !== data.assignedTo &&
+    !!assignedDate &&
+    (!lastRealFollowUp || assignedDate > lastRealFollowUp);
+  const isLost = markedLost && !reopenedByReassign;
+
   const isClosed = data.status === 'closed' || stageConfig.id === 'firma';
   const missingPeriodFollowUp = isPeriodCreated && !hadPeriodFollowUp && !isLost && !isClosed;
 
@@ -279,7 +301,7 @@ export function mapDocToCommercialLeadItem(
     advisorName,
     pipelineStage: stageConfig.id,
     pipelineStageLabel: stageConfig.label,
-    status: isLost ? 'lost' : (isClosed ? 'closed' : (data.status || 'new')),
+    status: isLost ? 'lost' : (isClosed ? 'closed' : (reopenedByReassign ? 'contacted' : (data.status || 'new'))),
     source: data.source || data.metadata?.fuente || data.metadata?.source || 'manual',
     fuenteUbicacion: data.fuenteUbicacion || data.metadata?.fuenteUbicacion || 'Directo',
     hasFicha,
