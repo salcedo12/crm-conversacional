@@ -128,15 +128,31 @@ const PLACES_TTL_MS = 6 * 60 * 60 * 1000;
 let placesCache: { at: number; cities: DocuBlockCity[]; countries: DocuBlockCountry[] } | null = null;
 
 export async function listPlaces(): Promise<{ cities: DocuBlockCity[]; countries: DocuBlockCountry[] }> {
-  if (placesCache && Date.now() - placesCache.at < PLACES_TTL_MS) return placesCache;
-  const [cities, countries] = await Promise.all([
-    call<{ cities?: DocuBlockCity[] }>('POST', '/api/cities/get-all'),
-    call<{ countrydto?: DocuBlockCountry[] }>('POST', '/api/countries/get-all'),
+  if (placesCache && placesCache.cities.length > 0 && Date.now() - placesCache.at < PLACES_TTL_MS) return placesCache;
+  const [citiesRaw, countriesRaw] = await Promise.all([
+    call<Record<string, unknown>>('POST', '/api/cities/get-all'),
+    call<Record<string, unknown>>('POST', '/api/countries/get-all'),
   ]);
-  placesCache = {
+  const rawCities = (
+    Array.isArray(citiesRaw) ? citiesRaw : (citiesRaw.cities ?? citiesRaw.data ?? [])
+  ) as DocuBlockCity[];
+  const rawCountries = (
+    Array.isArray(countriesRaw) ? countriesRaw : (countriesRaw.countrydto ?? countriesRaw.countries ?? countriesRaw.data ?? [])
+  ) as DocuBlockCountry[];
+  logger.info('[DocuBlock] listPlaces', {
+    cityKeys: Array.isArray(citiesRaw) ? ['array'] : Object.keys(citiesRaw ?? {}),
+    cityTotal: (citiesRaw as Record<string, unknown>)?.total ?? null,
+    cityTotalPages: (citiesRaw as Record<string, unknown>)?.totalPages ?? null,
+    cityCount: rawCities.length,
+    sampleCity: rawCities[0] ? { name: rawCities[0].name, countryType: typeof rawCities[0].country } : null,
+    countryKeys: Array.isArray(countriesRaw) ? ['array'] : Object.keys(countriesRaw ?? {}),
+    countryCount: rawCountries.length,
+  });
+  const parsed = {
     at: Date.now(),
-    cities: (cities.cities ?? []).map((c) => ({ _id: c._id, name: c.name, country: typeof c.country === 'string' ? c.country : c.country?._id ?? '' })),
-    countries: (countries.countrydto ?? []).map((c) => ({ _id: c._id, name: c.name, abbreviation: c.abbreviation })),
+    cities: rawCities.map((c) => ({ _id: c._id, name: c.name, country: typeof c.country === 'string' ? c.country : c.country?._id ?? '' })),
+    countries: rawCountries.map((c) => ({ _id: c._id, name: c.name, abbreviation: c.abbreviation })),
   };
-  return placesCache;
+  if (parsed.cities.length > 0) placesCache = parsed;
+  return parsed;
 }
