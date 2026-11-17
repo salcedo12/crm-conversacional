@@ -108,7 +108,12 @@ export interface PaymentPlan {
   landValue:   number;           // VALOR DEL TERRENO (según plazo en la lista de precios)
   termMonths:  number;           // plazo en meses (de la lista o el negociado si es especial)
   /** Plazo/valor por fuera de la lista de precios, aprobado por gerencia. null/ausente = de lista. */
-  specialTerm?: { approvedBy: string } | null;
+  specialTerm?: {
+    approvedBy:  string;
+    status?:     'approved';
+    notes?:      string;
+    approvedAt?: string;
+  } | null;
   benefit:     number;           // BENEFICIO
   severance:   Severance | null; // CESANTÍAS
   rows:        PlanRow[];
@@ -120,9 +125,9 @@ export type DealStatus =
   | 'borrador'
   | 'plan_listo'          // ficha + lote + plan válidos; lote reservado
   | 'preventa_en_firma'
-  | 'preventa_firmada'    // lote VENDIDO; se genera la promesa
+  | 'preventa_firmada'    // lote sigue en TRAMITE hasta auditoría interna; se firma promesa
   | 'promesa_en_firma'
-  | 'promesa_firmada'
+  | 'promesa_firmada'     // cierre completo (lead Vendido + CAPI Purchase)
   | 'anulado';
 
 export type DealDocumentKind = 'preventa' | 'promesa';
@@ -217,13 +222,24 @@ export interface DealAttachment {
 export interface DealPlanApproval {
   id:              string;
   token?:          string;
-  status:          'pending' | 'approved' | 'rejected';
+  status:          'pending' | 'approved' | 'rejected' | 'cancelled' | 'superseded';
   approverPhone:   string;
   approverName?:   string;
   requestedAt:     Timestamp;
   resolvedAt?:     Timestamp | null;
   resolvedBy?:     string | null;
   responseNotes?:  string | null;
+}
+
+export interface PlanTotals {
+  totalLand:     number;
+  separation:    number;
+  ordinary:      number;
+  extraordinary: number;
+  bonus:         number;
+  severance:     number;
+  installments:  number;
+  earnestMoney:  number;
 }
 
 export interface Deal {
@@ -236,10 +252,15 @@ export interface Deal {
   buyerNames?: string[];   // denormalizado para listados
   lot:         DealLot | null;
   plan:        PaymentPlan | null;
+  planTotals?: PlanTotals;
+  draftPlan?:  Omit<PaymentPlan, 'specialTerm'> | null;
   planApproval?: DealPlanApproval | null;
   documents:   DealDocument[];
   attachments?: DealAttachment[];
   cancelReason?: string;
+  cancelledBy?:  string;
+  cancelledAt?:  Timestamp;
+  closedLeadAt?: Timestamp;
   lotsBackfilled?: boolean;
   /** true mientras algún documento esté en firma (lo consulta la tarea periódica). */
   signaturePending?: boolean;

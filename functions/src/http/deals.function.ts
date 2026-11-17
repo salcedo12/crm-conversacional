@@ -9,6 +9,8 @@ import { ClientInputSchema, clientDocId, normalizeIdentification, MAX_BUYERS } f
 import type { ClientProfile, Deal, DealAttachment, DealAttachmentCategory } from '../modules/deals/deals.types';
 import { clientsCol, dealsCol, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef, leadRef } from '../modules/deals/dealAudit';
+import { backfillDealLots, lotSnapshot } from '../modules/deals/dealDocumentLot';
+import { isPendingSignature } from '../modules/deals/dealSignature.logic';
 import { releaseLot } from '../modules/inventory/lotReservation.service';
 
 /**
@@ -190,8 +192,25 @@ export const getDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, asy
   const data = parseInput(GetDealSchema, request.data, 'consultar el negocio');
   assertCompany(ctx, data.companyId);
 
-  const { deal } = await loadDeal(ctx, data.companyId, data.dealId);
-  return { deal: { ...serializeDeal(deal), buyerProfiles: await loadBuyerProfiles(data.companyId, deal) } };
+  const { ref, deal: rawDeal } = await loadDeal(ctx, data.companyId, data.dealId);
+  const deal = await backfillDealLots(data.companyId, ref, rawDeal);
+  const [advisor, leadSnap, buyerProfiles] = await Promise.all([
+    deal.advisorId ? userDisplayName(data.companyId, deal.advisorId) : Promise.resolve({ name: 'Sin asesor', email: '' }),
+    leadRef(data.companyId, deal.leadId).get(),
+    loadBuyerProfiles(data.companyId, deal),
+  ]);
+  const leadName = leadSnap.exists
+    ? String(leadSnap.get('name') || leadSnap.get('phone') || 'Lead')
+    : 'Lead';
+
+  return {
+    deal: {
+      ...serializeDeal(deal),
+      advisorName: advisor.name,
+      leadName,
+      buyerProfiles,
+    },
+  };
 });
 
 // ─── Fichas de compradores ───────────────────────────────────────────────────
@@ -427,6 +446,7 @@ export const uploadDealAttachment = onCall(
       ...(data.paymentAmount ? { paymentAmount: data.paymentAmount } : {}),
       ...(data.paymentDate ? { paymentDate: data.paymentDate } : {}),
       ...(data.note ? { note: data.note } : {}),
+      ...(deal.lot ? { lot: lotSnapshot(deal.lot) } : {}),
       uploadedAt: now,
       uploadedBy: ctx.uid,
       uploadedByName: actor.name,
@@ -545,14 +565,43 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
 
   const now = Timestamp.now();
   const actor = await userDisplayName(data.companyId, ctx.uid);
-  const batch = db.batch();
-  batch.update(ref, {
+  const docs = deal.documents ?? [];
+  const hadPendingSignatures = docs.some((d) => d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+  const cancelledDocs = docs.map((d) =>
+    d.docublockDocumentId && isPendingSignature(d.signatureStatus)
+      ? { ...d, signatureStatus: 'anulado' as const }
+      : d,
+  );
+
+  const updateDeal: Record<string, unknown> = {
     status: 'anulado',
     cancelReason: data.reason,
     cancelledBy: ctx.uid,
     cancelledAt: now,
+    signaturePending: false,
     updatedAt: now,
-  });
+    ...(hadPendingSignatures ? { documents: cancelledDocs } : {}),
+    ...(deal.planApproval?.status === 'pending'
+      ? {
+          'planApproval.status': 'cancelled',
+          'planApproval.resolvedAt': now,
+          'planApproval.resolvedBy': actor.name,
+          'planApproval.responseNotes': `Negocio anulado: ${data.reason}`,
+        }
+      : {}),
+  };
+
+  const batch = db.batch();
+  batch.update(ref, updateDeal);
+  if (deal.planApproval?.status === 'pending' && deal.planApproval.id) {
+    const apprRef = db.collection('companies').doc(data.companyId).collection('dealApprovals').doc(deal.planApproval.id);
+    batch.set(apprRef, {
+      status: 'cancelled',
+      resolvedAt: now,
+      resolvedBy: actor.name,
+      responseNotes: `Negocio anulado: ${data.reason}`,
+    }, { merge: true });
+  }
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
@@ -561,7 +610,10 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     actorName: actor.name,
     event: 'cancelled',
     title: 'Negocio anulado',
-    lines: [`Motivo: ${data.reason}`],
+    lines: [
+      `Motivo: ${data.reason}`,
+      ...(hadPendingSignatures ? ['Se detuvo el seguimiento de firma en el CRM (anula también en el panel de DocuBlock si siguen vigentes)'] : []),
+    ],
     createdAt: now,
   }));
   await batch.commit();
@@ -571,6 +623,22 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     await releaseLot(deal.lot.inventoryLotId, deal.id, actor)
       .catch((err) => logger.warn('[Deals] No se pudo liberar el lote al anular', { dealId: deal.id, error: String(err) }));
   }
+
+  // Si este negocio marcó el lead como Vendido (closed) y no hay otro negocio cerrado, revertir a qualified.
+  try {
+    const lRef = leadRef(data.companyId, deal.leadId);
+    const lSnap = await lRef.get();
+    if (lSnap.exists && lSnap.get('status') === 'closed' && lSnap.get('closedByDealId') === deal.id) {
+      const otherDealsSnap = await dealsCol(data.companyId).where('leadId', '==', deal.leadId).get();
+      const hasOtherSigned = otherDealsSnap.docs.some((d) => d.id !== deal.id && d.get('status') === 'promesa_firmada');
+      if (!hasOtherSigned) {
+        await lRef.update({ status: 'qualified', closedByDealId: null, updatedAt: now });
+      }
+    }
+  } catch (leadErr) {
+    logger.warn('[Deals] No se pudo revisar el estado del lead al anular', { dealId: deal.id, error: String(leadErr) });
+  }
+
   logger.info('[Deals] Negocio anulado', { companyId: data.companyId, dealId: data.dealId });
   return { ok: true as const };
 });

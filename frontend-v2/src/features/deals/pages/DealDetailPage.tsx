@@ -19,7 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import {
   cancelDeal,
   DEAL_STATUS_LABELS,
@@ -59,6 +59,7 @@ export function DealDetailPage() {
   const navigate = useNavigate();
   const { companyId, role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
+  const readOnly = !platformAdmin && isViewerRole(role);
 
   const [deal, setDeal] = useState<DealSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -282,14 +283,18 @@ export function DealDetailPage() {
 
   const attachments = deal.attachments ?? [];
   const stats = supportStats(deal);
-  const editable = deal.status === 'borrador' || deal.status === 'plan_listo';
+  const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
+  const canCancelDeal = !readOnly && deal.status !== 'anulado' && (editable || isAdmin);
+  const hasPendingSignatures = (deal.documents ?? []).some(
+    (d) => d.docublockDocumentId && (d.signatureStatus === 'en_firma' || d.signatureStatus === 'firmado_parcial'),
+  );
   const draftPlan = (deal as any).draftPlan || (deal.planApproval as any)?.planDraft;
   const activePlan = deal.plan || draftPlan;
   const isApprovalPending = deal.planApproval?.status === 'pending';
   const planStale = !!activePlan && activePlan.lotId !== deal.lot?.inventoryLotId;
   const hasPreventa = (deal.documents ?? []).some((d) => d.kind === 'preventa');
   const canGeneratePreventa =
-    deal.status === 'plan_listo' || (hasPreventa && Boolean(deal.lot) && Boolean(deal.plan));
+    !readOnly && deal.status !== 'anulado' && (deal.status === 'plan_listo' || (hasPreventa && Boolean(deal.lot) && Boolean(deal.plan)));
 
   return (
     <div className="deal-touch h-full w-full overflow-y-auto bg-zinc-950 px-3.5 py-4 pb-32 sm:px-6 sm:py-6 sm:pb-20 lg:px-8 overscroll-contain">
@@ -481,6 +486,15 @@ export function DealDetailPage() {
         </header>
 
         {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
+        {deal.status === 'anulado' && (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-xs text-red-200 flex items-start gap-2.5">
+            <Ban size={16} className="mt-0.5 shrink-0 text-red-400" />
+            <div>
+              <p className="font-bold text-red-200">Negocio anulado</p>
+              {deal.cancelReason && <p className="mt-0.5 text-red-300/90">Motivo: {deal.cancelReason}</p>}
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: NEGOCIO (Gestión, Resumen y Control Documental) */}
         {tab === 'negocio' && (
@@ -533,7 +547,7 @@ export function DealDetailPage() {
                     {deal.buyerProfiles.map((b, i) => (
                       <div key={b.id || i} className="rounded-xl border border-zinc-800/90 bg-zinc-950/70 p-3 flex items-start gap-2.5">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-xs font-bold text-emerald-300">
-                          {b.firstNames?.[0] || 'C'}{b.lastNames?.[0] || (i + 1)}
+                          {b.firstNames?.[0] || 'C'}{b.lastNames?.[0] || b.firstNames?.[1] || (i + 1)}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
@@ -703,11 +717,21 @@ export function DealDetailPage() {
               )}
 
               {/* Anular negocio */}
-              {editable && (
+              {canCancelDeal && (
                 <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-3.5 text-center">
                   {canceling ? (
                     <div className="space-y-2 text-left max-w-md mx-auto">
                       <p className="text-xs font-bold text-red-300">Confirmar anulación del negocio</p>
+                      {hasPendingSignatures && (
+                        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-200">
+                          Este negocio tiene documentos en firma en DocuBlock. Al anular se liberará el lote y se detendrá el seguimiento en el CRM; recuerda anularlos también en el panel de DocuBlock.
+                        </p>
+                      )}
+                      {deal.status === 'promesa_firmada' && (
+                        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-200">
+                          Este negocio ya tiene promesa firmada. Anularlo liberará el lote si aún está en trámite y revertirá el estado del lead si no tiene otra venta cerrada.
+                        </p>
+                      )}
                       <textarea
                         value={cancelReason}
                         onChange={(e) => setCancelReason(e.target.value)}
@@ -1034,6 +1058,7 @@ export function DealDetailPage() {
         {tab === 'soportes' && (
           <div className="lg:grid lg:grid-cols-12 lg:gap-6 items-start space-y-5 lg:space-y-0">
             {/* COLUMNA IZQUIERDA: FORMULARIO STICKY PARA AGREGAR SOPORTE */}
+            {!readOnly && (
             <div className="lg:col-span-5 xl:col-span-5 lg:sticky lg:top-4 space-y-5">
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4 sm:p-5 shadow-lg backdrop-blur-sm">
                 <div className="flex items-center gap-2 pb-3 border-b border-zinc-800">
@@ -1152,9 +1177,10 @@ export function DealDetailPage() {
                 </div>
               </section>
             </div>
+            )}
 
             {/* COLUMNA DERECHA: LISTADO DE SOPORTES CARGADOS */}
-            <div className="lg:col-span-7 xl:col-span-7 space-y-5">
+            <div className={readOnly ? 'lg:col-span-12 space-y-5' : 'lg:col-span-7 xl:col-span-7 space-y-5'}>
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 shadow-lg">
                 <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
                   <div className="flex items-center gap-2">

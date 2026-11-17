@@ -27,7 +27,7 @@ import {
 } from '../../integrations/docublock/docublock.logic';
 import { moveLotToTramite } from '../inventory/lotReservation.service';
 import { clientsCol } from './dealAccess';
-import { dealActivityDoc, dealActivityRef } from './dealAudit';
+import { dealActivityDoc, dealActivityRef, leadRef } from './dealAudit';
 import { isCurrentDocument, latestCurrentDocument, lotLabel } from './dealDocumentLot';
 import { signatureDealStatus, isPendingSignature, signatureDocOf } from './dealSignature.logic';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind, DealSignature, DealSignatureSigner } from './deals.types';
@@ -294,11 +294,43 @@ export async function sendToSignature(opts: {
 }
 
 /** Guarda documentos, estado del negocio y la marca de "en firma". */
-async function saveSignatureState(ref: DocumentReference, deal: Deal) {
+async function saveSignatureState(ref: DocumentReference, deal: Deal): Promise<Deal['status']> {
+  const prevStatus = deal.status;
   const status = signatureDealStatus(deal);
   const pending = (deal.documents ?? []).some((d) => d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+  const now = Timestamp.now();
   deal.status = status;
-  await ref.update({ documents: deal.documents, status, signaturePending: pending, updatedAt: Timestamp.now() });
+  await ref.update({ documents: deal.documents, status, signaturePending: pending, updatedAt: now });
+
+  // Fase 6: al firmarse la promesa, el lote sigue en TRAMITE (auditoría interna) y el lead pasa a Vendido (closed → CAPI Purchase).
+  if (prevStatus !== 'promesa_firmada' && status === 'promesa_firmada' && deal.leadId) {
+    try {
+      const lRef = leadRef(deal.companyId, deal.leadId);
+      const lSnap = await lRef.get();
+      if (lSnap.exists && lSnap.get('status') !== 'closed') {
+        await lRef.update({ status: 'closed', closedByDealId: deal.id, updatedAt: now });
+        await ref.update({ closedLeadAt: now });
+        await dealActivityRef(deal.companyId, deal.leadId).set(dealActivityDoc({
+          companyId: deal.companyId,
+          leadId: deal.leadId,
+          dealId: deal.id,
+          actorId: 'docublock',
+          actorName: 'DocuBlock',
+          event: 'signature_update',
+          title: 'Lead marcado como Vendido',
+          lines: ['Promesa firmada por todos · Lote se mantiene en TRÁMITE para auditoría interna'],
+          createdAt: now,
+        }));
+      }
+    } catch (err) {
+      logger.warn('[DealSignature] No se pudo marcar el lead como closed al firmar promesa', {
+        dealId: deal.id,
+        leadId: deal.leadId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return status;
 }
 
 /**

@@ -6,13 +6,14 @@ import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import type { AuthContext } from '../lib/authContext';
-import { loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
+import { draftStatusFor, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
+import { computeEarnestMoney, summarizePlan } from '../modules/deals/paymentPlan';
 import { phoneTail } from '../utils/phone';
 import { getYcloudClientForCompany } from '../integrations/ycloud/ycloud.client';
 import { getProjectLegalProfile } from '../modules/deals/legalProfiles';
 import { oneLine } from '../modules/ai/aiFailureAlert';
-import type { Deal } from '../modules/deals/deals.types';
+import type { Deal, PaymentPlan } from '../modules/deals/deals.types';
 
 /**
  * Módulo Negocios — Aprobación de Planes Especiales por Gerencia vía WhatsApp
@@ -115,6 +116,9 @@ export const requestPlanApproval = onCall({ region: 'us-central1', timeoutSecond
   assertCompany(ctx, data.companyId);
 
   const { deal, ref } = await loadDeal(ctx, data.companyId, data.dealId);
+  if (deal.status === 'anulado') {
+    throw new HttpsError('failed-precondition', 'No se puede solicitar aprobación para un negocio anulado.');
+  }
   if (!deal.lot) {
     throw new HttpsError('failed-precondition', 'Primero debes escoger el lote del negocio antes de solicitar aprobación.');
   }
@@ -209,7 +213,26 @@ export const requestPlanApproval = onCall({ region: 'us-central1', timeoutSecond
     requestedByName: requester.name,
   };
 
-  await db.collection('companies').doc(data.companyId).collection('dealApprovals').doc(approvalId).set(approvalRecord);
+  const approvalsCol = db.collection('companies').doc(data.companyId).collection('dealApprovals');
+  // Al reenviar o cambiar condiciones, cerrar solicitudes pendientes previas de este mismo negocio
+  // para que una respuesta tardía a un mensaje anterior no aplique dos veces ni quede colgada.
+  const prevPending = await approvalsCol.where('dealId', '==', deal.id).get();
+  const supersededBatch = db.batch();
+  let supersededCount = 0;
+  for (const prevDoc of prevPending.docs) {
+    if (prevDoc.get('status') === 'pending') {
+      supersededBatch.update(prevDoc.ref, {
+        status: 'superseded',
+        resolvedAt: now,
+        resolvedBy: requester.name,
+        responseNotes: `Reemplazada por nueva solicitud (${approvalId})`,
+      });
+      supersededCount += 1;
+    }
+  }
+  if (supersededCount > 0) await supersededBatch.commit();
+
+  await approvalsCol.doc(approvalId).set(approvalRecord);
 
   // Actualizar deal con la solicitud pendiente y guardar el borrador del plan
   const updateDealPayload: Record<string, any> = {
@@ -404,6 +427,9 @@ export async function resolvePlanApproval(params: {
   const dealSnap = await dealRef.get();
   if (dealSnap.exists) {
     const dealData = dealSnap.data() as Deal;
+    if (dealData.status === 'anulado') {
+      return { ok: false, message: 'El negocio ya fue anulado; no se puede aplicar la autorización.', approval: { ...approval, status: 'cancelled' } };
+    }
     const specialTermApprovedBy = `${params.resolvedBy}${cleanNotes ? `: "${cleanNotes}"` : ''}`;
 
     const updatePayload: Record<string, any> = {
@@ -415,31 +441,49 @@ export async function resolvePlanApproval(params: {
     };
 
     if (params.approved) {
+      const approvedSpecialTerm = {
+        approvedBy: specialTermApprovedBy,
+        status: 'approved' as const,
+        notes: cleanNotes,
+        approvedAt: now.toDate().toISOString(),
+      };
       if (dealData.plan) {
-        updatePayload['plan.specialTerm'] = {
-          approvedBy: specialTermApprovedBy,
-          status: 'approved',
-          notes: cleanNotes,
-          approvedAt: now.toDate().toISOString(),
-        };
-        if (dealData.status === 'borrador') {
-          updatePayload.status = 'plan_listo';
-        }
-      } else if (approval.planDraftSnapshot || (dealData as any).draftPlan) {
+        const nextPlan: PaymentPlan = { ...dealData.plan, specialTerm: approvedSpecialTerm };
+        updatePayload['plan.specialTerm'] = approvedSpecialTerm;
+        updatePayload.status = draftStatusFor({ ...dealData, plan: nextPlan });
+      } else if (approval.planDraftSnapshot || dealData.draftPlan) {
         // Promover a plan oficial EXACTAMENTE el borrador que gerencia revisó
         // (copia guardada en la solicitud). El borrador vivo del negocio solo se
         // usa para solicitudes antiguas que no guardaron copia.
-        const draft = approval.planDraftSnapshot || (dealData as any).draftPlan;
-        updatePayload.plan = {
+        const draft = (approval.planDraftSnapshot || dealData.draftPlan) as Omit<PaymentPlan, 'specialTerm'>;
+        const promotedPlan: PaymentPlan = {
           ...draft,
-          specialTerm: {
-            approvedBy: specialTermApprovedBy,
-            status: 'approved',
-            notes: cleanNotes,
-            approvedAt: now.toDate().toISOString(),
-          },
+          lotId: draft.lotId || dealData.lot?.inventoryLotId || '',
+          listPrice: null,
+          specialTerm: approvedSpecialTerm,
         };
-        updatePayload.status = 'plan_listo';
+        updatePayload.plan = promotedPlan;
+        updatePayload.status = draftStatusFor({ ...dealData, plan: promotedPlan });
+        try {
+          const summary = summarizePlan(promotedPlan);
+          if (summary.issues.length === 0 && dealData.lot) {
+            updatePayload.planTotals = {
+              totalLand: summary.totalLand,
+              separation: summary.separationTotal,
+              ordinary: summary.ordinaryTotal,
+              extraordinary: summary.extraordinaryTotal,
+              bonus: summary.bonusTotal,
+              severance: summary.severanceTotal,
+              installments: summary.installmentsTotal,
+              earnestMoney: computeEarnestMoney(
+                promotedPlan.landValue,
+                getProjectLegalProfile(dealData.lot.projectId)?.earnestPercent ?? 30,
+              ),
+            };
+          }
+        } catch (sumErr) {
+          logger.warn('[dealApproval] No se pudo calcular planTotals al promover plan', { dealId: dealData.id, error: String(sumErr) });
+        }
       }
     } else if (dealData.plan) {
       updatePayload['plan.specialTerm'] = null;
@@ -503,15 +547,20 @@ export async function handlePendingDealApprovalInbound(params: {
   const tail = phoneTail(params.fromPhone);
   if (!tail) return false;
 
-  // 1. Buscar en la empresa del webhook (evita índice compuesto filtrando status en memoria)
+  const latestPending = (docs: FirebaseFirestore.QueryDocumentSnapshot[]) =>
+    docs
+      .filter((d) => d.data().status === 'pending')
+      .sort((a, b) => (b.get('requestedAt')?.toMillis?.() ?? 0) - (a.get('requestedAt')?.toMillis?.() ?? 0))[0];
+
+  // 1. Buscar en la empresa del webhook (evita índice compuesto filtrando y ordenando en memoria)
   const companySnap = await db
     .collection('companies').doc(params.companyId)
     .collection('dealApprovals')
     .where('approverTail', '==', tail)
-    .limit(10)
+    .limit(50)
     .get();
 
-  let approvalDoc = companySnap.docs.find((d) => d.data().status === 'pending');
+  let approvalDoc = latestPending(companySnap.docs);
 
   // 2. Si no se encontró (por diferencias en enrutamiento de líneas), buscar en las otras empresas conocidas sin requerir collectionGroup
   if (!approvalDoc) {
@@ -522,9 +571,9 @@ export async function handlePendingDealApprovalInbound(params: {
         .collection('companies').doc(cid)
         .collection('dealApprovals')
         .where('approverTail', '==', tail)
-        .limit(10)
+        .limit(50)
         .get();
-      approvalDoc = snap.docs.find((d) => d.data().status === 'pending');
+      approvalDoc = latestPending(snap.docs);
       if (approvalDoc) break;
     }
   }

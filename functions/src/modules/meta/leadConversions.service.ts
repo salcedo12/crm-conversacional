@@ -5,6 +5,7 @@ import { env } from '../../config/env';
 import { sendConversionEvent } from '../../integrations/meta/metaCapi.client';
 import { getSmartHomeSaleForProspect } from '../../integrations/smarthome/smarthome.client';
 import { getMetaCapiConfigForCompany, isMetaCapiConfigured } from '../companies/channelCredentials.repository';
+import type { Deal } from '../deals/deals.types';
 import type { Lead, LeadStatus } from '../leads/leads.types';
 
 /**
@@ -33,10 +34,40 @@ function smartHomeDateToEpochS(value: string | null): number | undefined {
 }
 
 /**
- * Valor de la venta: primero el corregido a mano en el informe de comisiones
- * (`sales_reports/{prospectId}`), luego el valor neto de SmartHome.
+ * Valor de la venta: primero el corregido en `sales_reports` (por negocio o prospecto),
+ * luego el plan del negocio firmado (`promesa_firmada` / `preventa_firmada`),
+ * y finalmente el valor neto en SmartHome.
  */
-async function resolveSaleValue(companyId: string, lead: Lead): Promise<{ value?: number; eventTime?: number }> {
+async function resolveSaleValue(
+  companyId: string,
+  leadId: string,
+  lead: Lead,
+): Promise<{ value?: number; eventTime?: number }> {
+  // 1. Negocio firmado en el módulo Negocios (fuente principal del CRM).
+  const dealsSnap = await db.collection(`companies/${companyId}/deals`)
+    .where('leadId', '==', leadId)
+    .get()
+    .catch(() => null);
+
+  if (dealsSnap && !dealsSnap.empty) {
+    const deals = dealsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Deal));
+    const signedDeal =
+      deals.filter((d) => d.status === 'promesa_firmada').sort((a, b) => (b.updatedAt?.toMillis?.() ?? 0) - (a.updatedAt?.toMillis?.() ?? 0))[0]
+      ?? deals.filter((d) => d.status === 'preventa_firmada' || d.status === 'promesa_en_firma').sort((a, b) => (b.updatedAt?.toMillis?.() ?? 0) - (a.updatedAt?.toMillis?.() ?? 0))[0];
+
+    if (signedDeal) {
+      const savedByDeal = await db.collection(`companies/${companyId}/sales_reports`).doc(signedDeal.id).get().catch(() => null);
+      const savedDealVal = Number(savedByDeal?.data()?.totalValue ?? savedByDeal?.data()?.landValue ?? 0);
+      const netPlanVal = signedDeal.planTotals?.totalLand
+        ?? (signedDeal.plan ? Math.max(0, signedDeal.plan.landValue - (signedDeal.plan.benefit ?? 0)) : 0);
+      const dealValue = savedDealVal > 0 ? savedDealVal : (netPlanVal > 0 ? netPlanVal : Number(signedDeal.plan?.landValue ?? 0));
+      const signedPromesa = [...(signedDeal.documents ?? [])].reverse().find((d) => d.kind === 'promesa' && d.signedAt)
+        ?? [...(signedDeal.documents ?? [])].reverse().find((d) => d.signedAt);
+      const eventTime = signedPromesa?.signedAt?.seconds ?? signedDeal.updatedAt?.seconds;
+      if (dealValue > 0) return { value: dealValue, eventTime };
+    }
+  }
+
   const prospectId = lead.smartHomeProspectId;
   if (!prospectId) return {};
 
@@ -73,7 +104,7 @@ export async function sendLeadConversion(
 
   if (lead.capiEvents?.[eventName]) return { status: 'skipped', reason: 'already_sent' };
 
-  const { value, eventTime } = eventName === 'Purchase' ? await resolveSaleValue(companyId, lead) : {};
+  const { value, eventTime } = eventName === 'Purchase' ? await resolveSaleValue(companyId, leadId, lead) : {};
   if (eventName === 'Purchase' && !value) {
     logger.warn('[CAPI] Venta sin valor en SmartHome; se envía Purchase sin valor', { companyId, leadId });
   }

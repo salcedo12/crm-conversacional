@@ -77,7 +77,7 @@ export interface PaymentPlan {
 
 export interface DealPlanApproval {
   id:              string;
-  status:          'pending' | 'approved' | 'rejected';
+  status:          'pending' | 'approved' | 'rejected' | 'cancelled' | 'superseded';
   approverPhone:   string;
   approverName?:   string;
   requestedAt:     number | null;

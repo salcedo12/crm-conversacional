@@ -6,7 +6,7 @@ import {
   Upload, UserRound, X, XCircle,
 } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import {
   DEAL_STATUS_LABELS,
   deleteDealAttachment,
@@ -109,6 +109,7 @@ export function DealsPage() {
   const navigate = useNavigate();
   const { companyId, role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
+  const readOnly = !platformAdmin && isViewerRole(role);
   const [deals, setDeals] = useState<DealSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -218,7 +219,7 @@ export function DealsPage() {
   if (!selectedProject) {
     return <>
       {creatingDeal && companyId && <NewDealByPhoneModal companyId={companyId} onClose={() => setCreatingDeal(false)} onChanged={() => void load()} />}
-      <ProjectSelection deals={deals} sales={shEnabled ? shSales : null} available={available} onNewDeal={() => setCreatingDeal(true)} loading={loading} error={error} onRefresh={() => void load()} onSelect={(project) => {
+      <ProjectSelection deals={deals} sales={shEnabled ? shSales : null} available={available} onNewDeal={readOnly ? undefined : () => setCreatingDeal(true)} loading={loading} error={error} onRefresh={() => void load()} onSelect={(project) => {
       setSelectedProject(project.key);
       setSelectedSector(project.key === 'laguna-mar' ? null : 'all');
       setSearch(''); setStatus('all'); setAdvisor('all');
@@ -254,7 +255,7 @@ export function DealsPage() {
             </div>
           </div>
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-            <button onClick={() => setCreatingDeal(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>
+            {!readOnly && <button onClick={() => setCreatingDeal(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>}
             <button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50">
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
             </button>
@@ -375,7 +376,7 @@ export function DealsPage() {
 }
 
 function ProjectSelection({ deals, sales, available, loading, error, onRefresh, onNewDeal, onSelect }: {
-  onNewDeal: () => void;
+  onNewDeal?: () => void;
   deals: DealSummary[];
   /** Lotes DISPONIBLES por proyecto del inventario de disponibilidad. */
   available: Record<string, number> | null;
@@ -392,7 +393,7 @@ function ProjectSelection({ deals, sales, available, loading, error, onRefresh, 
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div><div className="flex items-center gap-2"><Building2 className="text-emerald-400" size={25} /><h1 className="text-2xl font-extrabold text-zinc-100">Negocios por proyecto</h1></div><p className="mt-1 text-sm text-zinc-500">Selecciona un proyecto para consultar sus compradores, lotes, documentos y soportes.</p></div>
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-            <button onClick={onNewDeal} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>
+            {onNewDeal && <button onClick={onNewDeal} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>}
             <button onClick={onRefresh} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar</button>
           </div>
         </header>

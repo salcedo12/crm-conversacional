@@ -159,8 +159,15 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const [approverPhone, setApproverPhone] = useState(initialPhone === '3148209692' ? '3148209662' : initialPhone);
   const [approverName, setApproverName] = useState(deal.planApproval?.approverName || 'Don Jhon (Gerencia)');
   const [requestingApproval, setRequestingApproval] = useState(false);
-  const [approvalStatus, setApprovalStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>(
-    deal.planApproval?.status ?? (deal.plan?.specialTerm?.approvedBy ? 'approved' : 'none')
+  const rawApprStatus = deal.planApproval?.status;
+  const initialApprovalStatus: 'none' | 'pending' | 'approved' | 'rejected' =
+    rawApprStatus === 'pending' || rawApprStatus === 'approved' || rawApprStatus === 'rejected'
+      ? rawApprStatus
+      : (deal.plan?.specialTerm?.approvedBy ? 'approved' : 'none');
+  const [approvalStatus, setApprovalStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>(initialApprovalStatus);
+  const planFingerprint = `${termMonths ?? ''}|${landValue}|${benefit}|${severanceAmount}`;
+  const [approvedFingerprint, setApprovedFingerprint] = useState<string | null>(
+    initialApprovalStatus === 'approved' ? planFingerprint : null,
   );
   const [approvalNotes, setApprovalNotes] = useState<string>(deal.planApproval?.responseNotes ?? '');
   const [checkingApproval, setCheckingApproval] = useState(false);
@@ -179,12 +186,14 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         if (res.quickActionUrl) setQuickActionUrl(res.quickActionUrl);
         if (res.status === 'approved') {
           setApprovalStatus('approved');
+          setApprovedFingerprint(planFingerprint);
           const who = res.approvedBy || `Gerencia (${approverPhone})`;
           setApprovedBy(who);
           if (res.responseNotes) setApprovalNotes(res.responseNotes);
           setCheckNotice('✅ ¡Autorizado por Gerencia! El plan quedó desbloqueado.');
         } else if (res.status === 'rejected') {
           setApprovalStatus('rejected');
+          setApprovedFingerprint(null);
           if (res.responseNotes) setApprovalNotes(res.responseNotes);
           setCheckNotice('❌ El plan fue rechazado por Gerencia.');
         }
@@ -193,7 +202,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       }
     }, 4000);
     return () => clearInterval(interval);
-  }, [approvalStatus, companyId, deal.id, approverPhone]);
+  }, [approvalStatus, companyId, deal.id, approverPhone, planFingerprint]);
 
   const handleCheckStatus = async (): Promise<boolean> => {
     setCheckingApproval(true);
@@ -203,6 +212,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       if (res.quickActionUrl) setQuickActionUrl(res.quickActionUrl);
       if (res.status === 'approved') {
         setApprovalStatus('approved');
+        setApprovedFingerprint(planFingerprint);
         const who = res.approvedBy || `Gerencia (${approverPhone})`;
         setApprovedBy(who);
         if (res.responseNotes) setApprovalNotes(res.responseNotes);
@@ -210,6 +220,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         return true;
       } else if (res.status === 'rejected') {
         setApprovalStatus('rejected');
+        setApprovedFingerprint(null);
         if (res.responseNotes) setApprovalNotes(res.responseNotes);
         setCheckNotice('❌ El plan fue rechazado por Gerencia.');
         return false;
@@ -234,29 +245,30 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       setError('Escribe el valor del terreno antes de solicitar aprobación.');
       return;
     }
+    if (summary.issues.length > 0) {
+      setError(`Ajusta el plan antes de enviarlo a Gerencia: ${summary.issues[0]}`);
+      return;
+    }
+    if (termAlert) {
+      setError(`${termAlert} Corrige las fechas antes de solicitar aprobación.`);
+      return;
+    }
     setError(null);
     setRequestingApproval(true);
     setCheckNotice(null);
     try {
-      const sepParts: string[] = [];
-      if (simple.separationPayments && simple.separationPayments.length) {
-        simple.separationPayments.forEach((p) => {
-          sepParts.push(`${formatPesos(p.amount)} (${p.date})`);
-        });
-      } else {
-        sepParts.push(`${formatPesos(summary.separationTotal)} en ${simple.separationCount} pago(s) desde ${simple.separationFirstDate}`);
-      }
+      const sepGroups = groupInstallments(summary.installments.filter((i) => i.kind === 'separacion'));
+      const sepParts = sepGroups.length
+        ? sepGroups.map((g) => (g.count > 1 ? `${g.count} cuotas de ${formatPesos(g.amount)} (${formatDMY(g.from)} a ${formatDMY(g.to)})` : `${formatPesos(g.amount)} (${formatDMY(g.from)})`))
+        : [`${formatPesos(summary.separationTotal)}`];
 
-      const ordinaryInsts = summary.installments.filter((i) => i.kind === 'ordinaria');
-      let ordSummary = '';
-      if (ordinaryInsts.length > 0) {
-        const ordVal = Math.round(summary.ordinaryTotal / ordinaryInsts.length);
-        ordSummary = `${ordinaryInsts.length} cuota${ordinaryInsts.length === 1 ? '' : 's'} de ${formatPesos(ordVal)} (total: ${formatPesos(summary.ordinaryTotal)})`;
-      } else {
-        ordSummary = 'Sin cuotas ordinarias';
-      }
+      const ordGroups = groupInstallments(summary.installments.filter((i) => i.kind === 'ordinaria'));
+      const ordSummary = ordGroups.length > 0
+        ? `${ordGroups.map((g) => `${g.count} de ${formatPesos(g.amount)}`).join(' + ')} (total: ${formatPesos(summary.ordinaryTotal)})`
+        : 'Sin cuotas ordinarias';
 
-      const extraParts = (simple.extraordinary || []).map((e) => `• ${formatPesos(e.amount)} (${e.date})`);
+      const extraInsts = summary.installments.filter((i) => i.kind === 'extraordinaria');
+      const extraParts = extraInsts.map((e) => `• ${formatPesos(e.amount)} (${e.date})`);
 
       const planDraft = {
         lotId: deal.lot?.inventoryLotId || '',
@@ -406,18 +418,24 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const termAlert = term && term.outside.length > 0
     ? `Se pasa del plazo de ${term.termMonths} meses: ${term.outside.length === 1 ? '1 cuota queda' : `${term.outside.length} cuotas quedan`} después de ${formatMonthYear(term.end)} (el plazo va de ${formatMonthYear(term.start)} a ${formatMonthYear(term.end)}).`
     : null;
+  const approvalStale = approvalMethod === 'whatsapp'
+    && approvalStatus === 'approved'
+    && approvedFingerprint !== null
+    && approvedFingerprint !== planFingerprint;
+
   // Plazo especial: hay que escribir los meses y, si el lote está en la lista, quién lo aprobó.
   const specialIssue = !special ? null
     : termMonths === null ? 'Escribe los meses negociados del plazo especial.'
-      : options.length > 0 && !approvedBy.trim()
-        ? approvalMethod === 'whatsapp'
-          ? (approvalStatus === 'pending'
-              ? 'Esperando que gerencia autorice el plan por WhatsApp...'
-              : approvalStatus === 'rejected'
-                ? 'El plan fue rechazado por gerencia. Ajusta los valores o plazo.'
-                : 'Solicita la autorización por WhatsApp a gerencia antes de guardar.')
-          : 'Escribe quién aprobó el plazo especial.'
-        : null;
+      : approvalStale ? 'Modificaste plazo, valor o beneficio después de la autorización; solicita nuevamente la aprobación por WhatsApp.'
+        : options.length > 0 && !approvedBy.trim()
+          ? approvalMethod === 'whatsapp'
+            ? (approvalStatus === 'pending'
+                ? 'Esperando que gerencia autorice el plan por WhatsApp...'
+                : approvalStatus === 'rejected'
+                  ? 'El plan fue rechazado por gerencia. Ajusta los valores o plazo.'
+                  : 'Solicita la autorización por WhatsApp a gerencia antes de guardar.')
+            : 'Escribe quién aprobó el plazo especial.'
+          : null;
   // Pasarse del plazo bloquea guardar, igual que si el plan no cuadra (el servidor también lo revisa).
   const canSave = summary.issues.length === 0 && !termAlert && !specialIssue;
 
@@ -747,22 +765,29 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                   )}
 
                   {approvalStatus === 'approved' && (
-                    <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3">
+                    <div className={`rounded-lg border p-3 ${approvalStale ? 'border-amber-500/40 bg-amber-500/10' : 'border-emerald-500/40 bg-emerald-500/10'}`}>
                       <div className="flex items-center gap-2">
-                        <span className="text-emerald-400">✅</span>
+                        <span className={approvalStale ? 'text-amber-400' : 'text-emerald-400'}>{approvalStale ? '⚠️' : '✅'}</span>
                         <div className="flex-1">
-                          <p className="text-xs font-bold text-emerald-200">¡Plan Especial Autorizado por Gerencia!</p>
-                          <p className="text-[11px] text-emerald-300/80">
-                            {approvedBy ? `Registrado como: ${approvedBy}` : 'Autorizado vía WhatsApp'}
-                            {approvalNotes ? ` · Respuesta: "${approvalNotes}"` : ''}
+                          <p className={`text-xs font-bold ${approvalStale ? 'text-amber-200' : 'text-emerald-200'}`}>
+                            {approvalStale ? 'Condiciones modificadas tras la autorización' : '¡Plan Especial Autorizado por Gerencia!'}
+                          </p>
+                          <p className={`text-[11px] ${approvalStale ? 'text-amber-300/80' : 'text-emerald-300/80'}`}>
+                            {approvalStale
+                              ? 'Cambiaste valor, plazo o beneficio. Solicita una nueva aprobación antes de guardar.'
+                              : `${approvedBy ? `Registrado como: ${approvedBy}` : 'Autorizado vía WhatsApp'}${approvalNotes ? ` · Respuesta: "${approvalNotes}"` : ''}`}
                           </p>
                         </div>
                         <button
                           type="button"
-                          onClick={() => setApprovalStatus('none')}
+                          onClick={() => {
+                            setApprovalStatus('none');
+                            setApprovedFingerprint(null);
+                            setApprovedBy('');
+                          }}
                           className="text-[10px] text-zinc-400 underline hover:text-zinc-200"
                         >
-                          Cambiar
+                          {approvalStale ? 'Solicitar de nuevo' : 'Cambiar'}
                         </button>
                       </div>
                     </div>

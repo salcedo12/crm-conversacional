@@ -54,7 +54,12 @@ const PlanSchema = z.object({
   listPrice:  money.nullable().optional(),
   landValue:  money.refine((v) => v > 0, 'El valor del terreno debe ser mayor que cero'),
   termMonths: z.number().int().min(0).max(240),
-  specialTerm: z.object({ approvedBy: z.string().trim().max(120) }).nullable().optional(),
+  specialTerm: z.object({
+    approvedBy: z.string().trim().max(120),
+    status:     z.literal('approved').optional(),
+    notes:      z.string().trim().max(500).optional(),
+    approvedAt: z.string().trim().max(64).optional(),
+  }).nullable().optional(),
   benefit:    money,
   severance:  z.object({ fundName: z.string().trim().max(120), amount: money }).nullable(),
   rows:       z.array(z.object({
@@ -86,13 +91,22 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
   }
   if (!deal.lot) throw new HttpsError('failed-precondition', 'Primero escoge el lote del negocio.');
 
+  const preservedApproval = deal.planApproval?.status === 'approved' && deal.plan?.specialTerm
+    ? {
+        ...(deal.plan.specialTerm.status ? { status: deal.plan.specialTerm.status } : {}),
+        ...(deal.plan.specialTerm.notes ? { notes: deal.plan.specialTerm.notes } : {}),
+        ...(deal.plan.specialTerm.approvedAt ? { approvedAt: deal.plan.specialTerm.approvedAt } : {}),
+      }
+    : {};
   const plan: PaymentPlan = {
     ...data.plan,
     lotId: deal.lot.inventoryLotId,
     severance: data.plan.severance && data.plan.severance.amount > 0 ? data.plan.severance : null,
     referredBy: data.plan.referredBy || '',
     notes: data.plan.notes || '',
-    specialTerm: data.plan.specialTerm ?? null,
+    specialTerm: data.plan.specialTerm
+      ? { ...preservedApproval, ...data.plan.specialTerm }
+      : null,
     ...(data.plan.specialTerm ? { listPrice: null } : {}),
   };
   // Plazo especial de un lote que SÍ está en la lista: debe quedar quién lo aprobó.

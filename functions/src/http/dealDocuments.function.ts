@@ -12,6 +12,9 @@ import { formatoPesos, pesosEnLetras } from '../modules/deals/numeroALetras';
 import { renderContract } from '../modules/contracts/contractRenderer';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind } from '../modules/deals/deals.types';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
+import { lotSnapshot } from '../modules/deals/dealDocumentLot';
+import { isPendingSignature, signatureDealStatus } from '../modules/deals/dealSignature.logic';
+import { draftStatusFor } from '../modules/deals/dealStatus';
 
 /**
  * Módulo Negocios — Fase 4: genera la preventa y la promesa en Word desde las plantillas.
@@ -152,6 +155,7 @@ export async function generateDocument(
     generatedAt: Timestamp.now(),
     generatedBy: ctx.uid,
     signatureStatus: 'generado',
+    lot: lotSnapshot(deal.lot),
   };
   const now = doc.generatedAt;
   const actor = await userDisplayName(data.companyId, ctx.uid);
@@ -301,6 +305,9 @@ export const deleteDealDocument = onCall({ region: 'us-central1', timeoutSeconds
   if (target.signatureStatus === 'firmado') {
     throw new HttpsError('failed-precondition', 'No se puede eliminar un documento que ya fue firmado legalmente.');
   }
+  if (isPendingSignature(target.signatureStatus)) {
+    throw new HttpsError('failed-precondition', 'Este documento está en firma; marca su firma como anulada antes de eliminarlo.');
+  }
 
   // Borrar archivos asociados en Storage
   const bucket = storage.bucket();
@@ -325,11 +332,18 @@ export const deleteDealDocument = onCall({ region: 'us-central1', timeoutSeconds
   );
 
   const remaining = documents.filter((d) => !(d.kind === data.kind && d.version === data.version));
+  const pending = remaining.some((d) => d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+  const hasSignedOrPending = remaining.some((d) => d.docublockDocumentId && (isPendingSignature(d.signatureStatus) || d.signatureStatus === 'firmado'));
+  const nextStatus = deal.status === 'anulado'
+    ? 'anulado'
+    : hasSignedOrPending
+      ? signatureDealStatus({ ...deal, documents: remaining })
+      : draftStatusFor({ ...deal, status: 'borrador' });
   const now = Timestamp.now();
   const actor = await userDisplayName(data.companyId, ctx.uid);
 
   const batch = db.batch();
-  batch.update(ref, { documents: remaining, updatedAt: now });
+  batch.update(ref, { documents: remaining, status: nextStatus, signaturePending: pending, updatedAt: now });
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
