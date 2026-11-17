@@ -1,5 +1,5 @@
 import { HttpsError } from 'firebase-functions/v2/https';
-import type { DocumentReference } from 'firebase-admin/firestore';
+import { Timestamp, type DocumentReference } from 'firebase-admin/firestore';
 import type { z } from 'zod';
 import { db } from '../../lib/admin';
 import { ADMIN_ROLES, type AuthContext } from '../../lib/authContext';
@@ -47,5 +47,25 @@ export async function userDisplayName(companyId: string, uid: string): Promise<{
   };
 }
 
+
+/** Sincroniza el `advisorId` de los negocios abiertos (no anulados) cuando se reasigna el lead. */
+export async function syncOpenDealsAdvisor(
+  companyId: string,
+  leadId: string,
+  advisorId: string,
+  now = Timestamp.now(),
+): Promise<number> {
+  const snap = await dealsCol(companyId).where('leadId', '==', leadId).get();
+  const batch = db.batch();
+  let synced = 0;
+  for (const doc of snap.docs) {
+    if (doc.get('status') !== 'anulado' && doc.get('advisorId') !== advisorId) {
+      batch.update(doc.ref, { advisorId, updatedAt: now });
+      synced += 1;
+    }
+  }
+  if (synced > 0) await batch.commit();
+  return synced;
+}
 
 export { draftStatusFor } from './dealStatus';

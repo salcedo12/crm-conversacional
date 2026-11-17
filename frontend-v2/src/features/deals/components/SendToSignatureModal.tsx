@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FileUp, Loader2, PenLine } from 'lucide-react';
+import { AlertTriangle, FileUp, Loader2, PenLine } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import {
   getSignatureOptions,
@@ -11,11 +11,13 @@ import {
 } from '../services/deals.service';
 import { DealField, DealSheet, dealInputCls } from './DealSheet';
 import { AVALADOR, defaultDirectory, defaultTemplate, defaultTypeSigns } from './signatureDefaults';
+import { isCurrentDocument, latestCurrentDocument } from '../utils/documentLot';
+import { missingSupportsSummary } from '../pages/DealsPage';
 
 const KINDS: DealDocumentKind[] = ['preventa', 'promesa'];
 
 const lastVersion = (deal: DealSummary, kind: DealDocumentKind) =>
-  [...(deal.documents ?? [])].filter((d) => d.kind === kind).at(-1)?.version ?? null;
+  latestCurrentDocument(deal, kind)?.version ?? null;
 
 const dateText = (ms: number) => new Date(ms).toLocaleString('es-CO', { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 const LABELS: Record<DealDocumentKind, string> = { preventa: 'Contrato de preventa', promesa: 'Promesa de compraventa' };
@@ -58,17 +60,17 @@ export function SendToSignatureModal({ companyId, deal, initialMode = 'contracts
   const [requirePhoto, setRequirePhoto] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
 
-  // Documentos que ya están en firma o firmados no se vuelven a enviar.
+  // Documentos vigentes que ya están en firma o firmados no se vuelven a enviar.
   const locked = useMemo(() => {
-    const latest = (kind: DealDocumentKind) => [...(deal.documents ?? [])].reverse().find((d) => d.kind === kind);
     const out: Partial<Record<DealDocumentKind, string>> = {};
     for (const kind of KINDS) {
-      const s = latest(kind)?.signatureStatus;
+      const s = latestCurrentDocument(deal, kind)?.signatureStatus;
       if (s === 'firmado') out[kind] = 'Ya está firmado';
       else if (s === 'en_firma' || s === 'firmado_parcial') out[kind] = 'Ya está en firma';
     }
     return out;
-  }, [deal.documents]);
+  }, [deal]);
+  const missingSupports = useMemo(() => missingSupportsSummary(deal), [deal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,6 +225,28 @@ export function SendToSignatureModal({ companyId, deal, initialMode = 'contracts
     >
       {!options && !error && <div className="flex items-center justify-center gap-2 p-10 text-sm text-zinc-400"><Loader2 size={16} className="animate-spin" /> Cargando plantillas y firmantes de DocuBlock…</div>}
 
+      {options && effectiveMode === 'contracts' && missingSupports.length > 0 && (
+        <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-400" />
+          <div>
+            <p className="font-semibold text-amber-100">Soportes pendientes antes de enviar a firma</p>
+            <p className="mt-0.5 text-[11px] text-amber-200/90">{missingSupports.join(' · ')}</p>
+          </div>
+        </div>
+      )}
+
+      {options && deal.buyerProfiles.length > 0 && (
+        <div className="mb-3 rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-[11px] text-zinc-400">
+          <span className="font-semibold text-zinc-300">Contacto compradores (verifica antes de enviar): </span>
+          {deal.buyerProfiles.map((p, idx) => (
+            <span key={p.id}>
+              {idx > 0 ? ' · ' : ''}
+              <strong className="text-zinc-200">{p.firstNames} {p.lastNames}</strong> ({p.email} · {p.mobile})
+            </span>
+          ))}
+        </div>
+      )}
+
       {options && (
         <div className="grid gap-4 md:grid-cols-[260px_1fr]">
           <div className="space-y-4">
@@ -244,7 +268,7 @@ export function SendToSignatureModal({ companyId, deal, initialMode = 'contracts
                     <DealField label="Documento">
                       <select className={select} value={versions[kind] ?? ''} onChange={(e) => setVersions((c) => ({ ...c, [kind]: e.target.value ? Number(e.target.value) : null }))}>
                         {kind === 'promesa' && <option value="">Generar la promesa al enviar (con los datos de la preventa)</option>}
-                        {[...(deal.documents ?? [])].filter((d) => d.kind === kind).reverse().map((d) => (
+                        {[...(deal.documents ?? [])].filter((d) => d.kind === kind && isCurrentDocument(d, deal)).reverse().map((d) => (
                           <option key={d.version} value={d.version}>{LABELS[kind]} · v{d.version}{d.generatedAt ? ` · ${dateText(d.generatedAt)}` : ''}</option>
                         ))}
                       </select>

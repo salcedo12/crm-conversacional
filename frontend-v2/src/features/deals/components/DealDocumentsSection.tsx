@@ -11,6 +11,7 @@ import {
 import { DealDocumentPreview } from './DealDocumentPreview';
 import { DealSignatureStatus } from './DealSignatureStatus';
 import { dealActionCls } from './DealSheet';
+import { isCurrentDocument, latestCurrentDocument, lotLabel } from '../utils/documentLot';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole } from '@/features/auth/types';
 
@@ -31,7 +32,7 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ title: string; kind: DealDocumentKind; version: number; pdf: { fileName: string; blob: Blob } } | null>(null);
   const documents = deal.documents ?? [];
-  const hasPreventa = documents.some((d) => d.kind === 'preventa');
+  const hasPreventa = Boolean(latestCurrentDocument(deal, 'preventa'));
   const canGeneratePreventa = deal.status === 'plan_listo';
 
   if (!canGeneratePreventa && !documents.length) return null;
@@ -80,10 +81,13 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
       </p>
       {documents.length > 0 && (
         <ul className="mb-2 space-y-1">
-          {[...documents].reverse().map((d) => (
-            <li key={`${d.kind}-${d.version}`} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-zinc-300 sm:flex-nowrap sm:text-[11px]">
+          {[...documents].reverse().map((d) => {
+            const current = isCurrentDocument(d, deal);
+            return (
+            <li key={`${d.kind}-${d.version}`} className={`flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs sm:flex-nowrap sm:text-[11px] ${current ? 'text-zinc-300' : 'text-zinc-500'}`}>
               <span className="min-w-0 truncate">
                 {LABELS[d.kind]} · v{d.version}
+                {!current && <span className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">{d.lot ? lotLabel(d.lot) : 'Lote anterior'}</span>}
                 {d.generatedAt && <span className="text-zinc-600"> · {new Date(d.generatedAt).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>}
               </span>
               <span className="flex shrink-0 items-center gap-2 sm:gap-3">
@@ -114,7 +118,8 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
                 </button>}
               </span>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
       <div className="flex flex-wrap gap-2 sm:gap-3">

@@ -3,7 +3,8 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { db, storage } from '../lib/admin';
 import { logger } from '../utils/logger';
-import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/authContext';
+import { ADMIN_ROLES, requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/authContext';
+import { sendAdvisorPush } from '../modules/messages/pushNotifications.service';
 import { leadsRepository } from '../modules/leads/leads.repository';
 import { ClientInputSchema, clientDocId, normalizeIdentification, MAX_BUYERS } from '../modules/deals/clientProfile';
 import type { ClientProfile, Deal, DealAttachment, DealAttachmentCategory } from '../modules/deals/deals.types';
@@ -661,4 +662,106 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
 
   logger.info('[Deals] Negocio anulado', { companyId: data.companyId, dealId: data.dealId });
   return { ok: true as const };
+});
+
+const ListActivitySchema = z.object({
+  companyId: z.string().min(1),
+  dealId:    z.string().min(1),
+});
+
+/** Lista el historial de auditoría (`deal_activity`) registrado para este negocio. */
+export const listDealActivity = onCall({ region: 'us-central1', timeoutSeconds: 30 }, async (request) => {
+  const ctx = requireAuth(request);
+  requireRole(ctx, WRITE_ROLES);
+  const data = parseInput(ListActivitySchema, request.data, 'consultar la bitácora del negocio');
+  assertCompany(ctx, data.companyId);
+
+  const { deal } = await loadDeal(ctx, data.companyId, data.dealId);
+  const snap = await leadRef(data.companyId, deal.leadId)
+    .collection('notes')
+    .where('dealId', '==', deal.id)
+    .get();
+
+  const activities = snap.docs
+    .map((doc) => {
+      const raw = doc.data();
+      const createdAt = (raw.createdAt as Timestamp | undefined)?.toMillis?.() ?? 0;
+      return {
+        id: doc.id,
+        dealEvent: String(raw.dealEvent ?? ''),
+        text: String(raw.text ?? ''),
+        authorName: String(raw.authorName ?? 'Sistema'),
+        createdAt,
+      };
+    })
+    .filter((entry) => entry.text.length > 0)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 100);
+
+  return { activities };
+});
+
+const ReassignDealAdvisorSchema = z.object({
+  companyId: z.string().min(1),
+  dealId:    z.string().min(1),
+  advisorId: z.string().min(1),
+});
+
+/** Reasigna el asesor responsable de un negocio (solo administración). */
+export const reassignDealAdvisor = onCall({ region: 'us-central1', timeoutSeconds: 30 }, async (request) => {
+  const ctx = requireAuth(request);
+  requireRole(ctx, ADMIN_ROLES);
+  const data = parseInput(ReassignDealAdvisorSchema, request.data, 'reasignar el asesor del negocio');
+  assertCompany(ctx, data.companyId);
+
+  const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
+  if (deal.status === 'anulado') {
+    throw new HttpsError('failed-precondition', 'No se puede reasignar un negocio anulado.');
+  }
+
+  const targetUserSnap = await db.collection('companies').doc(data.companyId).collection('users').doc(data.advisorId).get();
+  const targetUser = targetUserSnap.data();
+  if (!targetUserSnap.exists || !targetUser || targetUser.active === false || targetUser.role === 'viewer') {
+    throw new HttpsError('failed-precondition', 'El usuario seleccionado no puede gestionar negocios.');
+  }
+
+  if (deal.advisorId === data.advisorId) {
+    return { ok: true as const, advisorName: String(targetUser.displayName || targetUser.email || 'Asesor') };
+  }
+
+  const [prevAdvisor, actor] = await Promise.all([
+    userDisplayName(data.companyId, deal.advisorId),
+    userDisplayName(data.companyId, ctx.uid),
+  ]);
+  const nextAdvisorName = String(targetUser.displayName || targetUser.email || 'Asesor');
+  const now = Timestamp.now();
+
+  const batch = db.batch();
+  batch.update(ref, { advisorId: data.advisorId, updatedAt: now });
+  batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'advisor_reassigned',
+    title: 'Asesor del negocio reasignado',
+    lines: [`${prevAdvisor.name} → ${nextAdvisorName}`],
+    createdAt: now,
+  }));
+  await batch.commit();
+
+  if (data.advisorId !== ctx.uid) {
+    const lotDesc = deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Negocio sin lote';
+    await sendAdvisorPush(data.companyId, data.advisorId, {
+      title: 'Negocio asignado',
+      body: `${lotDesc} ahora está a tu cargo.`,
+      url: `/dashboard/deals/${deal.id}`,
+      type: 'deal_reassigned',
+      leadId: deal.leadId,
+    }).catch((err) => logger.warn('[Deals] Error enviando push de reasignación', { err }));
+  }
+
+  logger.info('[Deals] Asesor reasignado', { companyId: data.companyId, dealId: deal.id, from: deal.advisorId, to: data.advisorId });
+  return { ok: true as const, advisorName: nextAdvisorName };
 });

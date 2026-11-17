@@ -13,6 +13,7 @@ import {
 } from '../services/deals.service';
 import { DealDocumentPreview } from './DealDocumentPreview';
 import { SendToSignatureModal } from './SendToSignatureModal';
+import { latestCurrentDocument } from '../utils/documentLot';
 
 const LABELS: Record<DealDocumentKind, string> = { preventa: 'Preventa', promesa: 'Promesa' };
 
@@ -55,9 +56,11 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [cancelingKey, setCancelingKey] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
   const [extraPreview, setExtraPreview] = useState<{ title: string; pdf: { fileName: string; blob: Blob } } | null>(null);
 
-  const latest = (kind: DealDocumentKind) => [...(deal.documents ?? [])].reverse().find((d) => d.kind === kind);
+  const latest = (kind: DealDocumentKind) => latestCurrentDocument(deal, kind);
   const sentDocs = (['preventa', 'promesa'] as DealDocumentKind[]).map(latest).filter((d): d is DealDocumentInfo => !!d?.docublockDocumentId);
   const extras = deal.extraSignatures ?? [];
 
@@ -216,20 +219,52 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
                   {busy === `orig-${item.key}` ? <Loader2 size={12} className="animate-spin" /> : null} Ver PDF
                 </button>
               )}
-              {canManage && pending(item.signatureStatus) && (
+              {canManage && pending(item.signatureStatus) && cancelingKey !== item.key && (
                 <button
                   type="button"
                   disabled={!!busy}
-                  onClick={() => {
-                    const reason = window.prompt(`¿Por qué se anuló la firma de "${item.title}"? (anúlala también en el panel de DocuBlock)`);
-                    if (reason && reason.trim().length >= 3) void run(`cancel-${item.key}`, () => markDealSignatureCancelled(companyId, deal.id, item.target, reason.trim()));
-                  }}
+                  onClick={() => { setCancelingKey(item.key); setCancelReason(''); }}
                   className="inline-flex items-center gap-1 rounded-lg border border-red-500/30 px-2.5 py-1 text-xs text-red-400 hover:bg-red-500/10"
                 >
                   <Ban size={12} /> Marcar anulada
                 </button>
               )}
             </div>
+            {canManage && pending(item.signatureStatus) && cancelingKey === item.key && (
+              <div className="mt-2 space-y-2 rounded-lg border border-red-500/30 bg-red-950/20 p-2.5">
+                <p className="text-[11px] font-medium text-red-200">
+                  Motivo de anulación para "{item.title}" (recuerda anularla también en el panel de DocuBlock):
+                </p>
+                <input
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="Ej: Error en correo del comprador / cambio de fecha..."
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-100 outline-none focus:border-red-400"
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!!busy || cancelReason.trim().length < 3}
+                    onClick={() => {
+                      const clean = cancelReason.trim();
+                      setCancelingKey(null);
+                      setCancelReason('');
+                      void run(`cancel-${item.key}`, () => markDealSignatureCancelled(companyId, deal.id, item.target, clean));
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/20 px-2.5 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-40"
+                  >
+                    <Ban size={11} /> Confirmar anulación
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setCancelingKey(null); setCancelReason(''); }}
+                    className="px-2 py-1 text-[11px] text-zinc-400 hover:text-zinc-200"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
@@ -262,6 +297,7 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
         <DealDocumentPreview
           title={extraPreview.title}
           pdf={extraPreview.pdf}
+          allowPdfDownload={canManage}
           onClose={() => setExtraPreview(null)}
         />
       )}

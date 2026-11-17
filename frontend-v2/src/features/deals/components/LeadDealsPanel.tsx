@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Ban, Calculator, Loader2, Plus, Users } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { AlertTriangle, Ban, Calculator, ExternalLink, Loader2, Plus, Users } from 'lucide-react';
 import type { Lead } from '@/features/inbox/types';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
@@ -31,6 +32,7 @@ const STATUS_STYLES: Record<DealStatus, string> = {
 
 /** Negocios del lead (sección del LeadDrawer): crear negocio y registrar sus compradores. */
 export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: Lead }) {
+  const navigate = useNavigate();
   const { role, platformAdmin } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
   // "Solo lectura": ve los negocios, pero no crea, edita ni anula.
@@ -110,12 +112,21 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
           return (
             <div key={deal.id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-3 sm:rounded-lg sm:py-2.5">
               <div className="flex items-center justify-between gap-2">
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[deal.status]}`}>
-                  {DEAL_STATUS_LABELS[deal.status]}
-                </span>
-                {deal.createdAt && (
-                  <span className="text-[10px] text-zinc-600">{new Date(deal.createdAt).toLocaleDateString('es-CO')}</span>
-                )}
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[deal.status]}`}>
+                    {DEAL_STATUS_LABELS[deal.status]}
+                  </span>
+                  {deal.createdAt && (
+                    <span className="text-[10px] text-zinc-600">{new Date(deal.createdAt).toLocaleDateString('es-CO')}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/dashboard/deals/${deal.id}`)}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] font-semibold text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300"
+                >
+                  <ExternalLink size={11} /> Ver ficha
+                </button>
               </div>
               {deal.status !== 'anulado' && <DealSteps deal={deal} />}
               <p className="mt-2 text-sm text-zinc-200 sm:text-xs sm:text-zinc-300">

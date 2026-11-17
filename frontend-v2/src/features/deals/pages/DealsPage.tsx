@@ -1,34 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, BadgeDollarSign, Building2, CheckCircle2, Download, FileCheck2, FileText, Filter,
-  Handshake, Loader2, MapPin, Paperclip, Phone, RefreshCw, Search, Trash2,
-  Upload, UserRound, X, XCircle,
+  ArrowLeft, BadgeDollarSign, Building2, CheckCircle2, Download, FileCheck2, Filter,
+  Handshake, Loader2, MapPin, Paperclip, Phone, RefreshCw, Search, UserRound, XCircle,
 } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import {
   DEAL_STATUS_LABELS,
-  deleteDealAttachment,
-  deleteDealDocument,
-  downloadDealAttachment,
-  downloadDealDocument,
-  fetchDealDocumentPdf,
   listCompanyDeals,
   listInventoryProjects,
-  uploadDealAttachment,
-  type DealAttachment,
   type DealAttachmentCategory,
-  type DealDocumentKind,
   type DealStatus,
   type DealSummary,
 } from '../services/deals.service';
+import { isAttachmentFromOtherLot } from '../utils/documentLot';
 import { referralName } from '../utils/paymentPlan';
 import { listSmartHomeSales, syncSmartHomeSalesNow, type InventoryOnlySale, type SmartHomeSale } from '../services/smarthomeSales.service';
-import { DealSignatureStatus } from '../components/DealSignatureStatus';
-import { DealDocumentPreview } from '../components/DealDocumentPreview';
 import { NewDealByPhoneModal } from '../components/NewDealByPhoneModal';
 import { SmartHomeSalesPanel } from '../components/SmartHomeSalesPanel';
+
+const NO_LOT_PROJECT_KEY = '__sin_lote__';
 
 const PROJECT_NAMES: Record<string, string> = {
   'rio-claro': 'Río Claro',
@@ -95,19 +87,71 @@ export function projectName(projectId: string | undefined) {
 
 export function supportStats(deal: DealSummary) {
   const attachments = deal.attachments ?? [];
-  const buyerDocs = new Set(attachments.filter((a) => a.category === 'buyer_identification').map((a) => a.buyerClientId)).size;
-  const paymentProofs = attachments.filter((a) => a.category === 'separation_payment').length;
+  const currentBuyerIds = new Set(deal.buyers.map((b) => b.clientId));
+  const buyerDocs = new Set(
+    attachments
+      .filter((a) => a.category === 'buyer_identification' && a.buyerClientId && currentBuyerIds.has(a.buyerClientId))
+      .map((a) => a.buyerClientId),
+  ).size;
+  const currentPayments = attachments.filter((a) => a.category === 'separation_payment' && !isAttachmentFromOtherLot(a, deal));
+  const paymentProofs = currentPayments.length;
+  const separationPaid = currentPayments.reduce((sum, a) => sum + (a.paymentAmount ?? 0), 0);
+  const separationRequired =
+    deal.plan?.simple?.separationTotal
+    ?? deal.plan?.rows.filter((row) => row.kind === 'separacion').reduce((sum, row) => sum + row.amount * row.count, 0)
+    ?? 0;
   const authorization = attachments.some((a) => a.category === 'benefit_authorization');
   const referral = attachments.some((a) => a.category === 'referral_evidence');
   const separationPayments = deal.plan?.simple?.separationPayments?.length
     ?? deal.plan?.rows.filter((row) => row.kind === 'separacion').reduce((sum, row) => sum + row.count, 0)
     ?? 0;
-  return { buyerDocs, paymentProofs, authorization, referral, separationPayments };
+  const buyersOk = deal.buyers.length > 0 && buyerDocs >= deal.buyers.length;
+  const benefitOk = !deal.plan?.benefit || authorization;
+  const referralOk = !referralName(deal.plan?.referredBy) || referral;
+  const paymentOk = separationPayments === 0 || (paymentProofs >= separationPayments && separationPaid >= separationRequired);
+  const allOk = buyersOk && benefitOk && referralOk && paymentOk;
+  return {
+    buyerDocs,
+    paymentProofs,
+    separationPaid,
+    separationRequired,
+    authorization,
+    referral,
+    separationPayments,
+    buyersOk,
+    benefitOk,
+    referralOk,
+    paymentOk,
+    allOk,
+  };
+}
+
+export function missingSupportsSummary(deal: DealSummary): string[] {
+  const s = supportStats(deal);
+  const missing: string[] = [];
+  if (!deal.buyers.length) missing.push('Faltan compradores registrados');
+  else if (!s.buyersOk) missing.push(`Cédulas de compradores (${s.buyerDocs}/${deal.buyers.length})`);
+  if (!s.benefitOk) missing.push('Autorización de bono o descuento');
+  if (!s.referralOk) missing.push('Evidencia del referido');
+  if (!s.paymentOk) {
+    missing.push(
+      s.separationPaid < s.separationRequired
+        ? `Soporte de separación (${money(s.separationPaid)} / ${money(s.separationRequired)})`
+        : `Comprobantes de separación (${s.paymentProofs}/${s.separationPayments})`,
+    );
+  }
+  return missing;
+}
+
+export function dealNetValue(deal: DealSummary): number {
+  const plan = deal.plan;
+  if (!plan) return 0;
+  return Math.max(0, (plan.landValue ?? 0) - (plan.benefit ?? 0));
 }
 
 export function DealsPage() {
   const navigate = useNavigate();
-  const { companyId, role, platformAdmin, user } = useAuth();
+  const { companyId, role, platformAdmin } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
   const readOnly = !platformAdmin && isViewerRole(role);
   const [deals, setDeals] = useState<DealSummary[]>([]);
@@ -116,7 +160,7 @@ export function DealsPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<'all' | DealStatus>('all');
   const [advisor, setAdvisor] = useState('all');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [supportFilter, setSupportFilter] = useState<'all' | 'complete' | 'pending'>('all');
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
   const [view, setView] = useState<'crm' | 'smarthome'>('crm');
@@ -171,9 +215,12 @@ export function DealsPage() {
 
   useEffect(() => { void load(); }, [companyId]);
 
-  const selectedProjectConfig = PROJECT_CATALOG.find((project) => project.key === selectedProject) ?? null;
+  const isNoLotView = selectedProject === NO_LOT_PROJECT_KEY;
+  const selectedProjectConfig = isNoLotView
+    ? null
+    : PROJECT_CATALOG.find((project) => project.key === selectedProject) ?? null;
   const scopedSales = useMemo(() => {
-    if (!selectedProjectConfig) return shSales;
+    if (!selectedProjectConfig) return [];
     return shSales.filter((sale) => {
       if (sale.crmProjectId !== selectedProjectConfig.key) return false;
       if (selectedProjectConfig.key === 'laguna-mar' && selectedSector && selectedSector !== 'all') return sale.sector === selectedSector;
@@ -186,6 +233,7 @@ export function DealsPage() {
     return true;
   }), [shInventoryOnly, selectedProjectConfig, selectedSector]);
   const scopedDeals = useMemo(() => {
+    if (isNoLotView) return deals.filter((deal) => !deal.lot);
     if (!selectedProjectConfig) return deals;
     return deals.filter((deal) => {
       if (!deal.lot || !selectedProjectConfig.projectIds.includes(deal.lot.projectId)) return false;
@@ -194,7 +242,7 @@ export function DealsPage() {
       }
       return true;
     });
-  }, [deals, selectedProjectConfig, selectedSector]);
+  }, [deals, isNoLotView, selectedProjectConfig, selectedSector]);
 
   const advisors = useMemo(() => Array.from(new Map(
     scopedDeals.map((deal) => [deal.advisorId, deal.advisorName || deal.advisorId]),
@@ -205,25 +253,82 @@ export function DealsPage() {
     return scopedDeals.filter((deal) => {
       if (status !== 'all' && deal.status !== status) return false;
       if (advisor !== 'all' && deal.advisorId !== advisor) return false;
+      if (supportFilter !== 'all') {
+        const { allOk } = supportStats(deal);
+        if (supportFilter === 'complete' && !allOk) return false;
+        if (supportFilter === 'pending' && allOk) return false;
+      }
       if (!q) return true;
-      return [deal.leadName, deal.advisorName, ...(deal.buyerNames ?? []), deal.lot?.sector, deal.lot?.lotNumber]
-        .some((value) => String(value ?? '').toLowerCase().includes(q));
+      const buyerIds = deal.buyerProfiles.flatMap((b) => [b.identificationNumber, b.mobile]);
+      return [
+        deal.id,
+        deal.leadName,
+        deal.advisorName,
+        ...(deal.buyerNames ?? []),
+        ...buyerIds,
+        deal.lot?.sector,
+        deal.lot?.lotNumber,
+        deal.lot?.lotCode,
+      ].some((value) => String(value ?? '').toLowerCase().includes(q));
     });
-  }, [scopedDeals, search, status, advisor]);
+  }, [scopedDeals, search, status, advisor, supportFilter]);
 
-  const selected = deals.find((deal) => deal.id === selectedId) ?? null;
   const active = scopedDeals.filter((deal) => deal.status !== 'anulado').length;
   const complete = scopedDeals.filter((deal) => deal.status === 'promesa_firmada').length;
-  const totalValue = scopedDeals.filter((deal) => deal.status !== 'anulado').reduce((sum, deal) => sum + (deal.plan?.landValue ?? 0), 0);
+  const totalValue = scopedDeals.filter((deal) => deal.status !== 'anulado').reduce((sum, deal) => sum + dealNetValue(deal), 0);
+
+  const exportCsv = () => {
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = ['ID', 'Estado', 'Compradores', 'Cédulas', 'Asesor', 'Proyecto', 'Sector', 'Lote', 'Código', 'Valor neto', 'Bono', 'Soportes faltantes', 'Actualizado'];
+    const rows = filtered.map((deal) => [
+      deal.id,
+      DEAL_STATUS_LABELS[deal.status],
+      deal.buyerNames?.join(' / ') || deal.leadName || '',
+      deal.buyerProfiles.map((b) => `${b.identificationKind} ${b.identificationNumber}`).join(' / '),
+      deal.advisorName || '',
+      projectName(deal.lot?.projectId),
+      deal.lot?.sector || '',
+      deal.lot?.lotNumber || '',
+      deal.lot?.lotCode || '',
+      dealNetValue(deal),
+      deal.plan?.benefit ?? 0,
+      missingSupportsSummary(deal).join('; '),
+      dateTime(deal.updatedAt),
+    ]);
+    const csv = `\uFEFF${[header, ...rows].map((r) => r.map(esc).join(',')).join('\r\n')}`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `negocios-${selectedProject || 'crm'}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   if (!selectedProject) {
     return <>
       {creatingDeal && companyId && <NewDealByPhoneModal companyId={companyId} onClose={() => setCreatingDeal(false)} onChanged={() => void load()} />}
-      <ProjectSelection deals={deals} sales={shEnabled ? shSales : null} available={available} onNewDeal={readOnly ? undefined : () => setCreatingDeal(true)} loading={loading} error={error} onRefresh={() => void load()} onSelect={(project) => {
-      setSelectedProject(project.key);
-      setSelectedSector(project.key === 'laguna-mar' ? null : 'all');
-      setSearch(''); setStatus('all'); setAdvisor('all');
-    }} />
+      <ProjectSelection
+        deals={deals}
+        sales={shEnabled ? shSales : null}
+        available={available}
+        onNewDeal={readOnly ? undefined : () => setCreatingDeal(true)}
+        loading={loading}
+        error={error}
+        onRefresh={() => void load()}
+        onSelectNoLot={() => {
+          setSelectedProject(NO_LOT_PROJECT_KEY);
+          setSelectedSector('all');
+          setSearch(''); setStatus('all'); setAdvisor('all'); setSupportFilter('all');
+        }}
+        onSelect={(project) => {
+          setSelectedProject(project.key);
+          setSelectedSector(project.key === 'laguna-mar' ? null : 'all');
+          setSearch(''); setStatus('all'); setAdvisor('all'); setSupportFilter('all');
+        }}
+      />
     </>;
   }
 
@@ -246,8 +351,25 @@ export function DealsPage() {
             }} className="mt-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button>
             <div>
             <div className="flex items-center gap-2">
-              <ProjectLogo src={selectedSector && selectedSector !== 'all' ? LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.logo || selectedProjectConfig?.logo || '' : selectedProjectConfig?.logo || ''} name={selectedSector && selectedSector !== 'all' ? LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.name || '' : selectedProjectConfig?.name || ''} compact />
-              <div><p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Negocios del proyecto</p><h1 className="text-xl font-extrabold text-zinc-100">{selectedSector && selectedSector !== 'all' ? LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.name : selectedProjectConfig?.name}</h1></div>
+              {!isNoLotView && (
+                <ProjectLogo
+                  src={selectedSector && selectedSector !== 'all' ? LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.logo || selectedProjectConfig?.logo || '' : selectedProjectConfig?.logo || ''}
+                  name={selectedSector && selectedSector !== 'all' ? (LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.name || selectedSector) : (selectedProjectConfig?.name || '')}
+                  compact
+                />
+              )}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">
+                  {isNoLotView ? 'Borradores iniciales' : 'Negocios del proyecto'}
+                </p>
+                <h1 className="text-xl font-extrabold text-zinc-100">
+                  {isNoLotView
+                    ? 'Negocios sin lote asignado'
+                    : (selectedSector && selectedSector !== 'all'
+                      ? (LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.name || selectedSector)
+                      : selectedProjectConfig?.name)}
+                </h1>
+              </div>
             </div>
             <p className="mt-1 text-sm text-zinc-500">
               Seguimiento comercial, documentos y soportes de cada negocio{isAdmin ? ' por asesor' : ''}.
@@ -256,13 +378,16 @@ export function DealsPage() {
           </div>
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
             {!readOnly && <button onClick={() => setCreatingDeal(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>}
+            <button onClick={exportCsv} disabled={loading || filtered.length === 0} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-40">
+              <Download size={14} /> CSV ({filtered.length})
+            </button>
             <button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50">
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
             </button>
           </div>
         </header>
 
-        {shEnabled && (
+        {shEnabled && !isNoLotView && (
           <nav className="flex w-full rounded-xl border border-zinc-800 bg-zinc-900/70 p-1 text-xs font-semibold sm:inline-flex sm:w-auto">
             <button onClick={() => setView('crm')} className={`flex-1 rounded-lg px-3 py-2.5 transition sm:flex-none sm:px-4 sm:py-2 ${view === 'crm' ? 'bg-emerald-500/15 text-emerald-300' : 'text-zinc-400 hover:text-zinc-200'}`}>
               Negocios del CRM <span className="ml-1 text-zinc-500">{scopedDeals.length}</span>
@@ -273,7 +398,7 @@ export function DealsPage() {
           </nav>
         )}
 
-        {shEnabled && view === 'smarthome' ? (
+        {shEnabled && !isNoLotView && view === 'smarthome' ? (
           <>
             {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
             {loading ? <div className="flex justify-center py-16"><Loader2 className="animate-spin text-sky-400" /></div> : companyId && (
@@ -295,13 +420,13 @@ export function DealsPage() {
           <Metric icon={Handshake} label="Negocios" value={String(scopedDeals.length)} />
           <Metric icon={FileCheck2} label="Activos" value={String(active)} />
           <Metric icon={CheckCircle2} label="Promesas firmadas" value={String(complete)} />
-          <Metric icon={BadgeDollarSign} label="Valor activo" value={money(totalValue)} />
+          <Metric icon={BadgeDollarSign} label="Valor activo neto" value={money(totalValue)} />
         </section>
 
         <section className="grid grid-cols-1 gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:flex sm:flex-wrap">
           <label className="relative sm:min-w-[220px] sm:flex-1">
             <Search size={15} className="absolute left-3 top-2.5 text-zinc-500" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar comprador, lote o asesor" className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-9 pr-3 text-xs text-zinc-100 outline-none focus:border-emerald-500/60" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar comprador, cédula, lote, código o asesor" className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-9 pr-3 text-xs text-zinc-100 outline-none focus:border-emerald-500/60" />
           </label>
           <label className="relative">
             <Filter size={14} className="absolute left-3 top-2.5 text-zinc-500" />
@@ -310,6 +435,11 @@ export function DealsPage() {
               {Object.entries(DEAL_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
+          <select value={supportFilter} onChange={(e) => setSupportFilter(e.target.value as 'all' | 'complete' | 'pending')} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
+            <option value="all">Todos los soportes</option>
+            <option value="pending">Soportes pendientes</option>
+            <option value="complete">Soportes completos</option>
+          </select>
           {isAdmin && (
             <select value={advisor} onChange={(e) => setAdvisor(e.target.value)} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
               <option value="all">Todos los asesores</option>
@@ -342,13 +472,13 @@ export function DealsPage() {
                       <p className="mt-0.5 text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</p>
                       {deal.lot && <p className="mt-1 text-[10px] text-zinc-500">{deal.lot.areaM2.toLocaleString('es-CO', { maximumFractionDigits: 2 })} m²{deal.lot.corner ? ' · Esquinero' : ''}</p>}
                     </div>
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-zinc-400"><BadgeDollarSign size={14} className="mb-2 text-amber-400" /><p className="text-[9px] font-bold uppercase tracking-wide text-zinc-500">Valor</p><p className="mt-1 text-sm font-bold text-zinc-200">{deal.plan ? money(deal.plan.landValue) : 'Sin plan'}</p></div>
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-zinc-400"><BadgeDollarSign size={14} className="mb-2 text-amber-400" /><p className="text-[9px] font-bold uppercase tracking-wide text-zinc-500">Valor neto</p><p className="mt-1 text-sm font-bold text-zinc-200">{deal.plan ? money(dealNetValue(deal)) : 'Sin plan'}</p></div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
-                    <SupportPill ok={stats.buyerDocs >= deal.buyers.length && deal.buyers.length > 0} label={`Cédulas ${stats.buyerDocs}/${deal.buyers.length}`} />
-                    {Boolean(deal.plan?.benefit) && <SupportPill ok={stats.authorization} label="Autorización bono" />}
-                    {Boolean(referralName(deal.plan?.referredBy)) && <SupportPill ok={stats.referral} label="Referido" />}
-                    {stats.separationPayments > 0 && <SupportPill ok={stats.paymentProofs >= stats.separationPayments} label={`Separaciones ${stats.paymentProofs}/${stats.separationPayments}`} />}
+                    <SupportPill ok={stats.buyersOk} label={`Cédulas ${stats.buyerDocs}/${deal.buyers.length}`} />
+                    {Boolean(deal.plan?.benefit) && <SupportPill ok={stats.benefitOk} label="Autorización bono" />}
+                    {Boolean(referralName(deal.plan?.referredBy)) && <SupportPill ok={stats.referralOk} label="Referido" />}
+                    {stats.separationPayments > 0 && <SupportPill ok={stats.paymentOk} label={`Separaciones ${stats.paymentProofs}/${stats.separationPayments}`} />}
                     <span className="rounded-full border border-zinc-700 px-2 py-1 text-zinc-400"><Paperclip size={10} className="mr-1 inline" />{deal.attachments?.length ?? 0} soportes</span>
                   </div>
                 </button>
@@ -360,22 +490,11 @@ export function DealsPage() {
       </div>
 
       {creatingDeal && companyId && <NewDealByPhoneModal companyId={companyId} onClose={() => setCreatingDeal(false)} onChanged={() => void load()} />}
-      {selected && companyId && (
-        <DealDetailModal
-          deal={selected}
-          companyId={companyId}
-          currentUserId={user?.uid || ''}
-          isAdmin={isAdmin}
-          onClose={() => setSelectedId(null)}
-          onChanged={(updated) => setDeals((rows) => rows.map((row) => row.id === updated.id ? updated : row))}
-          onReload={() => void load()}
-        />
-      )}
     </div>
   );
 }
 
-function ProjectSelection({ deals, sales, available, loading, error, onRefresh, onNewDeal, onSelect }: {
+function ProjectSelection({ deals, sales, available, loading, error, onRefresh, onNewDeal, onSelect, onSelectNoLot }: {
   onNewDeal?: () => void;
   deals: DealSummary[];
   /** Lotes DISPONIBLES por proyecto del inventario de disponibilidad. */
@@ -386,13 +505,21 @@ function ProjectSelection({ deals, sales, available, loading, error, onRefresh, 
   error: string | null;
   onRefresh: () => void;
   onSelect: (project: ProjectCatalogItem) => void;
+  onSelectNoLot: () => void;
 }) {
+  const noLotDeals = deals.filter((deal) => !deal.lot);
+  const noLotActive = noLotDeals.filter((deal) => deal.status !== 'anulado').length;
   return (
     <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div><div className="flex items-center gap-2"><Building2 className="text-emerald-400" size={25} /><h1 className="text-2xl font-extrabold text-zinc-100">Negocios por proyecto</h1></div><p className="mt-1 text-sm text-zinc-500">Selecciona un proyecto para consultar sus compradores, lotes, documentos y soportes.</p></div>
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+            {noLotDeals.length > 0 && (
+              <button onClick={onSelectNoLot} className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-300 hover:bg-amber-500/20">
+                Sin lote ({noLotActive > 0 ? noLotActive : noLotDeals.length})
+              </button>
+            )}
             {onNewDeal && <button onClick={onNewDeal} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Phone size={14} /> Nuevo negocio</button>}
             <button onClick={onRefresh} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar</button>
           </div>
@@ -439,18 +566,24 @@ function ProjectSelection({ deals, sales, available, loading, error, onRefresh, 
 }
 
 function LagunaSectorSelection({ deals, sales, onBack, onSelect }: { deals: DealSummary[]; sales: SmartHomeSale[] | null; onBack: () => void; onSelect: (sector: string) => void }) {
+  const knownKeys = new Set(LAGUNA_SECTORS.map((s) => s.key));
+  const extraSectorKeys = Array.from(new Set([
+    ...deals.map((d) => d.lot?.sector?.trim().toUpperCase()).filter((s): s is string => !!s && !knownKeys.has(s)),
+    ...(sales ?? []).map((s) => s.sector?.trim().toUpperCase()).filter((s): s is string => !!s && !knownKeys.has(s)),
+  ]));
   const cards = [
     { key: 'all', name: 'Todos los negocios', subtitle: 'Laguna Mar', logo: '/project-logos/laguna-mar.png', accent: 'from-blue-950/80 to-teal-950/30' },
     ...LAGUNA_SECTORS,
+    ...extraSectorKeys.map((key) => ({ key, name: key, subtitle: 'Laguna Mar', logo: '/project-logos/laguna-mar.png', accent: 'from-slate-900 to-zinc-900' })),
   ];
   return (
     <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-6xl space-y-6">
-        <header className="flex items-start gap-3"><button onClick={onBack} className="mt-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button><div><p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Laguna Mar</p><h1 className="text-2xl font-extrabold text-zinc-100">Selecciona el sector</h1><p className="mt-1 text-sm text-zinc-500">Consulta todos los negocios o entra directamente a Mar Santorini o Mar Canarias.</p></div></header>
+        <header className="flex items-start gap-3"><button onClick={onBack} className="mt-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button><div><p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Laguna Mar</p><h1 className="text-2xl font-extrabold text-zinc-100">Selecciona el sector</h1><p className="mt-1 text-sm text-zinc-500">Consulta todos los negocios o entra directamente a un sector.</p></div></header>
         <section className="grid gap-4 md:grid-cols-3">
           {cards.map((card) => {
             const rows = card.key === 'all' ? deals : deals.filter((deal) => deal.lot?.sector.trim().toUpperCase() === card.key);
-            const value = rows.filter((deal) => deal.status !== 'anulado').reduce((sum, deal) => sum + (deal.plan?.landValue ?? 0), 0);
+            const value = rows.filter((deal) => deal.status !== 'anulado').reduce((sum, deal) => sum + dealNetValue(deal), 0);
             const sold = sales?.filter((sale) => !sale.ignored && (card.key === 'all' || sale.sector === card.key)) ?? null;
             return <button key={card.key} onClick={() => onSelect(card.key)} className="group overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 text-left shadow-xl shadow-black/40 transition duration-300 hover:-translate-y-1 hover:border-sky-500/40"><ProjectHero src={card.logo} name={card.name} accent={card.accent} /><div className="p-5"><h2 className="text-lg font-extrabold text-zinc-100 group-hover:text-sky-300">{card.name}</h2><p className="text-xs text-zinc-500">{card.subtitle}</p><div className="mt-4 flex items-center justify-between border-t border-zinc-800 pt-3"><span className="text-xs text-zinc-400">{sold && <><strong className="text-zinc-100">{sold.length}</strong> vendido(s) · </>}<strong className="text-zinc-100">{rows.length}</strong> negocio(s) CRM</span><span className="text-xs font-bold text-emerald-300">{value ? money(value) : 'Sin valor registrado'}</span></div></div></button>;
           })}
@@ -488,227 +621,6 @@ function Metric({ icon: Icon, label, value }: { icon: typeof Handshake; label: s
 
 function SupportPill({ ok, label }: { ok: boolean; label: string }) {
   return <span className={`rounded-full border px-2 py-1 ${ok ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}>{ok ? '✓' : '!'} {label}</span>;
-}
-
-function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onChanged, onReload }: {
-  deal: DealSummary;
-  companyId: string;
-  currentUserId: string;
-  isAdmin: boolean;
-  onClose: () => void;
-  onChanged: (deal: DealSummary) => void;
-  /** Recarga los negocios (tras enviar a firma o actualizar su estado). */
-  onReload: () => void;
-}) {
-  const [preview, setPreview] = useState<{ title: string; kind: DealDocumentKind; version: number; pdf: { fileName: string; blob: Blob } } | null>(null);
-  const [category, setCategory] = useState<DealAttachmentCategory>('buyer_identification');
-  const [buyerClientId, setBuyerClientId] = useState(deal.buyers[0]?.clientId ?? '');
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentDate, setPaymentDate] = useState('');
-  const [note, setNote] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [downloadingDocument, setDownloadingDocument] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const attachments = deal.attachments ?? [];
-  const stats = supportStats(deal);
-
-  const handleUpload = async () => {
-    if (!file) return;
-    setBusy(true); setError(null);
-    try {
-      const attachment = await uploadDealAttachment({
-        companyId, dealId: deal.id, category, file,
-        ...(category === 'buyer_identification' ? { buyerClientId } : {}),
-        ...(category === 'separation_payment' ? { paymentAmount: Number(paymentAmount.replace(/\D/g, '')), paymentDate } : {}),
-        note,
-      });
-      onChanged({ ...deal, attachments: [...attachments, attachment], updatedAt: Date.now() });
-      setFile(null); setNote(''); setPaymentAmount(''); setPaymentDate('');
-    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo subir el soporte.'); }
-    finally { setBusy(false); }
-  };
-
-  const handleDelete = async (attachment: DealAttachment) => {
-    if (!window.confirm(`¿Eliminar “${attachment.fileName}”?`)) return;
-    setBusy(true); setError(null);
-    try {
-      await deleteDealAttachment(companyId, deal.id, attachment.id);
-      onChanged({ ...deal, attachments: attachments.filter((item) => item.id !== attachment.id), updatedAt: Date.now() });
-    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo eliminar el soporte.'); }
-    finally { setBusy(false); }
-  };
-
-  /** Ver el contrato (PDF) o, si ya está firmado por todos, el PDF firmado que trajo el CRM de DocuBlock. */
-  const handleView = async (kind: DealDocumentKind, version: number, signed = false) => {
-    const key = `${signed ? 'signed' : 'view'}-${kind}-${version}`;
-    setDownloadingDocument(key); setError(null);
-    try {
-      const pdf = await fetchDealDocumentPdf(companyId, deal.id, kind, version, signed);
-      setPreview({ title: `${kind === 'preventa' ? 'Contrato de preventa' : 'Promesa de compraventa'} · v${version}${signed ? ' · FIRMADO' : ''}`, kind, version, pdf });
-    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo abrir el documento.'); }
-    finally { setDownloadingDocument(null); }
-  };
-
-  const handleDocumentDownload = async (kind: DealDocumentKind, version: number) => {
-    const key = `${kind}-${version}`;
-    setDownloadingDocument(key); setError(null);
-    try { await downloadDealDocument(companyId, deal.id, kind, version); }
-    catch (err) { setError(err instanceof Error ? err.message : 'No se pudo descargar el documento.'); }
-    finally { setDownloadingDocument(null); }
-  };
-
-  const handleDeleteDocument = async (kind: DealDocumentKind, version: number) => {
-    const label = `${kind === 'preventa' ? 'el Contrato de preventa' : 'la Promesa de compraventa'} v${version}`;
-    if (!window.confirm(`¿Seguro que deseas eliminar ${label}? Esta acción no se puede deshacer.`)) return;
-    const key = `del-${kind}-${version}`;
-    setDownloadingDocument(key); setError(null);
-    try {
-      await deleteDealDocument(companyId, deal.id, kind, version);
-      const remainingDocs = (deal.documents ?? []).filter((d) => !(d.kind === kind && d.version === version));
-      onChanged({ ...deal, documents: remainingDocs, updatedAt: Date.now() });
-      onReload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo eliminar el documento.');
-    } finally {
-      setDownloadingDocument(null);
-    }
-  };
-
-  return (
-    <div className="deal-touch fixed inset-0 z-50 flex items-stretch justify-center bg-black/75 sm:items-center sm:p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      {preview && <DealDocumentPreview title={preview.title} pdf={preview.pdf} onDownloadWord={isAdmin ? () => downloadDealDocument(companyId, deal.id, preview.kind, preview.version) : undefined} onClose={() => setPreview(null)} />}
-      <div className="h-[100dvh] w-full max-w-5xl overflow-y-auto overscroll-contain bg-zinc-950 pb-[var(--safe-bottom)] shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-2xl sm:border sm:border-zinc-700">
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-zinc-800 bg-zinc-950/95 px-4 pb-3 pt-[max(0.75rem,var(--safe-top))] backdrop-blur sm:p-4">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">{projectName(deal.lot?.projectId)}</p>
-            <h2 className="mt-0.5 text-lg font-extrabold text-zinc-100 sm:text-xl">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</h2>
-            <p className="mt-1 truncate text-xs text-zinc-500">{deal.buyerNames?.join(', ') || deal.leadName} · {deal.advisorName}</p>
-          </div>
-          <button onClick={onClose} aria-label="Cerrar" className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 sm:mr-0 sm:h-9 sm:w-9"><X size={18} /></button>
-        </header>
-
-        <div className="grid gap-5 p-4 lg:grid-cols-[0.9fr_1.4fr]">
-          <div className="space-y-4">
-            <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-400">Resumen</h3>
-              <div className="mt-3 space-y-2 text-xs text-zinc-400">
-                <p><strong className="text-zinc-200">Estado:</strong> {DEAL_STATUS_LABELS[deal.status]}</p>
-                <p><strong className="text-zinc-200">Valor:</strong> {deal.plan ? money(deal.plan.landValue) : 'Sin plan'}</p>
-                {deal.plan && (
-                  <p>
-                    <strong className="text-zinc-200">Plazo:</strong> {deal.plan.termMonths ? `${deal.plan.termMonths} meses` : 'De contado'}
-                    {deal.plan.specialTerm && (
-                      <span className="text-amber-300"> · especial{deal.plan.specialTerm.approvedBy ? `, aprobado por ${deal.plan.specialTerm.approvedBy}` : ''}</span>
-                    )}
-                  </p>
-                )}
-                <p><strong className="text-zinc-200">Bono/descuento:</strong> {deal.plan?.benefit ? money(deal.plan.benefit) : 'No aplica'}</p>
-                <p><strong className="text-zinc-200">Referido por:</strong> {referralName(deal.plan?.referredBy) || 'No aplica'}</p>
-                <p><strong className="text-zinc-200">Documentos generados:</strong> {deal.documents?.length ?? 0}</p>
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-400">Control documental</h3>
-              <div className="mt-3 space-y-2">
-                <Checklist ok={stats.buyerDocs >= deal.buyers.length && deal.buyers.length > 0} text={`Documentos compradores: ${stats.buyerDocs}/${deal.buyers.length}`} />
-                {Boolean(deal.plan?.benefit) && <Checklist ok={stats.authorization} text="Autorización de bono/descuento" />}
-                {Boolean(referralName(deal.plan?.referredBy)) && <Checklist ok={stats.referral} text="Evidencia del referido" />}
-                {stats.separationPayments > 0 && <Checklist ok={stats.paymentProofs >= stats.separationPayments} text={`Soportes de separación: ${stats.paymentProofs}/${stats.separationPayments}`} />}
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-400">Agregar soporte</h3>
-              <div className="mt-3 space-y-2">
-                <select value={category} onChange={(e) => setCategory(e.target.value as DealAttachmentCategory)} className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-200">
-                  {Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                {category === 'buyer_identification' && (
-                  <select value={buyerClientId} onChange={(e) => setBuyerClientId(e.target.value)} className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-200">
-                    {deal.buyers.sort((a, b) => a.order - b.order).map((buyer) => <option key={buyer.clientId} value={buyer.clientId}>{deal.buyerNames?.[buyer.order - 1] || `Comprador ${buyer.order}`}</option>)}
-                  </select>
-                )}
-                {category === 'separation_payment' && <div className="grid grid-cols-2 gap-2"><input value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} placeholder="Valor pagado" className="h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-200" /><input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} className="h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-200" /></div>}
-                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Nota opcional: autorización, número de recibo, observación…" className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-200" />
-                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-700 px-3 py-3 text-xs text-zinc-400 hover:border-emerald-500/50 hover:text-emerald-300"><Upload size={14} />{file ? file.name : 'Seleccionar imagen o PDF (máx. 10 MB)'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
-                <button onClick={() => void handleUpload()} disabled={!file || busy || (category === 'buyer_identification' && !buyerClientId) || (category === 'separation_payment' && (!paymentAmount || !paymentDate))} className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-40">{busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Guardar soporte</button>
-                {error && <p className="text-xs text-red-300">{error}</p>}
-              </div>
-            </section>
-          </div>
-
-          <div className="space-y-4">
-            <section className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-              <div className="flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-bold text-zinc-100"><FileCheck2 size={16} className="text-emerald-400" /> Contratos y promesas</h3><span className="text-xs text-zinc-500">{deal.documents?.length ?? 0} documento(s)</span></div>
-              {!deal.documents?.length && <div className="mt-3 rounded-xl border border-dashed border-zinc-800 py-8 text-center text-xs text-zinc-500"><FileText size={22} className="mx-auto mb-2" />Aún no se han generado contratos ni promesas.</div>}
-              <div className="mt-3 space-y-2">
-                {[...(deal.documents ?? [])].reverse().map((document) => (
-                  <div key={`${document.kind}-${document.version}`} className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-zinc-100">{document.kind === 'preventa' ? 'Contrato de preventa' : 'Promesa de compraventa'} · v{document.version}</p>
-                      <p className="mt-1 text-[10px] text-zinc-500">Generado: {dateTime(document.generatedAt)} · Estado: {document.signatureStatus || 'generado'}</p>
-                      <p className="mt-1 truncate text-[10px] font-medium text-emerald-400">{projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}{deal.lot?.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}</p>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-1.5 sm:justify-end">
-                      {document.signatureStatus === 'firmado' && document.signedPdfStoragePath && (
-                        <button onClick={() => void handleView(document.kind, document.version, true)} disabled={!!downloadingDocument}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/50 bg-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50">
-                          {downloadingDocument === `signed-${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Firmado
-                        </button>
-                      )}
-                      <button onClick={() => void handleView(document.kind, document.version)} disabled={!!downloadingDocument}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-bold text-zinc-200 hover:bg-zinc-800 disabled:opacity-50">
-                        {downloadingDocument === `view-${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} Ver
-                      </button>
-                      {isAdmin && (
-                        <button
-                          onClick={() => void handleDocumentDownload(document.kind, document.version)}
-                          disabled={downloadingDocument === `${document.kind}-${document.version}`}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-                        >
-                          {downloadingDocument === `${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Word
-                        </button>
-                      )}
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteDocument(document.kind, document.version)}
-                          disabled={downloadingDocument === `del-${document.kind}-${document.version}`}
-                          title="Eliminar este contrato"
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-400 hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
-                        >
-                          {downloadingDocument === `del-${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Borrar
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {/* Estado de la firma en DocuBlock: quién firmó, reenviar, actualizar y enviar a firma. */}
-              <DealSignatureStatus companyId={companyId} deal={deal} canManage={isAdmin} onChanged={onReload} onViewSigned={(doc) => handleView(doc.kind, doc.version, true)} />
-            </section>
-
-            <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-              <div className="flex items-center justify-between"><h3 className="text-sm font-bold text-zinc-200">Soportes del negocio</h3><span className="text-xs text-zinc-500">{attachments.length} archivo(s)</span></div>
-              {!attachments.length && <div className="mt-4 rounded-xl border border-dashed border-zinc-800 py-12 text-center text-xs text-zinc-500"><FileText size={24} className="mx-auto mb-2" />Aún no hay soportes cargados.</div>}
-              <div className="mt-3 space-y-2">
-              {attachments.map((attachment) => (
-                <div key={attachment.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-wide text-emerald-400">{CATEGORY_LABELS[attachment.category]}</p><p className="mt-1 truncate text-xs font-semibold text-zinc-200">{attachment.fileName}</p><p className="mt-1 text-[10px] text-zinc-500">{attachment.buyerName || ''}{attachment.paymentAmount ? `${attachment.buyerName ? ' · ' : ''}${money(attachment.paymentAmount)} · ${attachment.paymentDate}` : ''}</p>{attachment.note && <p className="mt-2 text-xs text-zinc-400">{attachment.note}</p>}<p className="mt-2 text-[10px] text-zinc-600">{attachment.uploadedByName} · {dateTime(attachment.uploadedAt)}</p></div>
-                    <div className="flex shrink-0 gap-1"><button onClick={() => void downloadDealAttachment(companyId, deal.id, attachment.id)} title="Descargar" className="rounded-lg border border-zinc-700 p-2 text-emerald-300 hover:bg-zinc-800"><Download size={14} /></button>{(isAdmin || attachment.uploadedBy === currentUserId) && <button onClick={() => void handleDelete(attachment)} title="Eliminar" disabled={busy} className="rounded-lg border border-zinc-700 p-2 text-red-300 hover:bg-red-500/10"><Trash2 size={14} /></button>}</div>
-                  </div>
-                </div>
-              ))}
-              </div>
-            </section>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function Checklist({ ok, text }: { ok: boolean; text: string }) {

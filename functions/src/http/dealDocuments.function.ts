@@ -12,7 +12,7 @@ import { formatoPesos, pesosEnLetras } from '../modules/deals/numeroALetras';
 import { renderContract } from '../modules/contracts/contractRenderer';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind } from '../modules/deals/deals.types';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
-import { lotSnapshot } from '../modules/deals/dealDocumentLot';
+import { latestCurrentDocument, lotSnapshot } from '../modules/deals/dealDocumentLot';
 import { isPendingSignature, signatureDealStatus } from '../modules/deals/dealSignature.logic';
 import { draftStatusFor } from '../modules/deals/dealStatus';
 
@@ -119,8 +119,8 @@ export async function generateDocument(
       issuedAt,
     });
   } else {
-    const preventa = [...documents].reverse().find((d) => d.kind === 'preventa');
-    if (!preventa) throw new HttpsError('failed-precondition', 'Primero genera la preventa: la promesa sale de sus mismos datos.');
+    const preventa = latestCurrentDocument(deal, 'preventa');
+    if (!preventa) throw new HttpsError('failed-precondition', 'Primero genera la preventa vigente de este lote: la promesa sale de sus mismos datos.');
     const [json] = await bucket.file(preventa.dataStoragePath).download();
     contractData = withIssueDate(JSON.parse(json.toString('utf8')) as ContractData, issuedAt);
   }

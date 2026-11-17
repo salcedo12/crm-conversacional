@@ -12,6 +12,7 @@ import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/aut
 import { normalizePhone } from '../utils/phone';
 import { sendUserInviteEmail } from '../utils/inviteEmail';
 import { sendLeadReassignedPush } from '../modules/messages/pushNotifications.service';
+import { syncOpenDealsAdvisor } from '../modules/deals/dealAccess';
 
 const usersCol = (companyId: string) =>
   db.collection('companies').doc(companyId).collection('users');
@@ -344,6 +345,11 @@ export const reassignLead = onCall(
       ...(lead.assignedTo && lead.assignedTo !== advisorId ? { previousAdvisorId: lead.assignedTo } : {}),
     };
     await leadsRepository.update(companyId, leadId, update);
+
+    // Mantener alineado el asesor de los negocios abiertos del lead para no dejar al nuevo asesor sin acceso.
+    if (advisorId && advisorId !== lead.assignedTo) {
+      await syncOpenDealsAdvisor(companyId, leadId, advisorId, now);
+    }
 
     if (advisorId && advisorId !== lead.assignedTo && advisorId !== ctx.uid) {
       await sendLeadReassignedPush(companyId, lead, advisorId, ctx.uid).catch((err) => {

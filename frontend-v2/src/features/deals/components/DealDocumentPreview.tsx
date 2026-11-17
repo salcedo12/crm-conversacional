@@ -8,10 +8,11 @@ import { saveDealDocument } from '../services/deals.service';
  * dibujando cada página con pdf.js, que funciona igual en computador y celular.
  * Sin `onDownloadWord` (asesores) no hay botones de descarga: solo se puede ver.
  */
-export function DealDocumentPreview({ title, pdf, onDownloadWord, onClose }: {
+export function DealDocumentPreview({ title, pdf, onDownloadWord, allowPdfDownload = false, onClose }: {
   title: string;
   pdf: { fileName: string; blob: Blob };
   onDownloadWord?: () => Promise<void>;
+  allowPdfDownload?: boolean;
   onClose: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -73,23 +74,25 @@ export function DealDocumentPreview({ title, pdf, onDownloadWord, onClose }: {
       <div className="flex items-center justify-between gap-3 border-b border-zinc-800 bg-zinc-950 px-4 pb-2.5 pt-[max(0.625rem,var(--safe-top))]" onClick={(e) => e.stopPropagation()}>
         <p className="truncate text-sm font-semibold text-zinc-100">{title}</p>
         <div className="flex shrink-0 items-center gap-2">
-          {onDownloadWord && <>
-          <button
-            type="button"
-            onClick={() => saveDealDocument(pdf.fileName, pdf.blob)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
-          >
-            <Download size={13} /> PDF
-          </button>
-          <button
-            type="button"
-            disabled={downloading}
-            onClick={() => void downloadWord()}
-            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-emerald-300 hover:bg-zinc-800 disabled:opacity-50"
-          >
-            {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Word
-          </button>
-          </>}
+          {(onDownloadWord || allowPdfDownload) && (
+            <button
+              type="button"
+              onClick={() => saveDealDocument(pdf.fileName, pdf.blob)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+            >
+              <Download size={13} /> PDF
+            </button>
+          )}
+          {onDownloadWord && (
+            <button
+              type="button"
+              disabled={downloading}
+              onClick={() => void downloadWord()}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-emerald-300 hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Word
+            </button>
+          )}
           <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-2 flex h-11 w-11 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 sm:mr-0 sm:h-8 sm:w-8">
             <X size={18} />
           </button>

@@ -30,7 +30,8 @@ import {
   type DocuBlockWebhookEvent,
 } from '../../integrations/docublock/docublockWebhook.logic';
 import { webhookEventExpireAt } from '../../utils/webhookTtl';
-import { moveLotToTramite } from '../inventory/lotReservation.service';
+import { getLotStatus, moveLotToTramite, releaseLot, reserveLot } from '../inventory/lotReservation.service';
+import { sendAdvisorPush } from '../messages/pushNotifications.service';
 import { clientsCol, dealsCol } from './dealAccess';
 import { dealActivityDoc, dealActivityRef, leadRef } from './dealAudit';
 import { randomUUID } from 'crypto';
@@ -272,6 +273,7 @@ export async function sendToSignature(opts: {
     plans.push({ kind, template, directory, ...built });
   }
 
+  const prevLotStatus = await getLotStatus(deal.lot.inventoryLotId).catch(() => null);
   // El lote pasa a TRAMITE antes de enviar (si otro lo tomó, no se envía nada).
   await moveLotToTramite(deal.lot.inventoryLotId, { dealId: deal.id, companyId: input.companyId, advisorName: actor.name }, actor);
 
@@ -322,6 +324,23 @@ export async function sendToSignature(opts: {
       logger.info('[DealSignature] Enviado a DocuBlock', { dealId: deal.id, kind: plan.kind, version: doc.version, docublockId: id });
     }
   } catch (err) {
+    // Si no alcanzó a salir ningún contrato a DocuBlock, restauramos el estado previo del lote.
+    if (sent.length === 0 && !deal.signaturePending) {
+      try {
+        if (prevLotStatus?.status === 'DISPONIBLE') {
+          await releaseLot(deal.lot.inventoryLotId, deal.id, actor);
+        } else if (prevLotStatus?.status === 'NEGOCIACION' && prevLotStatus.dealId === deal.id) {
+          const restored = await reserveLot(deal.lot.inventoryLotId, { dealId: deal.id, companyId: input.companyId, advisorName: actor.name }, actor);
+          await ref.update({ 'lot.reservedUntil': restored.reservedUntil ?? '', updatedAt: Timestamp.now() });
+        }
+      } catch (rollbackErr) {
+        logger.warn('[DealSignature] No se pudo revertir el lote tras fallo en DocuBlock', {
+          dealId: deal.id,
+          lotId: deal.lot.inventoryLotId,
+          error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+      }
+    }
     if (err instanceof DocuBlockError) {
       throw new HttpsError('unavailable', `${sent.length ? `Se envió ${sent.join(' y ')}, pero ` : ''}DocuBlock rechazó el envío: ${err.message}`);
     }
@@ -472,6 +491,46 @@ async function saveSignatureState(ref: DocumentReference, deal: Deal): Promise<D
       });
     }
   }
+  // Si ya no queda ninguna firma pendiente ni contrato firmado, el lote vuelve de TRAMITE a reserva (NEGOCIACION 24 h).
+  const hadActiveSigning = prevStatus === 'preventa_en_firma' || prevStatus === 'promesa_en_firma';
+  if (hadActiveSigning && status === 'plan_listo' && !pending && deal.lot?.inventoryLotId) {
+    try {
+      const restored = await reserveLot(
+        deal.lot.inventoryLotId,
+        { dealId: deal.id, companyId: deal.companyId, advisorName: 'DocuBlock' },
+        { name: 'DocuBlock', email: '' },
+      );
+      deal.lot = restored;
+      await ref.update({ 'lot.reservedUntil': restored.reservedUntil ?? '', updatedAt: Timestamp.now() });
+    } catch (err) {
+      logger.warn('[DealSignature] No se pudo devolver el lote a NEGOCIACION al detenerse la firma', {
+        dealId: deal.id,
+        lotId: deal.lot.inventoryLotId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Notificación push al asesor en hitos relevantes de firma.
+  if (prevStatus !== status && deal.advisorId) {
+    const lotText = deal.lot ? lotLabel(deal.lot) : 'Negocio';
+    const pushPayload =
+      status === 'preventa_firmada'
+        ? { title: 'Preventa firmada', body: `${lotText}: todos firmaron la preventa en DocuBlock.`, type: 'deal_signature' }
+        : status === 'promesa_firmada'
+          ? { title: 'Promesa firmada · Vendido', body: `${lotText}: todos firmaron la promesa de compraventa.`, type: 'deal_signature' }
+          : hadActiveSigning && status === 'plan_listo'
+            ? { title: 'Firma detenida en DocuBlock', body: `${lotText}: la firma fue anulada, rechazada o venció. El lote volvió a reserva.`, type: 'deal_signature' }
+            : null;
+    if (pushPayload) {
+      await sendAdvisorPush(deal.companyId, deal.advisorId, {
+        ...pushPayload,
+        url: `/dashboard/deals/${deal.id}`,
+        leadId: deal.leadId,
+      }).catch((err) => logger.warn('[DealSignature] Error enviando push al asesor', { dealId: deal.id, error: String(err) }));
+    }
+  }
+
   return status;
 }
 

@@ -6,13 +6,14 @@ import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import type { AuthContext } from '../lib/authContext';
-import { draftStatusFor, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
+import { draftStatusFor, EDITABLE_STATUSES, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
-import { computeEarnestMoney, summarizePlan } from '../modules/deals/paymentPlan';
+import { computeEarnestMoney, summarizePlan, termIssue } from '../modules/deals/paymentPlan';
 import { phoneTail } from '../utils/phone';
 import { getYcloudClientForCompany } from '../integrations/ycloud/ycloud.client';
 import { getProjectLegalProfile } from '../modules/deals/legalProfiles';
 import { oneLine } from '../modules/ai/aiFailureAlert';
+import { sendAdvisorPush } from '../modules/messages/pushNotifications.service';
 import type { Deal, PaymentPlan } from '../modules/deals/deals.types';
 
 /**
@@ -425,10 +426,15 @@ export async function resolvePlanApproval(params: {
   // Actualizar Deal
   const dealRef = db.collection('companies').doc(params.companyId).collection('deals').doc(approval.dealId);
   const dealSnap = await dealRef.get();
+  let advisorToNotify: string | undefined;
   if (dealSnap.exists) {
     const dealData = dealSnap.data() as Deal;
+    advisorToNotify = dealData.advisorId;
     if (dealData.status === 'anulado') {
       return { ok: false, message: 'El negocio ya fue anulado; no se puede aplicar la autorización.', approval: { ...approval, status: 'cancelled' } };
+    }
+    if (!EDITABLE_STATUSES.includes(dealData.status)) {
+      return { ok: false, message: 'El negocio ya entró a firma; no se puede promover el plan automáticamente.', approval: { ...approval, status } };
     }
     const specialTermApprovedBy = `${params.resolvedBy}${cleanNotes ? `: "${cleanNotes}"` : ''}`;
 
@@ -453,8 +459,7 @@ export async function resolvePlanApproval(params: {
         updatePayload.status = draftStatusFor({ ...dealData, plan: nextPlan });
       } else if (approval.planDraftSnapshot || dealData.draftPlan) {
         // Promover a plan oficial EXACTAMENTE el borrador que gerencia revisó
-        // (copia guardada en la solicitud). El borrador vivo del negocio solo se
-        // usa para solicitudes antiguas que no guardaron copia.
+        // (copia guardada en la solicitud), validando cuadre y plazo antes de escribirlo.
         const draft = (approval.planDraftSnapshot || dealData.draftPlan) as Omit<PaymentPlan, 'specialTerm'>;
         const promotedPlan: PaymentPlan = {
           ...draft,
@@ -462,27 +467,30 @@ export async function resolvePlanApproval(params: {
           listPrice: null,
           specialTerm: approvedSpecialTerm,
         };
-        updatePayload.plan = promotedPlan;
-        updatePayload.status = draftStatusFor({ ...dealData, plan: promotedPlan });
         try {
           const summary = summarizePlan(promotedPlan);
-          if (summary.issues.length === 0 && dealData.lot) {
-            updatePayload.planTotals = {
-              totalLand: summary.totalLand,
-              separation: summary.separationTotal,
-              ordinary: summary.ordinaryTotal,
-              extraordinary: summary.extraordinaryTotal,
-              bonus: summary.bonusTotal,
-              severance: summary.severanceTotal,
-              installments: summary.installmentsTotal,
-              earnestMoney: computeEarnestMoney(
-                promotedPlan.landValue,
-                getProjectLegalProfile(dealData.lot.projectId)?.earnestPercent ?? 30,
-              ),
-            };
+          const outOfTerm = termIssue(summary.installments, promotedPlan.termMonths);
+          if (summary.issues.length === 0 && !outOfTerm) {
+            updatePayload.plan = promotedPlan;
+            updatePayload.status = draftStatusFor({ ...dealData, plan: promotedPlan });
+            if (dealData.lot) {
+              updatePayload.planTotals = {
+                totalLand: summary.totalLand,
+                separation: summary.separationTotal,
+                ordinary: summary.ordinaryTotal,
+                extraordinary: summary.extraordinaryTotal,
+                bonus: summary.bonusTotal,
+                severance: summary.severanceTotal,
+                installments: summary.installmentsTotal,
+                earnestMoney: computeEarnestMoney(
+                  promotedPlan.landValue,
+                  getProjectLegalProfile(dealData.lot.projectId)?.earnestPercent ?? 30,
+                ),
+              };
+            }
           }
         } catch (sumErr) {
-          logger.warn('[dealApproval] No se pudo calcular planTotals al promover plan', { dealId: dealData.id, error: String(sumErr) });
+          logger.warn('[dealApproval] No se pudo validar/promover el borrador aprobado', { dealId: dealData.id, error: String(sumErr) });
         }
       }
     } else if (dealData.plan) {
@@ -509,6 +517,16 @@ export async function resolvePlanApproval(params: {
       ],
       createdAt: now,
     }));
+  }
+
+  if (advisorToNotify) {
+    await sendAdvisorPush(params.companyId, advisorToNotify, {
+      title: params.approved ? 'Plan especial autorizado' : 'Plan especial rechazado',
+      body: `${approval.lotInfo} (${approval.buyerNames})${cleanNotes ? ` · ${cleanNotes}` : ''}`,
+      url: `/dashboard/deals/${approval.dealId}`,
+      type: 'deal_plan_approval',
+      leadId: approval.leadId,
+    }).catch((err) => logger.warn('[dealApproval] No se pudo enviar push al asesor', { err }));
   }
 
   // Notificar confirmación por WhatsApp a Gerencia

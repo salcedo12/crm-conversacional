@@ -51,6 +51,8 @@ export {
   downloadDealAttachment,
   deleteDealAttachment,
   cancelDeal,
+  listDealActivity,
+  reassignDealAdvisor,
 } from './http/deals.function';
 export {
   listInventoryProjects,

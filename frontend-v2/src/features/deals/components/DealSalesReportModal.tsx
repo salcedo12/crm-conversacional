@@ -87,19 +87,19 @@ export function DealSalesReportModal({
           if (d.clientName) setClientName(d.clientName);
           if (d.documentNumber) setDocumentNumber(d.documentNumber);
           if (d.paymentTerms) setPaymentTerms(String(d.paymentTerms));
-          if (d.deposit) setDeposit(formatCopCurrency(d.deposit));
+          if (d.deposit !== undefined && d.deposit !== null) setDeposit(formatCopCurrency(d.deposit));
           if (d.source) setSaleType(d.source);
           if (d.referralApplies) {
             const applies = d.referralApplies === 'SI' ? 'SI' : 'NO';
             setReferralApplies(applies);
           }
-          if (d.referralName) setReferralName(d.referralName);
+          if (d.referralName !== undefined) setReferralName(d.referralName);
           if (d.lotNumber) setLotNumber(d.lotNumber);
           if (d.sectorStage) setSectorStage(d.sectorStage);
           if (d.projectName) setProjectName(d.projectName);
-          if (d.area) setArea(String(d.area));
-          if (d.discount) setDiscount(formatCopCurrency(d.discount));
-          if (d.landValue) setLotValue(formatCopCurrency(d.landValue));
+          if (d.area !== undefined && d.area !== null) setArea(String(d.area));
+          if (d.discount !== undefined && d.discount !== null) setDiscount(formatCopCurrency(d.discount));
+          if (d.landValue !== undefined && d.landValue !== null) setLotValue(formatCopCurrency(d.landValue));
           if (Array.isArray(d.commissions) && d.commissions.length > 0) {
             setCommissions(d.commissions);
           }
@@ -134,7 +134,7 @@ export function DealSalesReportModal({
         return {
           ...item,
           ratePct: newRateStr,
-          value: calcVal > 0 ? formatCopCurrency(calcVal) : item.value,
+          value: formatCopCurrency(calcVal),
         };
       })
     );

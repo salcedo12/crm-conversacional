@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Calculator, CheckCircle2, Clock, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { DealField as Field, DealSheet, dealInputCls as inputCls } from './DealSheet';
@@ -157,7 +157,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const [approvalMethod, setApprovalMethod] = useState<'whatsapp' | 'manual'>('whatsapp');
   const initialPhone = (deal.planApproval?.approverPhone?.replace(/^\+57/, '') || '3148209662');
   const [approverPhone, setApproverPhone] = useState(initialPhone === '3148209692' ? '3148209662' : initialPhone);
-  const [approverName, setApproverName] = useState(deal.planApproval?.approverName || 'Don Jhon (Gerencia)');
+  const [approverName] = useState(deal.planApproval?.approverName || 'Don Jhon (Gerencia)');
   const [requestingApproval, setRequestingApproval] = useState(false);
   const rawApprStatus = deal.planApproval?.status;
   const initialApprovalStatus: 'none' | 'pending' | 'approved' | 'rejected' =
@@ -166,6 +166,9 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       : (deal.plan?.specialTerm?.approvedBy ? 'approved' : 'none');
   const [approvalStatus, setApprovalStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>(initialApprovalStatus);
   const planFingerprint = `${termMonths ?? ''}|${landValue}|${benefit}|${severanceAmount}`;
+  const requestedFingerprintRef = useRef<string | null>(
+    initialApprovalStatus === 'pending' ? planFingerprint : null,
+  );
   const [approvedFingerprint, setApprovedFingerprint] = useState<string | null>(
     initialApprovalStatus === 'approved' ? planFingerprint : null,
   );
@@ -186,7 +189,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         if (res.quickActionUrl) setQuickActionUrl(res.quickActionUrl);
         if (res.status === 'approved') {
           setApprovalStatus('approved');
-          setApprovedFingerprint(planFingerprint);
+          setApprovedFingerprint(requestedFingerprintRef.current ?? planFingerprint);
           const who = res.approvedBy || `Gerencia (${approverPhone})`;
           setApprovedBy(who);
           if (res.responseNotes) setApprovalNotes(res.responseNotes);
@@ -196,13 +199,18 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
           setApprovedFingerprint(null);
           if (res.responseNotes) setApprovalNotes(res.responseNotes);
           setCheckNotice('❌ El plan fue rechazado por Gerencia.');
+        } else if (res.status === 'cancelled' || res.status === 'superseded' || res.status === 'none') {
+          setApprovalStatus('none');
+          setApprovedFingerprint(null);
+          setCheckNotice('La solicitud pendiente anterior fue anulada o reemplazada.');
         }
       } catch {
         // sondeo silencioso
       }
     }, 4000);
     return () => clearInterval(interval);
-  }, [approvalStatus, companyId, deal.id, approverPhone, planFingerprint]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalStatus, companyId, deal.id, approverPhone]);
 
   const handleCheckStatus = async (): Promise<boolean> => {
     setCheckingApproval(true);
@@ -212,7 +220,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       if (res.quickActionUrl) setQuickActionUrl(res.quickActionUrl);
       if (res.status === 'approved') {
         setApprovalStatus('approved');
-        setApprovedFingerprint(planFingerprint);
+        setApprovedFingerprint(requestedFingerprintRef.current ?? planFingerprint);
         const who = res.approvedBy || `Gerencia (${approverPhone})`;
         setApprovedBy(who);
         if (res.responseNotes) setApprovalNotes(res.responseNotes);
@@ -223,6 +231,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         setApprovedFingerprint(null);
         if (res.responseNotes) setApprovalNotes(res.responseNotes);
         setCheckNotice('❌ El plan fue rechazado por Gerencia.');
+        return false;
+      } else if (res.status === 'cancelled' || res.status === 'superseded' || res.status === 'none') {
+        setApprovalStatus('none');
+        setApprovedFingerprint(null);
+        setCheckNotice('La solicitud pendiente anterior fue anulada o reemplazada.');
         return false;
       } else {
         setCheckNotice(`⏳ Aún pendiente: Esperando que el jefe toque "AUTORIZADO" en WhatsApp (${approverPhone}).`);
@@ -304,6 +317,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         approverName,
         planDraft,
       );
+      requestedFingerprintRef.current = planFingerprint;
       setApprovalStatus('pending');
       (deal as any).draftPlan = planDraft;
       (deal as any).planApproval = {
@@ -347,6 +361,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   };
 
   const switchMode = (next: 'simple' | 'especifico') => {
+    if (next === 'simple' && mode === 'especifico' && rows.length > 0) {
+      if (!window.confirm('Al volver a modo automático se recalcularán las cuotas desde cero y se descartarán los ajustes manuales de la tabla. ¿Continuar?')) {
+        return;
+      }
+    }
     // Al pasar a específico se parte de las filas que generó el modo simple.
     if (next === 'especifico' && mode === 'simple') setRows(buildSimpleRows(simple, amounts));
     setMode(next);
@@ -605,25 +624,12 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                 ) : (
                   <div className="sm:col-span-2">
                     <Field label="Celular para autorización WhatsApp (Gerencia)">
-                      <div className="flex gap-2">
-                        <input
-                          className={inputCls}
-                          value={approverPhone}
-                          placeholder="Ej: 3148209662"
-                          onChange={(e) => setApproverPhone(e.target.value)}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setApproverPhone('3148209662');
-                            setApproverName('Gerencia (3148209662)');
-                          }}
-                          className="shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 px-2 text-[10px] text-zinc-300 hover:bg-zinc-700"
-                          title="Número de pruebas asignado"
-                        >
-                          🧪 Prueba
-                        </button>
-                      </div>
+                      <input
+                        className={inputCls}
+                        value={approverPhone}
+                        placeholder="Ej: 3148209662"
+                        onChange={(e) => setApproverPhone(e.target.value)}
+                      />
                     </Field>
                   </div>
                 )}

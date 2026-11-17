@@ -287,10 +287,19 @@ export async function uploadDealAttachment(input: {
   return result.data.attachment;
 }
 
-export async function downloadDealAttachment(companyId: string, dealId: string, attachmentId: string): Promise<void> {
+export async function fetchDealAttachmentBlob(
+  companyId: string,
+  dealId: string,
+  attachmentId: string,
+): Promise<{ fileName: string; contentType: string; blob: Blob }> {
   const { fileName, contentType, base64 } = (await _downloadAttachment({ companyId, dealId, attachmentId })).data;
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  const url = URL.createObjectURL(new Blob([bytes], { type: contentType }));
+  return { fileName, contentType, blob: new Blob([bytes], { type: contentType }) };
+}
+
+export async function downloadDealAttachment(companyId: string, dealId: string, attachmentId: string): Promise<void> {
+  const { fileName, blob } = await fetchDealAttachmentBlob(companyId, dealId, attachmentId);
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
@@ -433,7 +442,7 @@ const _requestPlanApproval = httpsCallable<
     status:         'pending';
     approverPhone:  string;
     sentVia:        string;
-    quickActionUrl: string;
+    quickActionUrl: string | null;
   }
 >(functions, 'requestPlanApproval', { timeout: 60_000 });
 
@@ -451,12 +460,12 @@ export async function requestPlanApproval(
 const _checkPlanApprovalStatus = httpsCallable<
   { companyId: string; dealId: string },
   {
-    status:         'none' | 'pending' | 'approved' | 'rejected';
+    status:         'none' | 'pending' | 'approved' | 'rejected' | 'cancelled' | 'superseded';
     approvedBy?:    string;
     responseNotes?: string;
     approvedAt?:    number | null;
     approverPhone?: string;
-    quickActionUrl?: string;
+    quickActionUrl?: string | null;
   }
 >(functions, 'checkPlanApprovalStatus');
 
@@ -675,6 +684,26 @@ const _deleteDoc = httpsCallable<{ companyId: string; dealId: string; kind: Deal
 
 export async function deleteDealDocument(companyId: string, dealId: string, kind: DealDocumentKind, version: number): Promise<void> {
   await _deleteDoc({ companyId, dealId, kind, version });
+}
+
+export interface DealActivityEntry {
+  id: string;
+  dealEvent: string;
+  text: string;
+  authorName: string;
+  createdAt: number;
+}
+
+const _listActivity = httpsCallable<{ companyId: string; dealId: string }, { activities: DealActivityEntry[] }>(functions, 'listDealActivity');
+
+export async function listDealActivity(companyId: string, dealId: string): Promise<DealActivityEntry[]> {
+  return (await _listActivity({ companyId, dealId })).data.activities;
+}
+
+const _reassignAdvisor = httpsCallable<{ companyId: string; dealId: string; advisorId: string }, { ok: true; advisorName: string }>(functions, 'reassignDealAdvisor');
+
+export async function reassignDealAdvisor(companyId: string, dealId: string, advisorId: string): Promise<{ ok: true; advisorName: string }> {
+  return (await _reassignAdvisor({ companyId, dealId, advisorId })).data;
 }
 
 export interface DocuBlockCountry { name: string; cities: string[] }

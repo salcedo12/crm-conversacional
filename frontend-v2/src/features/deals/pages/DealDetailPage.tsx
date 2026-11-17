@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -7,8 +8,10 @@ import {
   Calculator,
   CheckCircle2,
   Download,
+  Eye,
   FileCheck2,
   FileText,
+  History,
   Loader2,
   MapPin,
   Paperclip,
@@ -17,9 +20,11 @@ import {
   Upload,
   UserRound,
   Users,
+  X,
 } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
+import { listAdvisors, type Advisor } from '@/features/leads/services/advisors.service';
 import {
   cancelDeal,
   canEditDealBuyers,
@@ -28,15 +33,21 @@ import {
   deleteDealDocument,
   downloadDealAttachment,
   downloadDealDocument,
+  fetchDealAttachmentBlob,
   fetchDealDocumentPdf,
   generateDealDocument,
   getDeal,
+  listDealActivity,
+  reassignDealAdvisor,
+  saveDealDocument,
   uploadDealAttachment,
+  type DealActivityEntry,
   type DealAttachment,
   type DealAttachmentCategory,
   type DealDocumentKind,
   type DealSummary,
 } from '../services/deals.service';
+import { isCurrentDocument, latestCurrentDocument, lotLabel } from '../utils/documentLot';
 import { referralName } from '../utils/paymentPlan';
 import { DealSignatureStatus } from '../components/DealSignatureStatus';
 import { DealDocumentPreview } from '../components/DealDocumentPreview';
@@ -49,6 +60,7 @@ import {
   CATEGORY_LABELS,
   Checklist,
   dateTime,
+  missingSupportsSummary,
   money,
   projectName,
   STATUS_STYLE,
@@ -66,7 +78,7 @@ export function DealDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<'negocio' | 'contratos' | 'soportes'>('negocio');
+  const [tab, setTab] = useState<'negocio' | 'contratos' | 'soportes' | 'bitacora'>('negocio');
   const [planning, setPlanning] = useState(false);
   const [editingBuyers, setEditingBuyers] = useState(false);
   const [showSalesReport, setShowSalesReport] = useState(false);
@@ -78,10 +90,22 @@ export function DealDetailPage() {
 
   const [preview, setPreview] = useState<{
     title: string;
-    kind: DealDocumentKind;
-    version: number;
+    kind?: DealDocumentKind;
+    version?: number;
     pdf: { fileName: string; blob: Blob };
   } | null>(null);
+  const [imagePreview, setImagePreview] = useState<{
+    title: string;
+    fileName: string;
+    blob: Blob;
+    url: string;
+  } | null>(null);
+  const [activities, setActivities] = useState<DealActivityEntry[] | null>(null);
+  const [loadingActivities, setLoadingActivities] = useState(false);
+  const [reassigningAdvisor, setReassigningAdvisor] = useState(false);
+  const [advisorsList, setAdvisorsList] = useState<Advisor[]>([]);
+  const [nextAdvisorId, setNextAdvisorId] = useState('');
+  const [busyReassign, setBusyReassign] = useState(false);
 
   const [category, setCategory] = useState<DealAttachmentCategory>('buyer_identification');
   const [buyerClientId, setBuyerClientId] = useState('');
@@ -113,13 +137,105 @@ export function DealDetailPage() {
     void loadDealData();
   }, [companyId, dealId]);
 
+  useEffect(() => {
+    if (!deal?.buyers?.length) {
+      setBuyerClientId('');
+      return;
+    }
+    if (!buyerClientId || !deal.buyers.some((b) => b.clientId === buyerClientId)) {
+      setBuyerClientId(deal.buyers[0].clientId);
+    }
+  }, [deal?.buyers, buyerClientId]);
+
+  useEffect(() => {
+    if (!imagePreview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        URL.revokeObjectURL(imagePreview.url);
+        setImagePreview(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [imagePreview]);
+
+  const loadActivities = async () => {
+    if (!companyId || !dealId) return;
+    setLoadingActivities(true);
+    try {
+      setActivities(await listDealActivity(companyId, dealId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo cargar la bitácora del negocio.');
+    } finally {
+      setLoadingActivities(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'bitacora' && companyId && dealId) {
+      void loadActivities();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, companyId, dealId]);
+
   const handleRefresh = async () => {
     if (!companyId || !dealId) return;
+    setError(null);
     try {
       const updated = await getDeal(companyId, dealId);
       setDeal(updated);
+      if (tab === 'bitacora') void loadActivities();
     } catch (err) {
-      console.warn('[DealDetailPage] Error reloading deal:', err);
+      setError(err instanceof Error ? err.message : 'No se pudo actualizar el negocio.');
+    }
+  };
+
+  const openReassignAdvisor = async () => {
+    if (!companyId || !deal) return;
+    setReassigningAdvisor(true);
+    setNextAdvisorId(deal.advisorId);
+    if (advisorsList.length === 0) {
+      try {
+        const list = await listAdvisors(companyId);
+        setAdvisorsList(list.filter((a) => a.active && a.role !== 'viewer'));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'No se pudo cargar la lista de asesores.');
+      }
+    }
+  };
+
+  const confirmReassignAdvisor = async () => {
+    if (!companyId || !deal || !nextAdvisorId) return;
+    setBusyReassign(true);
+    setError(null);
+    try {
+      await reassignDealAdvisor(companyId, deal.id, nextAdvisorId);
+      setReassigningAdvisor(false);
+      await handleRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo reasignar el asesor.');
+    } finally {
+      setBusyReassign(false);
+    }
+  };
+
+  const handleViewAttachment = async (attachment: DealAttachment) => {
+    if (!companyId || !deal) return;
+    const key = `att-${attachment.id}`;
+    setDownloadingDocument(key);
+    setError(null);
+    try {
+      const data = await fetchDealAttachmentBlob(companyId, deal.id, attachment.id);
+      if (data.contentType === 'application/pdf' || attachment.fileName.toLowerCase().endsWith('.pdf')) {
+        setPreview({ title: `${CATEGORY_LABELS[attachment.category]} · ${data.fileName}`, pdf: { fileName: data.fileName, blob: data.blob } });
+      } else {
+        const url = URL.createObjectURL(data.blob);
+        setImagePreview({ title: CATEGORY_LABELS[attachment.category], fileName: data.fileName, blob: data.blob, url });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo abrir la vista previa del soporte.');
+    } finally {
+      setDownloadingDocument(null);
     }
   };
 
@@ -284,6 +400,7 @@ export function DealDetailPage() {
 
   const attachments = deal.attachments ?? [];
   const stats = supportStats(deal);
+  const missingSupports = missingSupportsSummary(deal);
   const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
   const canEditBuyers = !readOnly && canEditDealBuyers(deal.status, isAdmin);
   const canCancelDeal = !readOnly && deal.status !== 'anulado' && (editable || isAdmin);
@@ -294,7 +411,7 @@ export function DealDetailPage() {
   const activePlan = deal.plan || draftPlan;
   const isApprovalPending = deal.planApproval?.status === 'pending';
   const planStale = !!activePlan && activePlan.lotId !== deal.lot?.inventoryLotId;
-  const hasPreventa = (deal.documents ?? []).some((d) => d.kind === 'preventa');
+  const hasPreventa = Boolean(latestCurrentDocument(deal, 'preventa'));
   const canGeneratePreventa =
     !readOnly && deal.status !== 'anulado' && (deal.status === 'plan_listo' || (hasPreventa && Boolean(deal.lot) && Boolean(deal.plan)));
 
@@ -304,13 +421,45 @@ export function DealDetailPage() {
         <DealDocumentPreview
           title={preview.title}
           pdf={preview.pdf}
+          allowPdfDownload={isAdmin || !preview.kind}
           onDownloadWord={
-            isAdmin && companyId
-              ? () => downloadDealDocument(companyId, deal.id, preview.kind, preview.version)
+            isAdmin && companyId && preview.kind && preview.version
+              ? () => downloadDealDocument(companyId, deal.id, preview.kind!, preview.version!)
               : undefined
           }
           onClose={() => setPreview(null)}
         />
+      )}
+      {imagePreview && createPortal(
+        <div
+          className="fixed inset-0 z-[200] flex flex-col bg-zinc-950/95"
+          onClick={() => { URL.revokeObjectURL(imagePreview.url); setImagePreview(null); }}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-zinc-800 bg-zinc-950 px-4 pb-2.5 pt-[max(0.625rem,var(--safe-top))]" onClick={(e) => e.stopPropagation()}>
+            <p className="truncate text-sm font-semibold text-zinc-100">{imagePreview.title} · {imagePreview.fileName}</p>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => saveDealDocument(imagePreview.fileName, imagePreview.blob)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+              >
+                <Download size={13} /> Descargar
+              </button>
+              <button
+                type="button"
+                onClick={() => { URL.revokeObjectURL(imagePreview.url); setImagePreview(null); }}
+                aria-label="Cerrar"
+                className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-1 items-center justify-center overflow-auto p-4" onClick={(e) => e.stopPropagation()}>
+            <img src={imagePreview.url} alt={imagePreview.fileName} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
+          </div>
+        </div>,
+        document.body,
       )}
       {planning && companyId && (
         <DealPlanModal
@@ -339,7 +488,7 @@ export function DealDetailPage() {
         <DealSalesReportModal
           deal={deal}
           companyId={companyId}
-          currentUserName={deal.advisorName || user?.displayName || 'Asesor'}
+          currentUserName={user?.displayName || user?.email || deal.advisorName || 'Asesor'}
           onClose={() => setShowSalesReport(false)}
           onSaved={() => void handleRefresh()}
         />
@@ -385,13 +534,15 @@ export function DealDetailPage() {
               <span className={`rounded-full border px-3 py-1 text-xs font-bold shadow-sm ${STATUS_STYLE[deal.status]}`}>
                 {DEAL_STATUS_LABELS[deal.status]}
               </span>
-              <button
-                type="button"
-                onClick={() => setShowSalesReport(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3.5 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/25 transition shadow-sm"
-              >
-                <FileText size={14} /> <span className="hidden sm:inline">Reporte de venta</span><span className="sm:hidden">Reporte</span>
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => setShowSalesReport(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3.5 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/25 transition shadow-sm"
+                >
+                  <FileText size={14} /> <span className="hidden sm:inline">Reporte de venta</span><span className="sm:hidden">Reporte</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void handleRefresh()}
@@ -411,11 +562,50 @@ export function DealDetailPage() {
                 <span>{deal.buyerNames?.join(', ') || deal.leadName || 'Sin compradores registrados'}</span>
               </div>
               <span className="text-zinc-600 hidden sm:inline">•</span>
-              <div className="flex items-center gap-1 text-[11px] text-zinc-400">
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
                 <UserRound size={12} className="text-zinc-500" />
                 <span>Asesor:</span>
                 <strong className="text-zinc-200">{deal.advisorName || 'Sin asesor'}</strong>
+                {isAdmin && !readOnly && deal.status !== 'anulado' && !reassigningAdvisor && (
+                  <button
+                    type="button"
+                    onClick={() => void openReassignAdvisor()}
+                    className="ml-1 rounded-md border border-zinc-700 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 hover:border-emerald-500/40 hover:bg-emerald-500/10"
+                  >
+                    Cambiar
+                  </button>
+                )}
               </div>
+              {reassigningAdvisor && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <select
+                    value={nextAdvisorId}
+                    onChange={(e) => setNextAdvisorId(e.target.value)}
+                    disabled={busyReassign}
+                    className="h-7 rounded-lg border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-200"
+                  >
+                    {advisorsList.map((a) => (
+                      <option key={a.id} value={a.id}>{a.displayName || a.email}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={busyReassign || !nextAdvisorId}
+                    onClick={() => void confirmReassignAdvisor()}
+                    className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    {busyReassign ? 'Guardando…' : 'Guardar'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyReassign}
+                    onClick={() => setReassigningAdvisor(false)}
+                    className="px-1.5 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
               <span className="text-zinc-600 hidden sm:inline">•</span>
               <span className="text-[11px] text-zinc-500">
                 Actualizado: {dateTime(deal.updatedAt)}
@@ -438,7 +628,7 @@ export function DealDetailPage() {
           </div>
 
           {/* Pestañas de navegación con contadores */}
-          <div className="mt-4 grid grid-cols-3 gap-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1 text-xs sm:text-sm">
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1 text-xs sm:text-sm">
             <button
               type="button"
               onClick={() => setTab('negocio')}
@@ -483,6 +673,18 @@ export function DealDetailPage() {
                   {attachments.length}
                 </span>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('bitacora')}
+              className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs sm:text-sm font-bold transition ${
+                tab === 'bitacora'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/50'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <History size={15} />
+              <span>Bitácora</span>
             </button>
           </div>
         </header>
@@ -842,13 +1044,15 @@ export function DealDetailPage() {
                 </div>
 
                 {/* Botón Reporte de venta */}
-                <button
-                  type="button"
-                  onClick={() => setShowSalesReport(true)}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white hover:bg-emerald-500 transition shadow-lg shadow-emerald-950/50"
-                >
-                  <FileText size={15} /> Generar reporte de venta
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSalesReport(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white hover:bg-emerald-500 transition shadow-lg shadow-emerald-950/50"
+                  >
+                    <FileText size={15} /> Generar reporte de venta
+                  </button>
+                )}
               </section>
 
               {/* TARJETA CONTROL DOCUMENTAL */}
@@ -865,15 +1069,15 @@ export function DealDetailPage() {
                 </div>
                 <div className="space-y-2 pt-1">
                   <Checklist
-                    ok={stats.buyerDocs >= deal.buyers.length && deal.buyers.length > 0}
+                    ok={stats.buyersOk}
                     text={`Documentos compradores: ${stats.buyerDocs}/${deal.buyers.length}`}
                   />
-                  {Boolean(deal.plan?.benefit) && <Checklist ok={stats.authorization} text="Autorización de bono/descuento" />}
-                  {Boolean(referralName(deal.plan?.referredBy)) && <Checklist ok={stats.referral} text="Evidencia del referido" />}
+                  {Boolean(deal.plan?.benefit) && <Checklist ok={stats.benefitOk} text="Autorización de bono/descuento" />}
+                  {Boolean(referralName(deal.plan?.referredBy)) && <Checklist ok={stats.referralOk} text="Evidencia del referido" />}
                   {stats.separationPayments > 0 && (
                     <Checklist
-                      ok={stats.paymentProofs >= stats.separationPayments}
-                      text={`Soportes de separación: ${stats.paymentProofs}/${stats.separationPayments}`}
+                      ok={stats.paymentOk}
+                      text={`Soportes de separación: ${stats.paymentProofs}/${stats.separationPayments} (${money(stats.separationPaid)} / ${money(stats.separationRequired)})`}
                     />
                   )}
                 </div>
@@ -895,6 +1099,25 @@ export function DealDetailPage() {
                     {DEAL_STATUS_LABELS[deal.status]}
                   </span>
                 </div>
+
+                {missingSupports.length > 0 && deal.status !== 'anulado' && (
+                  <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 flex items-start justify-between gap-3 text-xs text-amber-200">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-400" />
+                      <div>
+                        <p className="font-semibold text-amber-100">Soportes recomendados pendientes</p>
+                        <p className="mt-0.5 text-[11px] text-amber-200/90">{missingSupports.join(' · ')}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTab('soportes')}
+                      className="shrink-0 font-bold underline text-amber-300 hover:text-white"
+                    >
+                      Subir →
+                    </button>
+                  </div>
+                )}
 
                 {canGeneratePreventa ? (
                   <div className="space-y-2.5">
@@ -954,16 +1177,25 @@ export function DealDetailPage() {
                   </div>
                 )}
                 <div className="mt-4 space-y-2.5">
-                  {[...(deal.documents ?? [])].reverse().map((document) => (
+                  {[...(deal.documents ?? [])].reverse().map((document) => {
+                    const current = isCurrentDocument(document, deal);
+                    return (
                     <div
                       key={`${document.kind}-${document.version}`}
-                      className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 sm:flex-row sm:items-center sm:justify-between shadow-sm"
+                      className={`flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between shadow-sm ${
+                        current ? 'border-zinc-800 bg-zinc-950/80' : 'border-amber-500/20 bg-zinc-950/40 opacity-80'
+                      }`}
                     >
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-bold text-zinc-100">
                             {document.kind === 'preventa' ? 'Contrato de preventa' : 'Promesa de compraventa'} · v{document.version}
                           </p>
+                          {!current && (
+                            <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.2 text-[10px] font-bold text-amber-300">
+                              Lote anterior · vencido
+                            </span>
+                          )}
                           {document.signatureStatus === 'firmado' && (
                             <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.2 text-[10px] font-bold text-emerald-300">
                               ✓ Firmado
@@ -974,7 +1206,9 @@ export function DealDetailPage() {
                           Generado: {dateTime(document.generatedAt)} · Estado: {document.signatureStatus || 'generado'}
                         </p>
                         <p className="mt-1 truncate text-xs font-medium text-emerald-400">
-                          {projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}{deal.lot?.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}
+                          {document.lot
+                            ? `${projectName(document.lot.projectId)} · ${lotLabel(document.lot)}${document.lot.lotCode ? ` · Cód. ${document.lot.lotCode}` : ''}`
+                            : `${projectName(deal.lot?.projectId)} · ${deal.lot?.sector} · Lote ${deal.lot?.lotNumber}${deal.lot?.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}`}
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
@@ -1036,7 +1270,8 @@ export function DealDetailPage() {
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             </div>
@@ -1101,7 +1336,7 @@ export function DealDetailPage() {
                         onChange={(e) => setBuyerClientId(e.target.value)}
                         className="h-10 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-200 focus:border-emerald-500 outline-none"
                       >
-                        {deal.buyers
+                        {[...deal.buyers]
                           .sort((a, b) => a.order - b.order)
                           .map((buyer) => (
                             <option key={buyer.clientId} value={buyer.clientId}>
@@ -1159,7 +1394,10 @@ export function DealDetailPage() {
                       type="file"
                       accept="image/jpeg,image/png,image/webp,application/pdf"
                       className="hidden"
-                      onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                      onChange={(e) => {
+                        setFile(e.target.files?.[0] ?? null);
+                        e.target.value = '';
+                      }}
                     />
                   </label>
 
@@ -1169,7 +1407,7 @@ export function DealDetailPage() {
                       !file ||
                       busy ||
                       (category === 'buyer_identification' && !buyerClientId) ||
-                      (category === 'separation_payment' && (!paymentAmount || !paymentDate))
+                      (category === 'separation_payment' && (!(Number(paymentAmount.replace(/\D/g, '')) > 0) || !paymentDate))
                     }
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-40 transition shadow-lg shadow-emerald-950/40"
                   >
@@ -1222,6 +1460,16 @@ export function DealDetailPage() {
                         <div className="flex shrink-0 gap-1.5">
                           {companyId && (
                             <button
+                              onClick={() => void handleViewAttachment(attachment)}
+                              disabled={downloadingDocument === `att-${attachment.id}`}
+                              title="Ver soporte"
+                              className="rounded-lg border border-zinc-700 p-2 text-zinc-200 hover:bg-zinc-800 transition disabled:opacity-50"
+                            >
+                              {downloadingDocument === `att-${attachment.id}` ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                            </button>
+                          )}
+                          {companyId && (
+                            <button
                               onClick={() => void downloadDealAttachment(companyId, deal.id, attachment.id)}
                               title="Descargar"
                               className="rounded-lg border border-zinc-700 p-2 text-emerald-300 hover:bg-zinc-800 transition"
@@ -1229,7 +1477,7 @@ export function DealDetailPage() {
                               <Download size={14} />
                             </button>
                           )}
-                          {companyId && (isAdmin || attachment.uploadedBy === user?.uid) && (
+                          {!readOnly && companyId && (isAdmin || attachment.uploadedBy === user?.uid) && (
                             <button
                               onClick={() => void handleDelete(attachment)}
                               title="Eliminar"
@@ -1247,6 +1495,47 @@ export function DealDetailPage() {
               </section>
             </div>
           </div>
+        )}
+
+        {/* TAB 4: BITÁCORA / HISTORIAL DEL NEGOCIO */}
+        {tab === 'bitacora' && (
+          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+              <div className="flex items-center gap-2">
+                <History size={16} className="text-emerald-400" />
+                <h3 className="text-sm font-bold text-zinc-100">Bitácora del negocio</h3>
+              </div>
+              <button
+                type="button"
+                disabled={loadingActivities}
+                onClick={() => void loadActivities()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={loadingActivities ? 'animate-spin' : ''} /> Actualizar
+              </button>
+            </div>
+            {loadingActivities && !activities && (
+              <div className="flex justify-center py-12"><Loader2 className="animate-spin text-emerald-400" /></div>
+            )}
+            {activities && activities.length === 0 && (
+              <div className="rounded-xl border border-dashed border-zinc-800 py-12 text-center text-xs text-zinc-500">
+                No hay eventos registrados todavía para este negocio.
+              </div>
+            )}
+            {activities && activities.length > 0 && (
+              <div className="space-y-2.5">
+                {activities.map((entry) => (
+                  <div key={entry.id} className="rounded-xl border border-zinc-800 bg-zinc-950/75 p-3.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400">
+                      <span className="font-semibold text-emerald-300">{entry.authorName}</span>
+                      <span>{dateTime(entry.createdAt)}</span>
+                    </div>
+                    <p className="mt-1.5 whitespace-pre-line text-zinc-200 leading-relaxed">{entry.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         )}
       </div>
     </div>

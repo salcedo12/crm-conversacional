@@ -2,6 +2,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { db } from '../../lib/admin';
 import { logger } from '../../utils/logger';
 import { sendAdvisorPush } from '../messages/pushNotifications.service';
+import { syncOpenDealsAdvisor } from '../deals/dealAccess';
 
 export const leadCollection = (companyId: string) =>
   db.collection('companies').doc(companyId).collection('leads');
@@ -156,6 +157,8 @@ export async function executeResolveLeadTransferRequest(
       source: 'system',
       createdAt: now,
     });
+
+    await syncOpenDealsAdvisor(companyId, reqData.leadId, finalTargetId, now);
 
     await reqRef.update({
       status: 'approved',

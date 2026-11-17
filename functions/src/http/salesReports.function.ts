@@ -686,6 +686,17 @@ export const deleteSalesReportVersion = onCall({ region: 'us-central1' }, async 
 
     await docRef.update(updatePayload);
 
+    // Mantener sincronizados los contadores en el negocio si saleId es un dealId del CRM
+    const dealRef = db.doc(`companies/${input.companyId}/deals/${input.saleId}`);
+    const dealSnap = await dealRef.get();
+    if (dealSnap.exists) {
+      await dealRef.update({
+        salesReportVersionCount: updatedHistory.length,
+        salesReportGeneratedAt: updatedHistory.length > 0 ? Timestamp.fromMillis(updatedHistory[0].createdAt) : null,
+        updatedAt: Timestamp.now(),
+      });
+    }
+
     return {
       ok: true,
       saleId: input.saleId,

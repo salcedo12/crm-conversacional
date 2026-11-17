@@ -13,7 +13,8 @@ export type DealActivityEvent =
   | 'attachment_deleted'
   | 'cancelled'
   | 'sent_to_signature'
-  | 'signature_update';
+  | 'signature_update'
+  | 'advisor_reassigned';
 
 export const leadRef = (companyId: string, leadId: string) =>
   db.collection('companies').doc(companyId).collection('leads').doc(leadId);
