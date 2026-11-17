@@ -165,6 +165,23 @@ export interface DealDocument {
   superseded?:        { at: Timestamp; reason: string } | null;
 }
 
+/** Documento PDF adicional (otrosí, anexo, acta, cesión, etc.) enviado a firma por DocuBlock. */
+export interface ExtraSignatureDocument {
+  id:                    string;
+  name:                  string;
+  fileName:              string;
+  pdfStoragePath:        string;
+  signedPdfStoragePath?: string;
+  signatureStatus:       SignatureStatus;
+  docublockDocumentId:   string;
+  sentAt:                Timestamp;
+  sentBy:                string;
+  signedAt?:             Timestamp;
+  lastStatusCheckAt?:    Timestamp;
+  signature:             DealSignature;
+  lot?:                  DocumentLot | null;
+}
+
 export interface DealSignatureSigner {
   source:        'buyer' | 'docublock_user';
   /** clientId del comprador o _id del usuario de DocuBlock. */
@@ -256,6 +273,7 @@ export interface Deal {
   draftPlan?:  Omit<PaymentPlan, 'specialTerm'> | null;
   planApproval?: DealPlanApproval | null;
   documents:   DealDocument[];
+  extraSignatures?: ExtraSignatureDocument[];
   attachments?: DealAttachment[];
   cancelReason?: string;
   cancelledBy?:  string;

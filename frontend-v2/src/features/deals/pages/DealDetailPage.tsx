@@ -285,7 +285,7 @@ export function DealDetailPage() {
   const stats = supportStats(deal);
   const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
   const canCancelDeal = !readOnly && deal.status !== 'anulado' && (editable || isAdmin);
-  const hasPendingSignatures = (deal.documents ?? []).some(
+  const hasPendingSignatures = [...(deal.documents ?? []), ...(deal.extraSignatures ?? [])].some(
     (d) => d.docublockDocumentId && (d.signatureStatus === 'en_firma' || d.signatureStatus === 'firmado_parcial'),
   );
   const draftPlan = (deal as any).draftPlan || (deal.planApproval as any)?.planDraft;

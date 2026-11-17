@@ -106,8 +106,8 @@ export async function generateDocument(
   let contractData: ContractData;
 
   if (data.kind === 'preventa') {
-    if (deal.status !== 'plan_listo') {
-      throw new HttpsError('failed-precondition', 'Para generar la preventa el negocio debe estar en "Plan listo".');
+    if (deal.status === 'borrador' || deal.status === 'anulado' || !deal.buyers?.length) {
+      throw new HttpsError('failed-precondition', 'Para generar la preventa completa compradores, lote y plan (estado "Plan listo").');
     }
     contractData = buildContractData({
       buyers: await buyersOf(data.companyId, deal),

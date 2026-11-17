@@ -28,9 +28,10 @@ import {
 import { moveLotToTramite } from '../inventory/lotReservation.service';
 import { clientsCol } from './dealAccess';
 import { dealActivityDoc, dealActivityRef, leadRef } from './dealAudit';
-import { isCurrentDocument, latestCurrentDocument, lotLabel } from './dealDocumentLot';
+import { randomUUID } from 'crypto';
+import { isCurrentDocument, latestCurrentDocument, lotLabel, lotSnapshot } from './dealDocumentLot';
 import { signatureDealStatus, isPendingSignature, signatureDocOf } from './dealSignature.logic';
-import type { ClientProfile, Deal, DealDocument, DealDocumentKind, DealSignature, DealSignatureSigner } from './deals.types';
+import type { ClientProfile, Deal, DealDocument, DealDocumentKind, DealSignature, DealSignatureSigner, ExtraSignatureDocument } from './deals.types';
 
 /**
  * Firma de preventa y promesa con DocuBlock (Fase 5). Se envían los dos a la vez
@@ -55,6 +56,18 @@ export interface DocumentChoice {
   version?:    number | null;
   templateId:  string;
   directoryId: string;
+}
+
+export interface SendExtraInput {
+  companyId:      string;
+  name:           string;
+  fileName:       string;
+  pdfBuffer:      Buffer;
+  templateId:     string;
+  directoryId:    string;
+  signers:        Array<{ source: 'buyer' | 'docublock_user'; refId: string; typeSign: string; iteration: number }>;
+  responsibleId?: string | null;
+  requirePhoto:   boolean;
 }
 
 export interface SendInput {
@@ -109,10 +122,10 @@ function docublockName(deal: Deal, kind: DealDocumentKind, buyers: ClientProfile
 }
 
 /** Arma los firmantes de DocuBlock y avisa qué datos faltan (antes de enviar nada). */
-export async function buildSigners(
+async function buildSignersCore<T extends { source: 'buyer' | 'docublock_user'; refId: string; iteration: number }>(
   companyId: string,
-  kind: DealDocumentKind,
-  choices: SignerChoice[],
+  getTypeSign: (choice: T) => string,
+  choices: T[],
   template: DocuBlockTemplate,
   requirePhoto: boolean,
 ): Promise<{ endorsements: EndorsementInput[]; signers: DealSignatureSigner[] }> {
@@ -130,7 +143,7 @@ export async function buildSigners(
   const problems: string[] = [];
   let principalSet = false;
   for (const choice of [...choices].sort((a, b) => a.iteration - b.iteration)) {
-    const typeSign = (choice.typeSigns[kind] ?? '').trim();
+    const typeSign = getTypeSign(choice).trim();
     if (allowed.size && !allowed.has(typeSign)) problems.push(`"${typeSign}" no es un tipo de firmante de la plantilla ${template.name.trim()}`);
     let endorsement: EndorsementInput;
     let name: string;
@@ -179,6 +192,16 @@ export async function buildSigners(
   }
   if (problems.length) throw new HttpsError('failed-precondition', problems.join('. ') + '.');
   return { endorsements, signers };
+}
+
+export function buildSigners(
+  companyId: string,
+  kind: DealDocumentKind,
+  choices: SignerChoice[],
+  template: DocuBlockTemplate,
+  requirePhoto: boolean,
+) {
+  return buildSignersCore(companyId, (c) => c.typeSigns[kind] ?? '', choices, template, requirePhoto);
 }
 
 /**
@@ -293,14 +316,110 @@ export async function sendToSignature(opts: {
   return { sent };
 }
 
+/** Envía un documento PDF adicional (otrosí, anexo, acta, etc.) a DocuBlock. */
+export async function sendExtraToSignature(opts: {
+  ref: DocumentReference;
+  deal: Deal;
+  input: SendExtraInput;
+  actor: { uid: string; name: string };
+}): Promise<{ extra: ExtraSignatureDocument }> {
+  const { ref, deal, input, actor } = opts;
+  if (!deal.lot) throw new HttpsError('failed-precondition', 'El negocio no tiene lote asignado.');
+  if (deal.status === 'anulado') throw new HttpsError('failed-precondition', 'El negocio está anulado.');
+  if (!deal.buyers?.length) throw new HttpsError('failed-precondition', 'El negocio no tiene compradores.');
+
+  const [templates, directories] = await Promise.all([listTemplates(), listDirectories()]);
+  const template = templates.find((t) => t._id === input.templateId);
+  if (!template) throw new HttpsError('invalid-argument', 'La plantilla escogida no existe en DocuBlock.');
+  const directory = directories.find((d) => d._id === input.directoryId);
+  if (!directory) throw new HttpsError('invalid-argument', 'El directorio escogido no existe en DocuBlock.');
+
+  const buyersForName = await db.getAll(...deal.buyers.map((b) => clientsCol(input.companyId).doc(b.clientId)));
+  const buyerProfiles = buyersForName.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() } as ClientProfile));
+  const built = await buildSignersCore(input.companyId, (c) => c.typeSign, input.signers, template, input.requirePhoto);
+
+  const users = input.responsibleId ? await listUsers() : [];
+  const responsible = users.find((u) => u._id === input.responsibleId);
+  const id = randomUUID().slice(0, 12);
+  const safeName = input.name.trim().toUpperCase();
+  const lotText = `${deal.lot.sector} ${deal.lot.lotNumber}`;
+  const who = buyerProfiles[0] ? `${buyerProfiles[0].firstNames} ${buyerProfiles[0].lastNames}`.trim() : '';
+  const docName = [safeName, lotText, who].filter(Boolean).join(' - ').toUpperCase();
+  const pdfStoragePath = `companies/${input.companyId}/deals/${deal.id}/extra-signatures/${id}.pdf`;
+
+  let docublockId: string;
+  try {
+    const res = await createPdfDocument({
+      name: docName,
+      filename: input.fileName.replace(/[\\/:*?"<>|]/g, '') || `${id}.pdf`,
+      baseFile: input.pdfBuffer.toString('base64'),
+      template: template._id,
+      directory: directory._id,
+      endorsementInput: built.endorsements,
+      relatedInfo: { crmCompanyId: input.companyId, crmDealId: deal.id, documento: 'adicional', extraSignatureId: id, nombre: input.name.trim(), lote: lotText },
+      ...(responsible ? { user: responsible._id } : {}),
+    });
+    docublockId = res.id;
+  } catch (err) {
+    if (err instanceof DocuBlockError) {
+      throw new HttpsError('unavailable', `DocuBlock rechazó el envío: ${err.message}`);
+    }
+    throw err;
+  }
+
+  await storage.bucket().file(pdfStoragePath).save(input.pdfBuffer, { contentType: 'application/pdf', resumable: false });
+
+  const extra: ExtraSignatureDocument = {
+    id,
+    name: input.name.trim(),
+    fileName: input.fileName,
+    pdfStoragePath,
+    signatureStatus: 'en_firma',
+    docublockDocumentId: docublockId,
+    sentAt: Timestamp.now(),
+    sentBy: actor.uid,
+    lot: lotSnapshot(deal.lot),
+    signature: {
+      templateId: template._id,
+      templateName: template.name.trim(),
+      directoryId: directory._id,
+      directoryName: directory.name.trim(),
+      ...(responsible ? { responsibleId: responsible._id, responsibleName: userFullName(responsible) } : {}),
+      requirePhoto: input.requirePhoto,
+      signers: built.signers,
+      sentBy: actor.uid,
+      previousDocumentIds: [],
+      lastError: null,
+    },
+  };
+  deal.extraSignatures = [...(deal.extraSignatures ?? []), extra];
+  await saveSignatureState(ref, deal);
+  await dealActivityRef(input.companyId, deal.leadId).set(dealActivityDoc({
+    companyId: input.companyId, leadId: deal.leadId, dealId: deal.id, actorId: actor.uid, actorName: actor.name,
+    event: 'sent_to_signature',
+    title: `Documento adicional enviado a firma: ${extra.name}`,
+    lines: [`Firmantes: ${built.signers.map((s) => s.name).join(', ')}`],
+  }));
+  logger.info('[DealSignature] Adicional enviado a DocuBlock', { dealId: deal.id, extraId: id, docublockId });
+  return { extra };
+}
+
 /** Guarda documentos, estado del negocio y la marca de "en firma". */
 async function saveSignatureState(ref: DocumentReference, deal: Deal): Promise<Deal['status']> {
   const prevStatus = deal.status;
   const status = signatureDealStatus(deal);
-  const pending = (deal.documents ?? []).some((d) => d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+  const pendingDocs = (deal.documents ?? []).some((d) => d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+  const pendingExtras = (deal.extraSignatures ?? []).some((e) => e.docublockDocumentId && isPendingSignature(e.signatureStatus));
+  const pending = pendingDocs || pendingExtras;
   const now = Timestamp.now();
   deal.status = status;
-  await ref.update({ documents: deal.documents, status, signaturePending: pending, updatedAt: now });
+  await ref.update({
+    documents: deal.documents ?? [],
+    ...(deal.extraSignatures ? { extraSignatures: deal.extraSignatures } : {}),
+    status,
+    signaturePending: pending,
+    updatedAt: now,
+  });
 
   // Fase 6: al firmarse la promesa, el lote sigue en TRAMITE (auditoría interna) y el lead pasa a Vendido (closed → CAPI Purchase).
   if (prevStatus !== 'promesa_firmada' && status === 'promesa_firmada' && deal.leadId) {
@@ -333,52 +452,72 @@ async function saveSignatureState(ref: DocumentReference, deal: Deal): Promise<D
   return status;
 }
 
+async function syncDocuBlockItem(
+  item: {
+    docublockDocumentId?: string;
+    signatureStatus: DealDocument['signatureStatus'];
+    signature?: DealSignature;
+    lastStatusCheckAt?: Timestamp;
+    signedPdfStoragePath?: string;
+    signedAt?: Timestamp;
+  },
+  opts: { dealId: string; label: string; signedPdfPath: string },
+  updates: string[],
+): Promise<boolean> {
+  if (!item.docublockDocumentId || !isPendingSignature(item.signatureStatus)) return false;
+  try {
+    const progress = documentProgress(await getDocument(item.docublockDocumentId));
+    const signers = (item.signature?.signers ?? []).map((s) => {
+      // DocuBlock conserva el correo que ya tenía la persona (si estaba registrada por su cédula),
+      // así que se empareja por tipo de firmante (único en el documento, salvo "Avalador"), luego por correo o nombre.
+      const key = (v: string) => placeKey(v);
+      const sameType = progress.signers.filter((p) => key(p.typeSign) === key(s.typeSign));
+      const match = (sameType.length === 1 ? sameType[0] : undefined)
+        ?? progress.signers.find((p) => p.email && p.email.toLowerCase() === s.email.toLowerCase())
+        ?? sameType.find((p) => key(p.name) === key(s.name));
+      return match ? { ...s, signed: match.signed, docublockSignerId: match.endorsementId || s.docublockSignerId } : s;
+    });
+    const newlySigned = signers.filter((s, i) => s.signed && !item.signature?.signers[i]?.signed).map((s) => s.name);
+    item.lastStatusCheckAt = Timestamp.now();
+    if (item.signature) item.signature = { ...item.signature, signers, expiresAt: progress.expiresAt, lastError: null };
+    if (newlySigned.length) updates.push(`${opts.label}: firmó ${newlySigned.join(', ')}`);
+    if (progress.status === 'firmado') {
+      // Solo queda "firmado" cuando el PDF firmado ya está en Storage (si falla, se reintenta).
+      if (!progress.fileUrl) throw new Error('DocuBlock no entregó el archivo firmado');
+      item.signedPdfStoragePath = await saveSignedPdf(opts.signedPdfPath, progress.fileUrl);
+      item.signedAt = Timestamp.now();
+      item.signatureStatus = 'firmado';
+      updates.push(`${opts.label}: firmado por todos`);
+    } else {
+      item.signatureStatus = progress.status;
+    }
+    if (progress.status === 'vencido') {
+      updates.push(`${opts.label}: venció el plazo de firma`);
+    }
+    return true;
+  } catch (err) {
+    logger.warn('[DealSignature] No se pudo consultar DocuBlock', { dealId: opts.dealId, label: opts.label, error: String(err) });
+    if (item.signature) item.signature = { ...item.signature, lastError: err instanceof Error ? err.message : String(err) };
+    return true;
+  }
+}
+
 /**
- * Consulta en DocuBlock los documentos en firma del negocio y actualiza su avance.
- * Al quedar firmado, guarda el PDF firmado en Storage.
+ * Consulta en DocuBlock los documentos en firma del negocio (contratos y adicionales)
+ * y actualiza su avance. Al quedar firmado, guarda el PDF firmado en Storage.
  */
 export async function refreshSignatures(ref: DocumentReference, deal: Deal): Promise<{ changed: boolean }> {
   let changed = false;
   const companyId = deal.companyId;
   const updates: string[] = [];
   for (const doc of deal.documents ?? []) {
-    if (!doc.docublockDocumentId || !isPendingSignature(doc.signatureStatus)) continue;
-    try {
-      const progress = documentProgress(await getDocument(doc.docublockDocumentId));
-      const signers = (doc.signature?.signers ?? []).map((s) => {
-        // DocuBlock conserva el correo que ya tenía la persona (si estaba registrada por su cédula),
-        // así que se empareja por tipo de firmante (único en el documento, salvo "Avalador"), luego por correo o nombre.
-        const key = (v: string) => placeKey(v);
-        const sameType = progress.signers.filter((p) => key(p.typeSign) === key(s.typeSign));
-        const match = (sameType.length === 1 ? sameType[0] : undefined)
-          ?? progress.signers.find((p) => p.email && p.email.toLowerCase() === s.email.toLowerCase())
-          ?? sameType.find((p) => key(p.name) === key(s.name));
-        return match ? { ...s, signed: match.signed, docublockSignerId: match.endorsementId || s.docublockSignerId } : s;
-      });
-      const newlySigned = signers.filter((s, i) => s.signed && !doc.signature?.signers[i]?.signed).map((s) => s.name);
-      doc.lastStatusCheckAt = Timestamp.now();
-      if (doc.signature) doc.signature = { ...doc.signature, signers, expiresAt: progress.expiresAt, lastError: null };
-      const label = doc.kind === 'preventa' ? 'Preventa' : 'Promesa';
-      if (newlySigned.length) updates.push(`${label}: firmó ${newlySigned.join(', ')}`);
-      if (progress.status === 'firmado') {
-        // Solo queda "firmado" cuando el PDF firmado ya está en Storage (si falla, se reintenta).
-        if (!progress.fileUrl) throw new Error('DocuBlock no entregó el archivo firmado');
-        doc.signedPdfStoragePath = await saveSignedPdf(companyId, deal.id, doc, progress.fileUrl);
-        doc.signedAt = Timestamp.now();
-        doc.signatureStatus = 'firmado';
-        updates.push(`${label} firmada por todos`);
-      } else {
-        doc.signatureStatus = progress.status;
-      }
-      if (progress.status === 'vencido') {
-        updates.push(`${label}: venció el plazo de firma`);
-      }
-      changed = true;
-    } catch (err) {
-      logger.warn('[DealSignature] No se pudo consultar DocuBlock', { dealId: deal.id, kind: doc.kind, error: String(err) });
-      if (doc.signature) doc.signature = { ...doc.signature, lastError: err instanceof Error ? err.message : String(err) };
-      changed = true;
-    }
+    const label = doc.kind === 'preventa' ? 'Preventa' : 'Promesa';
+    const path = `companies/${companyId}/deals/${deal.id}/${doc.kind}-v${doc.version}-firmado.pdf`;
+    if (await syncDocuBlockItem(doc, { dealId: deal.id, label, signedPdfPath: path }, updates)) changed = true;
+  }
+  for (const extra of deal.extraSignatures ?? []) {
+    const path = `companies/${companyId}/deals/${deal.id}/extra-signatures/${extra.id}-firmado.pdf`;
+    if (await syncDocuBlockItem(extra, { dealId: deal.id, label: extra.name, signedPdfPath: path }, updates)) changed = true;
   }
   if (changed) await saveSignatureState(ref, deal);
   if (updates.length) {
@@ -390,23 +529,35 @@ export async function refreshSignatures(ref: DocumentReference, deal: Deal): Pro
   return { changed };
 }
 
-async function saveSignedPdf(companyId: string, dealId: string, doc: DealDocument, url: string): Promise<string> {
+async function saveSignedPdf(path: string, url: string): Promise<string> {
   const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`No se pudo descargar el PDF firmado (${res.status})`);
-  const path = `companies/${companyId}/deals/${dealId}/${doc.kind}-v${doc.version}-firmado.pdf`;
   await storage.bucket().file(path).save(Buffer.from(await res.arrayBuffer()), { contentType: 'application/pdf', resumable: false });
   return path;
 }
 
 /** Se anuló en el panel de DocuBlock: el CRM lo marca y deja de consultarlo. */
-export async function markSignatureCancelled(ref: DocumentReference, deal: Deal, kind: DealDocumentKind, actor: { uid: string; name: string }, reason: string) {
-  const doc = signatureDocOf(deal, kind);
+export async function markSignatureCancelled(
+  ref: DocumentReference,
+  deal: Deal,
+  target: { kind?: DealDocumentKind; extraId?: string },
+  actor: { uid: string; name: string },
+  reason: string,
+) {
+  const doc = target.extraId
+    ? (deal.extraSignatures ?? []).find((e) => e.id === target.extraId)
+    : target.kind
+      ? signatureDocOf(deal, target.kind)
+      : undefined;
   if (!doc?.docublockDocumentId) throw new HttpsError('failed-precondition', 'Ese documento no se ha enviado a firma.');
   if (doc.signatureStatus === 'firmado') throw new HttpsError('failed-precondition', 'El documento ya está firmado.');
   doc.signatureStatus = 'anulado';
   await saveSignatureState(ref, deal);
+  const titleLabel = target.extraId
+    ? (doc as ExtraSignatureDocument).name
+    : target.kind === 'preventa' ? 'Preventa' : 'Promesa';
   await dealActivityRef(deal.companyId, deal.leadId).set(dealActivityDoc({
     companyId: deal.companyId, leadId: deal.leadId, dealId: deal.id, actorId: actor.uid, actorName: actor.name,
-    event: 'signature_update', title: `${kind === 'preventa' ? 'Preventa' : 'Promesa'}: firma anulada`, lines: [reason],
+    event: 'signature_update', title: `${titleLabel}: firma anulada`, lines: [reason],
   }));
 }

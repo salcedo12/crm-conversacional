@@ -99,8 +99,9 @@ export interface DealSummary {
   lot:           DealLot | null;
   plan?:         PaymentPlan | null;
   planApproval?: DealPlanApproval | null;
-  documents?:    DealDocumentInfo[];
-  attachments?:  DealAttachment[];
+  documents?:       DealDocumentInfo[];
+  extraSignatures?: ExtraSignatureDocInfo[];
+  attachments?:     DealAttachment[];
   cancelReason?: string;
   createdAt:     number | null;
   updatedAt:     number | null;
@@ -497,6 +498,20 @@ export interface DealDocumentInfo {
   superseded?:     { reason: string; at: number | null } | null;
 }
 
+export interface ExtraSignatureDocInfo {
+  id:                    string;
+  name:                  string;
+  fileName:              string;
+  signatureStatus:       SignatureStatus;
+  sentAt:                number | null;
+  signedAt?:             number | null;
+  lastStatusCheckAt?:    number | null;
+  docublockDocumentId?:  string;
+  signedPdfStoragePath?: string;
+  signature?:            DealSignatureInfo;
+  lot?:                  DocumentLot | null;
+}
+
 // ─── Firma con DocuBlock (Fase 5) ────────────────────────────────────────────
 
 export interface SignatureOptions {
@@ -513,11 +528,37 @@ export interface SendToSignatureInput {
   requirePhoto:  boolean;
 }
 
+export interface SendExtraToSignatureInput {
+  name:           string;
+  file:           File;
+  templateId:     string;
+  directoryId:    string;
+  signers:        Array<{ source: 'buyer' | 'docublock_user'; refId: string; typeSign: string; iteration: number }>;
+  responsibleId?: string;
+  requirePhoto:   boolean;
+}
+
 const _signatureOptions = httpsCallable<{ companyId: string }, SignatureOptions>(functions, 'getDealSignatureOptions', { timeout: 60_000 });
 const _sendToSignature = httpsCallable<SendToSignatureInput & { companyId: string; dealId: string }, { sent: DealDocumentKind[] }>(functions, 'sendDealToSignature', { timeout: 180_000 });
+const _sendExtraToSignature = httpsCallable<{
+  companyId: string;
+  dealId: string;
+  name: string;
+  fileName: string;
+  base64: string;
+  templateId: string;
+  directoryId: string;
+  signers: SendExtraToSignatureInput['signers'];
+  responsibleId?: string;
+  requirePhoto: boolean;
+}, { extra: ExtraSignatureDocInfo }>(functions, 'sendDealExtraToSignature', { timeout: 180_000 });
+const _downloadExtraPdf = httpsCallable<
+  { companyId: string; dealId: string; extraId: string; signed: boolean },
+  { fileName: string; mimeType: string; base64: string }
+>(functions, 'downloadDealExtraSignaturePdf', { timeout: 60_000 });
 const _refreshSignature = httpsCallable<{ companyId: string; dealId: string }, { status: DealStatus }>(functions, 'refreshDealSignature', { timeout: 120_000 });
-const _resendSignature = httpsCallable<{ companyId: string; dealId: string; kind: DealDocumentKind; signerId: string }, { ok: true }>(functions, 'resendDealSignature');
-const _cancelSignature = httpsCallable<{ companyId: string; dealId: string; kind: DealDocumentKind; reason: string }, { status: DealStatus }>(functions, 'markDealSignatureCancelled');
+const _resendSignature = httpsCallable<{ companyId: string; dealId: string; kind?: DealDocumentKind; extraId?: string; signerId: string }, { ok: true }>(functions, 'resendDealSignature');
+const _cancelSignature = httpsCallable<{ companyId: string; dealId: string; kind?: DealDocumentKind; extraId?: string; reason: string }, { status: DealStatus }>(functions, 'markDealSignatureCancelled');
 
 export async function getSignatureOptions(companyId: string): Promise<SignatureOptions> {
   return (await _signatureOptions({ companyId })).data;
@@ -525,14 +566,55 @@ export async function getSignatureOptions(companyId: string): Promise<SignatureO
 export async function sendDealToSignature(companyId: string, dealId: string, input: SendToSignatureInput) {
   return (await _sendToSignature({ companyId, dealId, ...input })).data;
 }
+export async function sendDealExtraToSignature(companyId: string, dealId: string, input: SendExtraToSignatureInput) {
+  if (input.file.size > 10 * 1024 * 1024) throw new Error('El PDF debe pesar máximo 10 MB.');
+  if (input.file.type !== 'application/pdf' && !input.file.name.toLowerCase().endsWith('.pdf')) {
+    throw new Error('Solo se permiten archivos PDF para enviar a firma.');
+  }
+  const base64 = await fileBase64(input.file);
+  return (await _sendExtraToSignature({
+    companyId,
+    dealId,
+    name: input.name,
+    fileName: input.file.name,
+    base64,
+    templateId: input.templateId,
+    directoryId: input.directoryId,
+    signers: input.signers,
+    responsibleId: input.responsibleId,
+    requirePhoto: input.requirePhoto,
+  })).data;
+}
+export async function fetchDealExtraSignaturePdf(
+  companyId: string,
+  dealId: string,
+  extraId: string,
+  signed = true,
+): Promise<{ fileName: string; blob: Blob }> {
+  const { fileName, mimeType, base64 } = (await _downloadExtraPdf({ companyId, dealId, extraId, signed })).data;
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return { fileName, blob: new Blob([bytes], { type: mimeType }) };
+}
 export async function refreshDealSignature(companyId: string, dealId: string) {
   return (await _refreshSignature({ companyId, dealId })).data;
 }
-export async function resendDealSignature(companyId: string, dealId: string, kind: DealDocumentKind, signerId: string) {
-  await _resendSignature({ companyId, dealId, kind, signerId });
+export async function resendDealSignature(
+  companyId: string,
+  dealId: string,
+  target: DealDocumentKind | { extraId: string },
+  signerId: string,
+) {
+  const ref = typeof target === 'string' ? { kind: target } : { extraId: target.extraId };
+  await _resendSignature({ companyId, dealId, ...ref, signerId });
 }
-export async function markDealSignatureCancelled(companyId: string, dealId: string, kind: DealDocumentKind, reason: string) {
-  return (await _cancelSignature({ companyId, dealId, kind, reason })).data;
+export async function markDealSignatureCancelled(
+  companyId: string,
+  dealId: string,
+  target: DealDocumentKind | { extraId: string },
+  reason: string,
+) {
+  const ref = typeof target === 'string' ? { kind: target } : { extraId: target.extraId };
+  return (await _cancelSignature({ companyId, dealId, ...ref, reason })).data;
 }
 
 const _generate = httpsCallable<

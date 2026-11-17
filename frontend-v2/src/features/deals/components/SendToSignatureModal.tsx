@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, PenLine } from 'lucide-react';
+import { FileUp, Loader2, PenLine } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import {
   getSignatureOptions,
+  sendDealExtraToSignature,
   sendDealToSignature,
   type DealDocumentKind,
   type DealSummary,
@@ -27,24 +28,21 @@ interface Row {
   checked:   boolean;
   iteration: number;
   typeSigns: Partial<Record<DealDocumentKind, string>>;
+  extraTypeSign?: string;
   disabledReason?: string;
 }
 
-/**
- * "Enviar a firma" (igual a la pantalla de SmartHome): plantilla y directorio por documento,
- * responsable, validación fotográfica y firmantes — compradores marcados en secuencia 1 y
- * los administrativos de Meraki (usuarios de DocuBlock) desmarcados en secuencia 2.
- * Se envían los dos documentos a la vez: primero la preventa y enseguida la promesa.
- */
-export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
+export function SendToSignatureModal({ companyId, deal, initialMode = 'contracts', onClose, onSent }: {
   companyId: string;
   deal: DealSummary;
+  initialMode?: 'contracts' | 'extra';
   onClose: () => void;
   onSent: () => void;
 }) {
   const [options, setOptions] = useState<SignatureOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState<'contracts' | 'extra'>(initialMode);
   const [include, setInclude] = useState<Record<DealDocumentKind, boolean>>({ preventa: true, promesa: true });
   const [templateIds, setTemplateIds] = useState<Record<DealDocumentKind, string>>({ preventa: '', promesa: '' });
   const [directoryIds, setDirectoryIds] = useState<Record<DealDocumentKind, string>>({ preventa: '', promesa: '' });
@@ -52,6 +50,10 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
     preventa: lastVersion(deal, 'preventa'),
     promesa: lastVersion(deal, 'promesa'),
   }));
+  const [extraName, setExtraName] = useState('');
+  const [extraFile, setExtraFile] = useState<File | null>(null);
+  const [extraTemplateId, setExtraTemplateId] = useState('');
+  const [extraDirectoryId, setExtraDirectoryId] = useState('');
   const [responsibleId, setResponsibleId] = useState('');
   const [requirePhoto, setRequirePhoto] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
@@ -78,6 +80,9 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
         const tpl = { preventa: defaultTemplate(opts, 'preventa'), promesa: defaultTemplate(opts, 'promesa') };
         setTemplateIds(tpl);
         setDirectoryIds({ preventa: defaultDirectory(opts, tpl.preventa, projectId, 'preventa'), promesa: defaultDirectory(opts, tpl.promesa, projectId, 'promesa') });
+        const fallbackTpl = tpl.promesa || tpl.preventa || opts.templates[0]?.id || '';
+        setExtraTemplateId(fallbackTpl);
+        setExtraDirectoryId(defaultDirectory(opts, fallbackTpl, projectId, 'promesa'));
         setInclude({ preventa: !locked.preventa, promesa: !locked.promesa });
         const buyers = [...deal.buyers].sort((a, b) => a.order - b.order)
           .map((b) => deal.buyerProfiles.find((p) => p.id === b.clientId))
@@ -94,7 +99,10 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, deal.id]);
 
-  const signerTypesOf = (kind: DealDocumentKind) => options?.templates.find((t) => t.id === templateIds[kind])?.signerTypes ?? [];
+  const signerTypesOf = (kind: DealDocumentKind | 'extra') => {
+    const id = kind === 'extra' ? extraTemplateId : templateIds[kind];
+    return options?.templates.find((t) => t.id === id)?.signerTypes ?? [];
+  };
 
   // Tipos sugeridos al cambiar plantilla o marcar firmantes (el usuario puede cambiarlos).
   const autoAssign = (current: Row[], kinds = KINDS): Row[] => {
@@ -108,24 +116,43 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
       buyers.forEach((r, i) => { r.typeSigns[kind] = d.buyers[i] ?? ''; });
       meraki.forEach((r, i) => { r.typeSigns[kind] = d.meraki[i] ?? AVALADOR; });
     }
+    const extraTypes = signerTypesOf('extra');
+    if (extraTypes.length) {
+      const buyers = next.filter((r) => r.checked && r.source === 'buyer');
+      const meraki = next.filter((r) => r.checked && r.source === 'docublock_user');
+      const d = defaultTypeSigns(extraTypes, buyers.length, meraki.length);
+      buyers.forEach((r, i) => { r.extraTypeSign = d.buyers[i] ?? ''; });
+      meraki.forEach((r, i) => { r.extraTypeSign = d.meraki[i] ?? AVALADOR; });
+    }
     return next;
   };
 
   useEffect(() => {
     if (options) setRows((current) => autoAssign(current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, templateIds.preventa, templateIds.promesa]);
+  }, [options, templateIds.preventa, templateIds.promesa, extraTemplateId]);
 
   const toggle = (index: number) => setRows((current) => autoAssign(current.map((r, i) => (i === index ? { ...r, checked: !r.checked } : r))));
   const patch = (index: number, value: Partial<Row>) => setRows((current) => current.map((r, i) => (i === index ? { ...r, ...value } : r)));
 
-  const kindsToSend = KINDS.filter((k) => include[k] && !locked[k]);
+  const canUseContractsMode = !!lastVersion(deal, 'preventa') && KINDS.some((k) => !locked[k]);
+  const effectiveMode = mode === 'contracts' && canUseContractsMode ? 'contracts' : 'extra';
+  const kindsToSend = effectiveMode === 'contracts' ? KINDS.filter((k) => include[k] && !locked[k]) : [];
   const checked = rows.filter((r) => r.checked);
   const problems: string[] = [];
-  for (const kind of kindsToSend) {
-    if (!templateIds[kind]) problems.push(`Escoge la plantilla de la ${kind}`);
-    if (!directoryIds[kind]) problems.push(`Escoge el directorio de la ${kind}`);
-    if (checked.some((r) => !r.typeSigns[kind])) problems.push(`Falta el tipo de firmante en la ${kind}`);
+  if (effectiveMode === 'contracts') {
+    for (const kind of kindsToSend) {
+      if (!templateIds[kind]) problems.push(`Escoge la plantilla de la ${kind}`);
+      if (!directoryIds[kind]) problems.push(`Escoge el directorio de la ${kind}`);
+      if (checked.some((r) => !r.typeSigns[kind])) problems.push(`Falta el tipo de firmante en la ${kind}`);
+    }
+    if (!kindsToSend.length) problems.push('Marca al menos un contrato');
+  } else {
+    if (extraName.trim().length < 2) problems.push('Escribe el nombre del documento');
+    if (!extraFile) problems.push('Adjunta el archivo PDF');
+    if (!extraTemplateId) problems.push('Escoge la plantilla');
+    if (!extraDirectoryId) problems.push('Escoge el directorio');
+    if (checked.some((r) => !r.extraTypeSign)) problems.push('Falta el tipo de firmante');
   }
   if (!checked.length) problems.push('Marca al menos un firmante');
 
@@ -133,12 +160,25 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
     setSending(true);
     setError(null);
     try {
-      await sendDealToSignature(companyId, deal.id, {
-        documents: kindsToSend.map((kind) => ({ kind, version: versions[kind], templateId: templateIds[kind], directoryId: directoryIds[kind] })),
-        signers: checked.map((r) => ({ source: r.source, refId: r.refId, iteration: r.iteration, typeSigns: Object.fromEntries(kindsToSend.map((k) => [k, r.typeSigns[k] ?? ''])) })),
-        responsibleId: responsibleId || undefined,
-        requirePhoto,
-      });
+      if (effectiveMode === 'contracts') {
+        await sendDealToSignature(companyId, deal.id, {
+          documents: kindsToSend.map((kind) => ({ kind, version: versions[kind], templateId: templateIds[kind], directoryId: directoryIds[kind] })),
+          signers: checked.map((r) => ({ source: r.source, refId: r.refId, iteration: r.iteration, typeSigns: Object.fromEntries(kindsToSend.map((k) => [k, r.typeSigns[k] ?? ''])) })),
+          responsibleId: responsibleId || undefined,
+          requirePhoto,
+        });
+      } else {
+        if (!extraFile) return;
+        await sendDealExtraToSignature(companyId, deal.id, {
+          name: extraName.trim(),
+          file: extraFile,
+          templateId: extraTemplateId,
+          directoryId: extraDirectoryId,
+          signers: checked.map((r) => ({ source: r.source, refId: r.refId, iteration: r.iteration, typeSign: r.extraTypeSign ?? '' })),
+          responsibleId: responsibleId || undefined,
+          requirePhoto,
+        });
+      }
       onSent();
       onClose();
     } catch (err) {
@@ -150,7 +190,9 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
   };
 
   const select = `${dealInputCls} sm:bg-zinc-950 sm:focus:border-violet-500`;
-  const sendLabel = `Enviar ${kindsToSend.length === 2 ? 'preventa y promesa' : kindsToSend[0] ?? ''} a firma`;
+  const sendLabel = effectiveMode === 'contracts'
+    ? `Enviar ${kindsToSend.length === 2 ? 'preventa y promesa' : kindsToSend[0] ?? ''} a firma`
+    : 'Enviar documento a firma';
 
   return (
     <DealSheet
@@ -165,10 +207,12 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
           {error && <p className="rounded-md bg-red-950/60 px-3 py-2 text-xs text-red-200">{error}</p>}
           {options && problems.length > 0 && <p className="text-xs text-amber-300 sm:text-[11px]">{problems.join(' · ')}</p>}
           <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs text-zinc-500 sm:text-[11px]">Al enviar, el lote pasa a TRÁMITE mientras se firma.</p>
+            <p className="text-xs text-zinc-500 sm:text-[11px]">
+              {effectiveMode === 'contracts' ? 'Al enviar, el lote pasa a TRÁMITE mientras se firma.' : 'El documento quedará asociado a este negocio en Firma Digital.'}
+            </p>
             <div className="grid grid-cols-[auto_1fr] gap-2 sm:flex">
               <Button variant="ghost" onClick={onClose} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">Cancelar</Button>
-              <Button loading={sending} disabled={!options || problems.length > 0 || !kindsToSend.length} onClick={() => void send()} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
+              <Button loading={sending} disabled={!options || problems.length > 0} onClick={() => void send()} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
                 <span className="sm:hidden">Enviar a firma</span>
                 <span className="hidden sm:inline">{sendLabel}</span>
               </Button>
@@ -182,7 +226,14 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
       {options && (
         <div className="grid gap-4 md:grid-cols-[260px_1fr]">
           <div className="space-y-4">
-            {KINDS.map((kind) => (
+            {canUseContractsMode && (
+              <div className="grid grid-cols-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1 text-xs">
+                <button type="button" onClick={() => setMode('contracts')} className={`rounded-md py-1.5 font-semibold transition ${effectiveMode === 'contracts' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Contratos</button>
+                <button type="button" onClick={() => setMode('extra')} className={`rounded-md py-1.5 font-semibold transition ${effectiveMode === 'extra' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Otro PDF</button>
+              </div>
+            )}
+
+            {effectiveMode === 'contracts' ? KINDS.map((kind) => (
               <div key={kind} className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
                 <label className="flex min-h-[32px] items-center gap-2.5 text-sm font-semibold text-zinc-200 sm:min-h-0 sm:text-xs">
                   <input type="checkbox" className="h-5 w-5 sm:h-3.5 sm:w-3.5" checked={include[kind] && !locked[kind]} disabled={!!locked[kind]} onChange={(e) => setInclude((c) => ({ ...c, [kind]: e.target.checked }))} />
@@ -217,7 +268,52 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
                   </div>
                 )}
               </div>
-            ))}
+            )) : (
+              <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
+                <DealField label="Nombre del documento">
+                  <input
+                    type="text"
+                    value={extraName}
+                    onChange={(e) => setExtraName(e.target.value)}
+                    placeholder="Ej: Otrosí No. 1, Acta de entrega..."
+                    maxLength={120}
+                    className={select}
+                  />
+                </DealField>
+                <DealField label="Archivo PDF">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-300 hover:border-emerald-500/50">
+                    <FileUp size={14} className="text-emerald-400 shrink-0" />
+                    <span className="truncate">{extraFile ? extraFile.name : 'Seleccionar PDF (máx. 10 MB)'}</span>
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        setExtraFile(f);
+                        if (f && !extraName.trim()) setExtraName(f.name.replace(/\.pdf$/i, ''));
+                      }}
+                    />
+                  </label>
+                </DealField>
+                <DealField label="Plantilla">
+                  <select className={select} value={extraTemplateId} onChange={(e) => {
+                    const id = e.target.value;
+                    setExtraTemplateId(id);
+                    setExtraDirectoryId(defaultDirectory(options, id, deal.lot?.projectId ?? '', 'promesa'));
+                  }}>
+                    <option value="">Seleccionar</option>
+                    {options.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </DealField>
+                <DealField label="Tipo de directorio">
+                  <select className={select} value={extraDirectoryId} onChange={(e) => setExtraDirectoryId(e.target.value)}>
+                    <option value="">Seleccionar</option>
+                    {options.directories.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </DealField>
+              </div>
+            )}
             <DealField label="Responsable">
               <select className={select} value={responsibleId} onChange={(e) => setResponsibleId(e.target.value)}>
                 <option value="">Seleccionar</option>
@@ -251,14 +347,21 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
                         <span className="text-xs text-zinc-400">Secuencia</span>
                         <Stepper value={r.iteration} onChange={(v) => patch(i, { iteration: v })} />
                       </div>
-                      {kindsToSend.map((k) => (
+                      {effectiveMode === 'contracts' ? kindsToSend.map((k) => (
                         <DealField key={k} label={`Tipo de firmante · ${k}`}>
                           <select className={select} value={r.typeSigns[k] ?? ''} onChange={(e) => patch(i, { typeSigns: { ...r.typeSigns, [k]: e.target.value } })}>
                             <option value="">—</option>
                             {signerTypesOf(k).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
                           </select>
                         </DealField>
-                      ))}
+                      )) : (
+                        <DealField label="Tipo de firmante">
+                          <select className={select} value={r.extraTypeSign ?? ''} onChange={(e) => patch(i, { extraTypeSign: e.target.value })}>
+                            <option value="">—</option>
+                            {signerTypesOf('extra').map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                          </select>
+                        </DealField>
+                      )}
                     </div>
                   )}
                 </div>
@@ -274,7 +377,9 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
                     <th className="px-2 py-2">Rol</th>
                     <th className="px-2 py-2">Nombre</th>
                     <th className="px-2 py-2">Secuencia</th>
-                    {kindsToSend.map((k) => <th key={k} className="px-2 py-2">Tipo · {k}</th>)}
+                    {effectiveMode === 'contracts'
+                      ? kindsToSend.map((k) => <th key={k} className="px-2 py-2">Tipo · {k}</th>)
+                      : <th className="px-2 py-2">Tipo de firmante</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -286,14 +391,21 @@ export function SendToSignatureModal({ companyId, deal, onClose, onSent }: {
                       <td className="px-2 py-1.5">
                         <input type="number" min={1} max={10} value={r.iteration} onChange={(e) => patch(i, { iteration: Math.max(1, Number(e.target.value) || 1) })} className="w-12 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-xs" />
                       </td>
-                      {kindsToSend.map((k) => (
+                      {effectiveMode === 'contracts' ? kindsToSend.map((k) => (
                         <td key={k} className="px-2 py-1.5">
                           <select className={`${select} min-w-[9rem]`} value={r.typeSigns[k] ?? ''} disabled={!r.checked} onChange={(e) => patch(i, { typeSigns: { ...r.typeSigns, [k]: e.target.value } })}>
                             <option value="">—</option>
                             {signerTypesOf(k).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
                           </select>
                         </td>
-                      ))}
+                      )) : (
+                        <td className="px-2 py-1.5">
+                          <select className={`${select} min-w-[9rem]`} value={r.extraTypeSign ?? ''} disabled={!r.checked} onChange={(e) => patch(i, { extraTypeSign: e.target.value })}>
+                            <option value="">—</option>
+                            {signerTypesOf('extra').map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                          </select>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

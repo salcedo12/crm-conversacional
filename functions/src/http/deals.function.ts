@@ -31,6 +31,12 @@ function serializeDeal(deal: Deal) {
       signedAt: d.signedAt?.toMillis?.() ?? null,
       lastStatusCheckAt: d.lastStatusCheckAt?.toMillis?.() ?? null,
     })),
+    extraSignatures: (deal.extraSignatures ?? []).map((e) => ({
+      ...e,
+      sentAt: e.sentAt?.toMillis?.() ?? null,
+      signedAt: e.signedAt?.toMillis?.() ?? null,
+      lastStatusCheckAt: e.lastStatusCheckAt?.toMillis?.() ?? null,
+    })),
     attachments: (deal.attachments ?? []).map((a) => ({
       ...a,
       uploadedAt: a.uploadedAt?.toMillis?.() ?? null,
@@ -566,11 +572,18 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
   const now = Timestamp.now();
   const actor = await userDisplayName(data.companyId, ctx.uid);
   const docs = deal.documents ?? [];
+  const extras = deal.extraSignatures ?? [];
   const hadPendingSignatures = docs.some((d) => d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+  const hadPendingExtras = extras.some((e) => e.docublockDocumentId && isPendingSignature(e.signatureStatus));
   const cancelledDocs = docs.map((d) =>
     d.docublockDocumentId && isPendingSignature(d.signatureStatus)
       ? { ...d, signatureStatus: 'anulado' as const }
       : d,
+  );
+  const cancelledExtras = extras.map((e) =>
+    e.docublockDocumentId && isPendingSignature(e.signatureStatus)
+      ? { ...e, signatureStatus: 'anulado' as const }
+      : e,
   );
 
   const updateDeal: Record<string, unknown> = {
@@ -581,6 +594,7 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     signaturePending: false,
     updatedAt: now,
     ...(hadPendingSignatures ? { documents: cancelledDocs } : {}),
+    ...(hadPendingExtras ? { extraSignatures: cancelledExtras } : {}),
     ...(deal.planApproval?.status === 'pending'
       ? {
           'planApproval.status': 'cancelled',

@@ -64,9 +64,11 @@ export { generateDealDocument, downloadDealDocument, deleteDealDocument } from '
 export {
   getDealSignatureOptions,
   sendDealToSignature,
+  sendDealExtraToSignature,
   refreshDealSignature,
   resendDealSignature,
   markDealSignatureCancelled,
+  downloadDealExtraSignaturePdf,
   getDocuBlockCities,
 } from './http/dealSignature.function';
 export { listSmartHomeSales, syncSmartHomeSalesNow, setSmartHomeSaleIgnored, downloadSmartHomeFile } from './http/smarthomeSales.function';
