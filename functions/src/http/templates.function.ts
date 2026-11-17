@@ -335,6 +335,11 @@ export const sendTemplateMessage = onCall(
 
     if (!lead)     throw new HttpsError('not-found', 'Lead no encontrado.');
     if (!template) throw new HttpsError('not-found', 'Plantilla no encontrada.');
+    // Seguridad (R06): misma regla que el mensaje manual — un asesor solo
+    // contacta leads asignados a él; admin/manager pueden escribir a cualquiera.
+    if (!(ctx.platformAdmin || ADMIN_ROLES.includes(ctx.role)) && lead.assignedTo !== ctx.uid) {
+      throw new HttpsError('permission-denied', 'Solo puedes enviar plantillas a leads asignados a ti.');
+    }
 
     try {
       const { messageId } = await sendTemplateToLead({

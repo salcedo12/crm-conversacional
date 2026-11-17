@@ -1,4 +1,4 @@
-import * as https from 'https';
+import { safeDownload, ycloudAuthHeaders } from '../../utils/safeDownload';
 import { FieldValue } from 'firebase-admin/firestore';
 import type { DocumentReference } from 'firebase-admin/firestore';
 import { uploadMediaBuffer, mimeToExt } from '../../utils/storageUpload';
@@ -13,34 +13,11 @@ export const MAX_REHOST_ATTEMPTS = 6;
  * Descarga un archivo (con autenticación X-API-Key para las URLs de ycloud),
  * siguiendo redirects. Devuelve el buffer completo.
  */
-export function downloadWithApiKey(url: string, apiKey: string, redirects = 5): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const opts: https.RequestOptions = {
-      hostname: parsed.hostname,
-      path:     parsed.pathname + parsed.search,
-      method:   'GET',
-      headers:  { 'X-API-Key': apiKey },
-    };
-    const req = https.request(opts, (res) => {
-      if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308)
-          && res.headers.location && redirects > 0) {
-        res.resume();
-        resolve(downloadWithApiKey(res.headers.location, apiKey, redirects - 1));
-        return;
-      }
-      if (res.statusCode && res.statusCode >= 400) {
-        reject(new Error(`media HTTP ${res.statusCode}`));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      res.on('data', (c: Buffer) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    });
-    req.on('error', reject);
-    req.end();
-  });
+export async function downloadWithApiKey(url: string, apiKey: string): Promise<Buffer> {
+  // Seguridad (R11): la llave solo se envía a dominios de YCloud (antes seguía
+  // redirecciones a cualquier host con la llave) y se validan destino y tamaño.
+  const { buffer } = await safeDownload(url, { headersFor: ycloudAuthHeaders(apiKey) });
+  return buffer;
 }
 
 export interface RehostInput {

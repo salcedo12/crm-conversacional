@@ -33,6 +33,7 @@ import { AvailabilityError, findNearbyAvailableSlots, formatAvailabilityDate, fo
 import { logger } from '../../utils/logger';
 import { generateVictoriaVoiceNote } from './voiceSynthesis.service';
 import type OpenAI from 'openai';
+import { safeDownload, ycloudAuthHeaders } from '../../utils/safeDownload';
 import type { Message } from '../messages/messages.types';
 import type { AiConfig } from './ai.types';
 
@@ -3871,16 +3872,16 @@ async function saveAndSendAiResponse(
 
 /** Descarga y transcribe un audio con OpenAI Whisper. */
 async function transcribeAudio(audioUrl: string, mimeType: string): Promise<string> {
-  // Node 22 tiene fetch nativo con manejo de redirects
-  const resp = await fetch(audioUrl, { headers: { 'X-API-Key': env.ycloudApiKey() } });
-  if (!resp.ok) throw new Error(`Audio download failed: ${resp.status}`);
-
-  const arrayBuffer = await resp.arrayBuffer();
-  const buffer      = Buffer.from(arrayBuffer);
+  // Seguridad (R11): la llave de YCloud solo viaja a dominios de YCloud y el
+  // destino/redirecciones se validan (antes se enviaba a cualquier URL).
+  const { buffer } = await safeDownload(audioUrl, {
+    headersFor: ycloudAuthHeaders(env.ycloudApiKey()),
+    maxBytes:   25 * 1024 * 1024, // límite de Whisper
+  });
 
   // Determinar extensión para que Whisper identifique el formato
   const ext  = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : mimeType.includes('mpeg') ? 'mp3' : 'ogg';
-  const file = new File([buffer], `audio.${ext}`, { type: mimeType });
+  const file = new File([new Uint8Array(buffer)], `audio.${ext}`, { type: mimeType });
 
   const result = await getOpenAIClient().audio.transcriptions.create({
     file,

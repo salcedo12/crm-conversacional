@@ -103,14 +103,39 @@ export const createCompanyUser = onCall(
     let inviteLink: string | null = null;
     let emailSent = false;
     let emailError: string | null = null;
+    // Seguridad (R09): una cuenta que YA existe puede ser de otra empresa o de un
+    // administrador de plataforma. Antes se modificaba, se movía a esta empresa y
+    // se devolvía al admin un enlace para cambiarle la contraseña (toma de cuenta).
+    let existing: Awaited<ReturnType<typeof auth.getUserByEmail>> | null = null;
     try {
-      const existing = await auth.getUserByEmail(data.email);
+      existing = await auth.getUserByEmail(data.email);
+    } catch (err) {
+      if ((err as { code?: string })?.code !== 'auth/user-not-found') throw err;
+    }
+
+    if (existing) {
       userId = existing.uid;
+      const claims = (existing.customClaims ?? {}) as Record<string, unknown>;
+      const claimCompany = typeof claims.companyId === 'string' ? claims.companyId : '';
+      const isPlatform = claims.platformAdmin === true || claims.platformAdmin === 'true' || claims.role === 'platformAdmin';
+      const belongsHere = claimCompany === data.companyId
+        || (await usersCol(data.companyId).doc(userId).get()).exists;
+      const belongsElsewhere = !!claimCompany && claimCompany !== data.companyId;
+      if (!ctx.platformAdmin && (isPlatform || (belongsElsewhere && !belongsHere))) {
+        logger.warn('[Users][SECURITY] Alta bloqueada: el correo pertenece a otra empresa o a un administrador de plataforma', {
+          companyId: data.companyId, userId, by: ctx.uid,
+        });
+        throw new HttpsError(
+          'already-exists',
+          'Ese correo ya pertenece a una cuenta de otra empresa. Pide al administrador de la plataforma que la vincule.'
+        );
+      }
+      // Cuenta propia de esta empresa (o huérfana): se reactiva/renombra.
       await auth.updateUser(userId, {
         displayName: data.displayName,
         disabled: !data.active,
       });
-    } catch {
+    } else {
       const created = await auth.createUser({
         email: data.email,
         displayName: data.displayName,
@@ -118,6 +143,7 @@ export const createCompanyUser = onCall(
       });
       userId = created.uid;
     }
+    const isNewAccount = !existing;
 
     try {
       inviteLink = await auth.generatePasswordResetLink(data.email, {
@@ -172,7 +198,9 @@ export const createCompanyUser = onCall(
     });
     return {
       user: serializeUser(userId, { ...data, receiveLeads: shouldReceiveLeads, excludeFromLeadAssignment: !shouldReceiveLeads }),
-      inviteLink,
+      // El enlace de contraseña solo se entrega para cuentas nuevas; para una
+      // cuenta existente solo viaja por correo a su dueño.
+      inviteLink: isNewAccount || ctx.platformAdmin ? inviteLink : null,
       emailSent,
       emailError,
     };
@@ -199,6 +227,17 @@ export const updateCompanyUser = onCall(
     const ref = usersCol(data.companyId).doc(data.userId);
     const snap = await ref.get();
     if (!snap.exists) throw new HttpsError('not-found', 'Usuario no encontrado.');
+
+    // Seguridad (R09): un admin de empresa no puede editar, deshabilitar ni
+    // degradar a un administrador de plataforma que tenga perfil en su empresa.
+    if (!ctx.platformAdmin) {
+      const target = await getAuth().getUser(data.userId).catch(() => null);
+      const tc = (target?.customClaims ?? {}) as Record<string, unknown>;
+      const sd = snap.data() ?? {};
+      if (tc.platformAdmin === true || sd.platformAdmin === true || sd.platformAdmin === 'true' || sd.role === 'platformAdmin') {
+        throw new HttpsError('permission-denied', 'Solo un administrador de plataforma puede modificar esta cuenta.');
+      }
+    }
 
     await ref.set({
       displayName: data.displayName,

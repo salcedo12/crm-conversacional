@@ -1,3 +1,4 @@
+import { safeDownload } from './safeDownload';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -27,12 +28,9 @@ export async function convertToWhatsAppVoiceNote(
 
   try {
     // 1. Descargar el archivo fuente
-    const resp = await fetch(sourceUrl);
-    if (!resp.ok) {
-      throw new Error(`Error descargando audio para transcodificar: HTTP ${resp.status}`);
-    }
-    const arrayBuf = await resp.arrayBuffer();
-    await fs.promises.writeFile(inputPath, Buffer.from(arrayBuf));
+    // Seguridad (R11): la URL la manda el cliente → destino público, con tope de tamaño.
+    const { buffer: audioBuf } = await safeDownload(sourceUrl, { maxBytes: 25 * 1024 * 1024 });
+    await fs.promises.writeFile(inputPath, audioBuf);
 
     // 2. Transcodificar a OGG Opus nativo WhatsApp (mono, 48000 Hz, 32k)
     // - asetpts=N/SR/TB: Reconstruye marcas de tiempo (PTS) continuas para evitar error 131053 de Meta.

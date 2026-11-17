@@ -166,8 +166,9 @@ export const metaMessagingWebhook = onRequest(
 function verifySignature(req: Request): boolean {
   const secret = env.metaAppSecret();
   if (!secret) {
-    logger.warn('[Meta Webhook] META_APP_SECRET no configurado — se omite verificación de firma');
-    return true;
+    // Seguridad (R10): sin secreto no se puede verificar la firma → se rechaza.
+    logger.error('[Meta Webhook][SECURITY] Falta META_APP_SECRET — se rechazan los eventos hasta configurarlo.');
+    return false;
   }
   const header = req.get('x-hub-signature-256');
   if (!header || !header.startsWith('sha256=')) return false;

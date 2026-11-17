@@ -237,8 +237,9 @@ function safeEqual(a: string, b: string): boolean {
 function verifyYcloudRequest(req: Request): boolean {
   const secret = env.ycloudWebhookSecret();
   if (!secret) {
-    logger.warn('[ycloud Webhook] Sin YCLOUD_WEBHOOK_SECRET — endpoint sin autenticar. Configúralo para protegerlo.');
-    return true;
+    // Seguridad (R10): sin secreto no se puede saber quién envía → se rechaza.
+    logger.error('[ycloud Webhook][SECURITY] Falta YCLOUD_WEBHOOK_SECRET — se rechazan todos los eventos hasta configurarlo.');
+    return false;
   }
   const fromQuery  = typeof req.query.secret === 'string' ? req.query.secret : '';
   const provided   = fromQuery || req.get('x-webhook-secret') || '';

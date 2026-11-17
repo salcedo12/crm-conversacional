@@ -16,7 +16,6 @@ import type { Call, CallStatus }   from '../modules/calls/calls.types';
  * Se usan como validación blanda: si la petición no viene de aquí Y no trae
  * el secreto correcto, se rechaza. Actualizar si Dapta cambia sus IPs.
  */
-const DAPTA_IPS = ['3.135.117.63', '3.143.158.83', '3.14.139.223'];
 
 // ─── Helpers de extracción tolerante ────────────────────────────────────────
 // El esquema exacto del webhook de Dapta no está documentado, así que buscamos
@@ -132,12 +131,11 @@ export const daptaWebhook = onRequest(
         return;
       }
     } else {
-      // Sin secreto configurado: validar por IP de origen (blando).
-      const fwd = (req.header('x-forwarded-for') ?? '').split(',').map((s) => s.trim());
-      const sourceIp = fwd[0] || req.ip || '';
-      if (sourceIp && !DAPTA_IPS.includes(sourceIp)) {
-        logger.warn('[Dapta Webhook] IP no reconocida — se procesa igual, configura DAPTA_WEBHOOK_SECRET para reforzar', { sourceIp });
-      }
+      // Seguridad (R10): sin secreto se rechaza. La IP (x-forwarded-for) la
+      // controla quien llama, así que no sirve como autenticación.
+      logger.error('[Dapta Webhook][SECURITY] Falta DAPTA_WEBHOOK_SECRET — evento rechazado.');
+      res.sendStatus(401);
+      return;
     }
 
     // Responder rápido; el procesamiento puede continuar.

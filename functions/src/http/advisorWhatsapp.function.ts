@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto';
 import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { Timestamp } from 'firebase-admin/firestore';
 import { z } from 'zod';
@@ -458,7 +459,15 @@ export const advisorWhatsappWebhook = onRequest(
 
     const configuredSecret = env.advisorWhatsappWebhookSecret();
     const providedSecret = request.get('X-Advisor-Whatsapp-Secret') ?? String(request.query.secret ?? '');
-    if (configuredSecret && providedSecret !== configuredSecret) {
+    // Seguridad (R10): sin secreto configurado se rechaza (antes se aceptaba todo).
+    if (!configuredSecret) {
+      logger.error('[AdvisorWhatsapp webhook][SECURITY] Falta ADVISOR_WHATSAPP_WEBHOOK_SECRET — evento rechazado.');
+      response.status(401).send('Unauthorized');
+      return;
+    }
+    const a = Buffer.from(providedSecret);
+    const b = Buffer.from(configuredSecret);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
       response.status(401).send('Unauthorized');
       return;
     }

@@ -5,6 +5,26 @@ import { env } from '../config/env';
 import { getConsentUrl, exchangeCode } from '../integrations/google/google.client';
 import { googleConnectionRepository } from '../modules/calendar/googleConnection.repository';
 import { requireAuth, assertCompany } from '../lib/authContext';
+import { db } from '../lib/admin';
+import { Timestamp } from 'firebase-admin/firestore';
+import * as crypto from 'crypto';
+
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+async function consumeOAuthState(state: string): Promise<{ companyId: string; advisorId: string } | null> {
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(state)) return null;
+  const ref = db.collection('oauthStates').doc(state);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return null;
+    const d = snap.data()!;
+    tx.delete(ref);
+    if (d.provider !== 'google_calendar') return null;
+    if (!(d.expiresAt instanceof Timestamp) || d.expiresAt.toMillis() < Date.now()) return null;
+    if (typeof d.companyId !== 'string' || typeof d.advisorId !== 'string') return null;
+    return { companyId: d.companyId, advisorId: d.advisorId };
+  });
+}
 
 // ─── startGoogleAuth ───────────────────────────────────────────────────────────
 // Devuelve la URL de consentimiento de Google para el asesor autenticado.
@@ -21,9 +41,18 @@ export const startGoogleAuth = onCall(
     assertCompany(ctx, companyId);
     const advisorId = ctx.uid;
 
-    // El state lleva companyId + advisorId para reconstruir el contexto en el callback
-    const state = Buffer.from(JSON.stringify({ companyId, advisorId })).toString('base64url');
-    const url   = getConsentUrl(state);
+    // Seguridad (R08): el state es un valor aleatorio de un solo uso guardado en
+    // el servidor (antes era companyId+advisorId en base64, falsificable: alguien
+    // podía conectar SU Google al calendario de otro asesor).
+    const state = crypto.randomBytes(32).toString('base64url');
+    await db.collection('oauthStates').doc(state).set({
+      companyId,
+      advisorId,
+      provider:  'google_calendar',
+      createdAt: Timestamp.now(),
+      expiresAt: Timestamp.fromMillis(Date.now() + OAUTH_STATE_TTL_MS),
+    });
+    const url = getConsentUrl(state);
 
     return { url };
   }
@@ -45,9 +74,14 @@ export const googleOAuthCallback = onRequest(
     }
 
     try {
-      const { companyId, advisorId } = JSON.parse(
-        Buffer.from(state, 'base64url').toString('utf8')
-      ) as { companyId: string; advisorId: string };
+      // Consumir el state una sola vez (transacción): inexistente, vencido o
+      // reutilizado → rechazo.
+      const ctx = await consumeOAuthState(state);
+      if (!ctx) {
+        logger.warn('[GoogleOAuth][SECURITY] state inválido, vencido o reutilizado');
+        return back('?google=error');
+      }
+      const { companyId, advisorId } = ctx;
 
       const { refreshToken, email, scope } = await exchangeCode(code);
 
