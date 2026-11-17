@@ -43,27 +43,58 @@ function parseMoney(value: string): number {
   return digits ? Number(digits) : 0;
 }
 
-export function parsePriceList(csv: string): PriceRow[] {
-  const lines = csv.split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
-  const headers = parseCsvLine(lines[0]).map((h) => h.toUpperCase());
-  const iSector = headers.indexOf('SECTOR');
-  const iLot = headers.indexOf('NUMERO DEL TERRENO');
-  const iArea = headers.indexOf('AREA M2');
+interface PriceHeader {
+  iSector:  number;
+  iLot:     number;
+  iArea:    number;
+  termCols: Array<[number, number]>;
+}
+
+/**
+ * Encabezado de un bloque de la hoja: la fila que tiene columnas "N MESES".
+ * La hoja tiene varios bloques con columnas distintas: los lotes ("SECTOR,
+ * NUMERO DEL TERRENO, AREA M2, ESQUINERO, ..., 0 MESES, 20 MESES, ...") y las
+ * aldeas de Sobre Montañas ("ALDEA, N°DE ALDEA, AREA DE GLAMPLING M2, 0 MESES,
+ * 12 MESES, ...").
+ */
+function parseHeader(cols: string[]): PriceHeader | null {
+  const headers = cols.map((h) => h.toUpperCase().trim());
   const termCols: Array<[number, number]> = [];
   headers.forEach((h, i) => {
-    const m = /(\d+)\s*MESES/.exec(h);
+    const m = /^(\d+)\s*MESES$/.exec(h);
     if (m) termCols.push([Number(m[1]), i]);
   });
+  if (!termCols.length) return null;
+  const find = (re: RegExp, fallback: number) => {
+    const i = headers.findIndex((h) => re.test(h));
+    return i >= 0 ? i : fallback;
+  };
+  return {
+    iSector: find(/^(SECTOR|ALDEA)$/, 0),
+    iLot:    find(/TERRENO|DE ALDEA/, 1),
+    iArea:   find(/^AREA/, 2),
+    termCols,
+  };
+}
 
-  return lines.slice(1).flatMap((line) => {
+export function parsePriceList(csv: string): PriceRow[] {
+  const lines = csv.split(/\r?\n/).filter((l) => l.trim());
+  let header: PriceHeader | null = null;
+
+  return lines.flatMap((line) => {
     const cols = parseCsvLine(line);
+    // Cada fila con "N MESES" abre un bloque nuevo con sus propias columnas.
+    const next = parseHeader(cols);
+    if (next) { header = next; return []; }
+    if (!header) return [];
+    const { iSector, iLot, iArea, termCols } = header;
     const sector = cols[iSector] ?? '';
     const lot = cols[iLot] ?? '';
     if (!sector || !lot) return [];
     const prices: Record<number, number> = {};
     for (const [months, i] of termCols) {
       const price = parseMoney(cols[i] ?? '');
+      // Columnas repetidas (p. ej. dos "12 MESES" combinadas): gana la que tiene valor.
       if (price > 0) prices[months] = price;
     }
     return [{ sector, lot, areaM2: Number(String(cols[iArea] ?? '').replace(/\./g, '').replace(',', '.')) || 0, prices }];
@@ -83,16 +114,29 @@ export function normalizeSector(value: string): string {
 }
 
 function sameSector(inventorySector: string, priceSector: string): boolean {
-  const a = normalizeSector(inventorySector);
-  const b = normalizeSector(priceSector);
-  // El inventario dice "RIO LAGUNILLA" y la lista "LAGUNILLA": emparejar por inclusión.
-  return a === b || a.includes(b) || b.includes(a);
+  const a = ` ${normalizeSector(inventorySector)} `;
+  const b = ` ${normalizeSector(priceSector)} `;
+  // El inventario dice "RIO LAGUNILLA" y la lista "LAGUNILLA": emparejar por inclusión
+  // de palabras completas (para que "COLORADO" no empareje con la aldea "LORO").
+  return a.includes(b) || b.includes(a);
+}
+
+/** '053' → '53'; 'ALDEA 06' → '6'; '32B' → '32B'. */
+export function normalizeLot(value: string): string {
+  return String(value)
+    .toUpperCase()
+    .trim()
+    .replace(/^(ALDEA|LOTE)\s*/, '')
+    .replace(/^0+(?=\d)/, '');
 }
 
 /** Opciones de plazo y precio para un lote ('0' de contado primero). */
 export function priceOptionsFor(rows: PriceRow[], sector: string, lot: string): PriceOption[] {
-  const lotKey = String(Number(lot) || lot).trim();
-  const row = rows.find((r) => String(Number(r.lot) || r.lot).trim() === lotKey && sameSector(sector, r.sector));
+  const lotKey = normalizeLot(lot);
+  const sameLot = rows.filter((r) => normalizeLot(r.lot) === lotKey);
+  // Primero el sector idéntico; si no, por inclusión.
+  const row = sameLot.find((r) => normalizeSector(r.sector) === normalizeSector(sector))
+    ?? sameLot.find((r) => sameSector(sector, r.sector));
   if (!row) return [];
   return Object.entries(row.prices)
     .map(([months, price]) => ({ termMonths: Number(months), price }))

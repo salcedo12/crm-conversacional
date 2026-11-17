@@ -33,7 +33,7 @@ service cloud.firestore {
 
     // El usuario pertenece a la empresa (según su claim companyId)
     function isPlatformAdmin() {
-      return signedIn() && request.auth.token.platformAdmin == true;
+      return signedIn() && request.auth.token.get('platformAdmin', false) == true;
     }
 
     function inCompany(companyId) {
@@ -64,17 +64,37 @@ service cloud.firestore {
       // Cada usuario de la empresa puede consultar el directorio de compañeros (asesores/admins)
       // para ver asignaciones y nombres en el CRM.
       // Los admins/managers gestionan a todos los usuarios de su empresa.
+      // Seguridad (R01): `platformAdmin` y el rol 'platformAdmin' se convierten en
+      // privilegios globales vía el trigger de claims, así que desde el cliente
+      // solo un platformAdmin puede tocarlos. El propio usuario solo puede
+      // refrescar campos personales (no roles, bloqueos SLA ni reparto de leads).
       match /users/{userId} {
+        // Cualquier valor (true, 'true', etc.) cuenta: el trigger acepta varios.
+        function noPlatformPrivilegeOnCreate() {
+          return isPlatformAdmin()
+                 || (!request.resource.data.keys().hasAny(['platformAdmin'])
+                     && request.resource.data.get('role', 'advisor') != 'platformAdmin');
+        }
+        function noPlatformPrivilegeOnUpdate() {
+          return isPlatformAdmin()
+                 || (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['platformAdmin'])
+                     && request.resource.data.get('role', 'advisor') != 'platformAdmin');
+        }
+
         allow read:   if inCompany(companyId);
-        allow create: if isAdmin(companyId)
-                      || (isSelf(userId)
-                          && companyId == bootstrapCompany()
-                          && request.resource.data.role == 'advisor'
-                          && request.resource.data.active == true);
-        allow update: if isAdmin(companyId)
-                      || (isSelf(userId)
-                          && request.resource.data.role   == resource.data.role
-                          && request.resource.data.active == resource.data.active);
+        allow create: if noPlatformPrivilegeOnCreate()
+                      && (isAdmin(companyId)
+                          || (isSelf(userId)
+                              && companyId == bootstrapCompany()
+                              && request.resource.data.keys().hasOnly(
+                                   ['companyId', 'email', 'displayName', 'role', 'active', 'createdAt', 'updatedAt'])
+                              && request.resource.data.role == 'advisor'
+                              && request.resource.data.active == true));
+        allow update: if noPlatformPrivilegeOnUpdate()
+                      && (isAdmin(companyId)
+                          || (isSelf(userId)
+                              && request.resource.data.diff(resource.data).affectedKeys()
+                                   .hasOnly(['updatedAt', 'displayName'])));
         allow delete: if isAdmin(companyId);
       }
 

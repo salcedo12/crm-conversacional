@@ -67,7 +67,7 @@ export function LeadListItem({ lead, isSelected, isUnread, onClick }: LeadListIt
       `}
     >
       <div className="flex items-start justify-between gap-2 mb-1">
-        <span className={`text-sm truncate flex-1 ${isUnread ? 'font-semibold text-white' : 'font-medium text-zinc-100'}`}>
+        <span className={`text-sm truncate flex-1 ${isUnread ? 'font-bold text-zinc-950 dark:text-white' : 'font-medium text-zinc-800 dark:text-zinc-100'}`}>
           {country && FLAG_URLS[country.iso] && (
             <img
               src={FLAG_URLS[country.iso]}
@@ -80,13 +80,13 @@ export function LeadListItem({ lead, isSelected, isUnread, onClick }: LeadListIt
           {displayName}
         </span>
         {time && (
-          <span className={`text-[10px] shrink-0 ${isUnread ? 'font-medium text-violet-300' : 'text-zinc-500'}`}>{time}</span>
+          <span className={`text-[10px] shrink-0 ${isUnread ? 'font-semibold text-violet-600 dark:text-violet-300' : 'text-zinc-500'}`}>{time}</span>
         )}
       </div>
 
       <div className="mb-1.5 flex items-center gap-2">
-        {isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-violet-400" aria-label="Sin leer" />}
-        <p className={`truncate text-xs ${isUnread ? 'font-medium text-zinc-200' : 'text-zinc-400'}`}>{preview}</p>
+        {isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-violet-600 dark:bg-violet-400" aria-label="Sin leer" />}
+        <p className={`truncate text-xs ${isUnread ? 'font-medium text-zinc-900 dark:text-zinc-200' : 'text-zinc-600 dark:text-zinc-400'}`}>{preview}</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">

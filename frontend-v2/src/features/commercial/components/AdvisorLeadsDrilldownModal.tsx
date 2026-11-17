@@ -266,28 +266,28 @@ export function AdvisorLeadsDrilldownModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200">
-      <div className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-5xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden text-zinc-100 ring-1 ring-zinc-700/50">
+      <div className="bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-3xl w-full max-w-5xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden text-zinc-900 dark:text-zinc-100 ring-1 ring-zinc-300/50 dark:ring-zinc-700/50">
         {/* ENCABEZADO SUPERIOR */}
-        <div className="p-4 sm:p-5 border-b border-zinc-800/80 bg-gradient-to-r from-zinc-900 via-zinc-950 to-zinc-900 flex items-start justify-between gap-3">
+        <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800/80 bg-gradient-to-r from-zinc-50 via-white to-zinc-50 dark:from-zinc-900 dark:via-zinc-950 dark:to-zinc-900 flex items-start justify-between gap-3">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                <Sparkles size={12} className="text-amber-400" />
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                <Sparkles size={12} className="text-amber-500 dark:text-amber-400" />
                 <span>Auditoría Interactiva de Captaciones</span>
               </span>
-              <span className="text-xs text-zinc-400 font-mono bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-800">
+              <span className="text-xs text-zinc-600 dark:text-zinc-400 font-mono bg-zinc-100 dark:bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-200 dark:border-zinc-800">
                 {scopeLabel}
               </span>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-lg sm:text-2xl font-black text-white flex items-center gap-2">
-                <Users size={22} className="text-amber-400" />
+              <h2 className="text-lg sm:text-2xl font-black text-zinc-900 dark:text-white flex items-center gap-2">
+                <Users size={22} className="text-amber-500 dark:text-amber-400" />
                 <span>{currentTitle}</span>
               </h2>
             </div>
 
-            <p className="text-xs text-zinc-400 max-w-2xl">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 max-w-2xl">
               Haz clic en cualquier prospecto para <strong>abrir su contacto en otra página</strong> o en <strong>"Ver seguimiento"</strong> para revisar su historial de bitácoras y llamadas.
             </p>
           </div>
@@ -295,7 +295,7 @@ export function AdvisorLeadsDrilldownModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition cursor-pointer"
+            className="p-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white border border-zinc-200 dark:border-zinc-800 transition cursor-pointer"
             title="Cerrar modal (Esc)"
           >
             <X size={18} />
@@ -717,15 +717,15 @@ export function AdvisorLeadsDrilldownModal({
                     key={lead.leadId || idx}
                     className={`rounded-2xl border transition-all p-4 shadow-sm ${
                       !isManaged
-                        ? 'bg-gradient-to-r from-rose-950/20 via-zinc-900/60 to-zinc-900/40 border-rose-900/50 hover:border-rose-500/70'
-                        : 'bg-zinc-900/70 hover:bg-zinc-900 border-zinc-800/90 hover:border-zinc-700'
+                        ? 'bg-gradient-to-r from-rose-50/90 via-white to-white dark:from-rose-950/20 dark:via-zinc-900/60 dark:to-zinc-900/40 border-rose-300 dark:border-rose-900/50 hover:border-rose-400 dark:hover:border-rose-500/70'
+                        : 'bg-white dark:bg-zinc-900/70 hover:bg-zinc-50 dark:hover:bg-zinc-900 border-zinc-200 dark:border-zinc-800/90 hover:border-zinc-300 dark:hover:border-zinc-700'
                     }`}
                   >
                     {/* FILA SUPERIOR: CLIENTE + ACCIONES DIRECTAS */}
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="space-y-1 flex-1 min-w-[240px]">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-mono font-bold text-zinc-500 bg-zinc-800/80 px-2 py-0.5 rounded-md">
+                          <span className="text-xs font-mono font-bold text-zinc-600 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800/80 px-2 py-0.5 rounded-md border border-zinc-200 dark:border-zinc-700">
                             #{idx + 1}
                           </span>
 
@@ -733,13 +733,13 @@ export function AdvisorLeadsDrilldownModal({
                           <button
                             type="button"
                             onClick={() => handleOpenLeadInNewTab(lead.leadId)}
-                            className="font-black text-white hover:text-amber-400 transition-colors flex items-center gap-1.5 text-left group cursor-pointer"
+                            className="font-black text-zinc-900 dark:text-white hover:text-amber-600 dark:hover:text-amber-400 transition-colors flex items-center gap-1.5 text-left group cursor-pointer"
                             title="Haz clic para abrir el contacto en otra página (Bandeja CRM)"
                           >
                             <span className="text-base group-hover:underline">
                               {lead.clientName}
                             </span>
-                            <ArrowUpRight size={15} className="text-zinc-500 group-hover:text-amber-400 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                            <ArrowUpRight size={15} className="text-zinc-400 group-hover:text-amber-500 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                           </button>
 
                           {/* Estado CRM */}

@@ -16,8 +16,10 @@ import { updateBroadcastDeliveryStatus } from '../modules/broadcasts/broadcastSt
 import { resolveCompanyIdForChannel, getAdvisorLine } from '../modules/companies/companyRouting';
 import { isCompanyTeamPhone } from '../modules/companies/teamPhones';
 import { pauseAiForAdvisorMessage } from '../modules/ai/aiRollout';
+import { isCourtesyOnly } from '../modules/ai/aiOrchestrator.service';
 import { ADVISOR_WHATSAPP_SOURCE } from '../modules/leads/leadClassification';
 import { getYcloudConfigForCompany } from '../modules/companies/channelCredentials.repository';
+import { handlePendingDealApprovalInbound } from './dealApproval.function';
 // ycloud client disponible para envíos futuros desde este webhook
 import { uploadMediaBuffer, mimeToExt } from '../utils/storageUpload';
 import { webhookEventExpireAt } from '../utils/webhookTtl';
@@ -415,6 +417,36 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
     return;
   }
 
+  // ─── CHEQUEO DE AUTORIZACIÓN DE PLANES POR GERENCIA (WHATSAPP) ───
+  // Si el remitente tiene una solicitud de aprobación de plan pendiente,
+  // se procesa su respuesta (AUTORIZADO / RECHAZAR) antes de cualquier filtro de equipo o lead.
+  // Soporta texto normal, respuesta a botones de plantilla (quick reply button) o interactivos.
+  const inboundApprovalText =
+    msg.text?.body ||
+    (msg as any).button?.text ||
+    (msg as any).button?.payload ||
+    (msg as any).interactive?.button_reply?.title ||
+    (msg as any).interactive?.button_reply?.id ||
+    '';
+
+  if (hasPhone && inboundApprovalText.trim()) {
+    const handledApproval = await handlePendingDealApprovalInbound({
+      companyId,
+      fromPhone: normPhone || phone!,
+      textBody: inboundApprovalText.trim(),
+      msgId,
+    });
+    if (handledApproval) {
+      logger.info('[ycloud] Mensaje procesado como resolución de autorización de plan por gerencia', {
+        companyId,
+        phone: normPhone || phone,
+        msgId,
+        text: inboundApprovalText.trim(),
+      });
+      return;
+    }
+  }
+
   // Si el remitente es un asesor o una línea interna de la empresa, NO se debe
   // registrar como prospecto ni repartir a un asesor de ventas.
   if (hasPhone && (await isCompanyTeamPhone(companyId, normPhone || phone))) {
@@ -603,7 +635,9 @@ async function processYcloudMessage(msg: YcloudInboundMessage): Promise<void> {
 
   // Protocolo Meraki: verificar caducidad de exclusividad (>30 días de abandono) si el lead escribe al 317
   if (lead && !advisorLine) {
-    await evaluateExclusivityOnReentry(companyId, lead, 'whatsapp_inbound_317');
+    await evaluateExclusivityOnReentry(companyId, lead, 'whatsapp_inbound_317', {
+      lowIntent: isReaction || isCourtesyOnly(content),
+    });
   }
 
   // Caso raro: usuario oculto y SIN número ni en remitente ni en texto. Si existe

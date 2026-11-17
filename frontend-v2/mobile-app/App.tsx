@@ -1,15 +1,15 @@
 import 'react-native-gesture-handler';
 import './global.css';
 import { useEffect, useMemo } from 'react';
-import { BackHandler, Platform, LogBox, Alert } from 'react-native';
+import { BackHandler, Platform, LogBox } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import * as Updates from 'expo-updates';
 import { NavigationContainer, DarkTheme, DefaultTheme, type Theme as NavigationTheme } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './src/providers/AuthProvider';
 import { ThemeProvider, useTheme } from './src/providers/ThemeProvider';
 import { BrandingProvider } from './src/providers/BrandingProvider';
 import { NotificationsProvider } from './src/providers/NotificationsProvider';
+import { registerAppStateUpdateChecker } from './src/services/updateService';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { navigationRef } from './src/navigation/navigationRef';
 
@@ -50,29 +50,10 @@ function ThemedAppContainer() {
 }
 
 export default function App() {
+  // Observador de actualizaciones remotas OTA (en arranque y al volver de segundo plano)
   useEffect(() => {
-    if (__DEV__ || !Updates.isEnabled) return;
-
-    const loadUpdate = async () => {
-      try {
-        const update = await Updates.checkForUpdateAsync();
-        if (update.isAvailable) {
-          await Updates.fetchUpdateAsync();
-          Alert.alert(
-            'Actualización descargada',
-            'Se descargó una nueva versión de Meraki CRM. ¿Deseas reiniciar la aplicación ahora para aplicarla?',
-            [
-              { text: 'Más tarde', style: 'cancel' },
-              { text: 'Reiniciar ahora', onPress: () => void Updates.reloadAsync() },
-            ]
-          );
-        }
-      } catch (error) {
-        console.warn('No se pudo comprobar una actualización OTA.', error);
-      }
-    };
-
-    void loadUpdate();
+    const unregister = registerAppStateUpdateChecker();
+    return () => unregister();
   }, []);
 
   useEffect(() => {

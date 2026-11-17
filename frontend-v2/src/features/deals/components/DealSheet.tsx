@@ -36,6 +36,7 @@ export function DealSheet({
   layer = 'sheet',
   bodyClassName = '',
   toolbar,
+  dismissOnBackdrop = false,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -48,6 +49,8 @@ export function DealSheet({
   bodyClassName?: string;
   /** Franja fija bajo el encabezado (filtros, buscador). */
   toolbar?: ReactNode;
+  /** Si es true permite cerrar al tocar el fondo oscuro exterior. Por defecto false para evitar pérdidas de datos. */
+  dismissOnBackdrop?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -64,7 +67,7 @@ export function DealSheet({
   return createPortal(
     <div
       className={`deal-touch fixed inset-0 ${LAYERS[layer]} flex items-stretch justify-center bg-black/80 backdrop-blur-sm sm:items-center sm:p-4`}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={(e) => { if (dismissOnBackdrop && e.target === e.currentTarget) onClose(); }}
     >
       <div
         role="dialog"

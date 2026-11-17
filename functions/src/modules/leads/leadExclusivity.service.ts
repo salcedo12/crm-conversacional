@@ -17,7 +17,9 @@ export const EXCLUSIVITY_EXPIRATION_DAYS = 30;
 export async function evaluateExclusivityOnReentry(
   companyId: string,
   lead: Lead,
-  reentrySource: string
+  reentrySource: string,
+  /** true si el mensaje solo agradece o es una reacción: no revive un lead perdido. */
+  opts: { lowIntent?: boolean } = {}
 ): Promise<{ reallocated: boolean; currentAdvisorId: string | null; previousAdvisorId?: string }> {
   // 1. Si no tiene asesor asignado, asignarlo por primera vez
   if (!lead.assignedTo) {
@@ -72,7 +74,7 @@ export async function evaluateExclusivityOnReentry(
       updatedAt: nowTs,
     };
     // Si el lead estaba en 'lost' (Cancelado/No Interesado) de hace meses y reingresa, reactivarlo
-    if (lead.status === 'lost') {
+    if (lead.status === 'lost' && !opts.lowIntent) {
       reassignPatch.status = 'active';
       reassignPatch.pipelineStage = 'prospecto';
       reassignPatch.pipelineStageLabel = 'Prospecto';
@@ -97,7 +99,8 @@ export async function evaluateExclusivityOnReentry(
   });
 
   // Si el lead estaba en 'lost' y vuelve a escribir/reingresar antes de los 30 días, reactivarlo para su asesor
-  if (lead.status === 'lost') {
+  // Un "gracias" o "muy amable" después de decir que no le interesa NO es un reingreso.
+  if (lead.status === 'lost' && !opts.lowIntent) {
     await db.collection('companies').doc(companyId).collection('leads').doc(lead.id).update({
       status: 'active',
       pipelineStage: 'prospecto',

@@ -31,6 +31,10 @@ Y despliega las funciones del CRM con `FUNCTIONS_DISCOVERY_TIMEOUT=60`.
 
 - `GET /health`
 - `POST /advisor-whatsapp/session/qr`
+- `POST /advisor-whatsapp/session/pairing-code` — `{ companyId, advisorId, phone }` (phone con
+  indicativo, p. ej. `573001234567`). Devuelve `pairingCode` (8 caracteres) para
+  WhatsApp → Dispositivos vinculados → Vincular con el número de teléfono.
+- `POST /advisor-whatsapp/session/status`
 - `POST /advisor-whatsapp/session/disconnect`
 
 Todos los `POST` requieren el header `X-Bridge-Key`.

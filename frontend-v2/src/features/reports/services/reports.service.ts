@@ -219,6 +219,13 @@ export interface SalesReportSavePayload {
   referralName?: string;
   createdByName?: string;
   documentUrl?: string | null;
+  landValue?: number;
+  lotNumber?: string;
+  sectorStage?: string;
+  projectName?: string;
+  area?: string | number;
+  discount?: number;
+  commissions?: any;
 }
 
 const _get = httpsCallable<{ companyId: string; rangeDays?: number; startDate?: number; endDate?: number; refresh?: boolean }, AdvisorReports>(functions, 'getAdvisorReports');
@@ -252,6 +259,10 @@ const _deleteSalesReportVersion = httpsCallable<
     documentGeneratedDateStr: string | null;
   }
 >(functions, 'deleteSalesReportVersion');
+const _getSalesReportDocument = httpsCallable<
+  { companyId: string; saleId: string },
+  { exists: boolean; data: any }
+>(functions, 'getSalesReportDocument');
 
 export async function getAdvisorReports(
   companyId: string,
@@ -326,6 +337,14 @@ export async function deleteSalesReportVersion(
   documentGeneratedDateStr: string | null;
 }> {
   const r = await _deleteSalesReportVersion({ companyId, saleId, versionId });
+  return r.data;
+}
+
+export async function getSalesReportDocument(
+  companyId: string,
+  saleId: string,
+): Promise<{ exists: boolean; data: any }> {
+  const r = await _getSalesReportDocument({ companyId, saleId });
   return r.data;
 }
 

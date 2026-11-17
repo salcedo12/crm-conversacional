@@ -104,8 +104,11 @@ export const CLUBS_WITH_UPDATES: Array<{ slug: string; label: string }> = [
 
 /** El lead preguntó por la obra (no basta con que pregunte por un club). */
 export function asksAboutConstruction(texts: string[]): boolean {
-  const t = texts.join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return /\b(obra|obras|avance|avances|avanzando|construyendo|construccion|construido|construyen|progreso|como van?|como esta(n)? (la|el|los|las)? ?(obra|proyecto|club)|ya (empezaron|comenzaron|arrancaron)|estado del (proyecto|club))\b/.test(t);
+  const t = texts.join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    // Preguntas sobre qu\u00e9 se puede construir en el terreno (reglas, licencia, casas):
+    // no son sobre el avance de la obra. "\u00bfLa construcci\u00f3n es libre?" respond\u00eda con el avance.
+    .replace(/\b(la )?construccion (es |sera )?libre\b|\b(puedo|se puede|podria|pueden) construir\b|\bque (puedo|se puede) construir\b|\blicencia de construccion\b|\barea (de |maxima de )?construccion\b|\bconstruir (mi|una|la|el)\b|\bconstruccion de (la|mi|una|las) casas?\b|\bmano de obra\b/g, ' ');
+  return /\b(obra|obras|avance|avances|avanzando|construyendo|construido|construyen|progreso|como van?|como esta(n)? (la|el|los|las)? ?(obra|proyecto|club)|(como|cuando) (va|van|empieza|empiezan|inicia|termina) (la )?construccion|(avance|estado|inicio) de (la )?construccion|ya (empezaron|comenzaron|arrancaron)|estado del (proyecto|club))\b/.test(t);
 }
 
 /** Informes del club publicados en los últimos `days` días (máximo `max`, del más nuevo al más viejo). */

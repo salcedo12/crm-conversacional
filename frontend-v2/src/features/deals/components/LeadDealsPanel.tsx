@@ -261,7 +261,7 @@ function DealPlanLine({ deal, editable, onEdit }: { deal: DealSummary; editable:
  * Avance del negocio en 5 pasos, para que el asesor vea de un vistazo qué falta.
  * (Misma idea que tendrá la app móvil.)
  */
-function DealSteps({ deal }: { deal: DealSummary }) {
+export function DealSteps({ deal }: { deal: DealSummary }) {
   const plan = deal.plan;
   const planOk = !!plan && plan.lotId === deal.lot?.inventoryLotId;
   const docs = deal.documents ?? [];

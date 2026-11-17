@@ -5,6 +5,8 @@ import {
   CalendarX,
   CheckCircle2,
   Clock3,
+  Copy,
+  KeyRound,
   QrCode,
   RefreshCw,
   Smartphone,
@@ -19,7 +21,9 @@ import { listCompanyUsers, type CompanyUser } from '@/features/leads/services/ad
 import { listMessagingLines, type MessagingLine } from '@/features/templates/services/templates.service';
 import {
   disconnectAdvisorWhatsapp,
+  formatPairingCode,
   listAdvisorWhatsappConnections,
+  requestAdvisorWhatsappPairingCode,
   requestAdvisorWhatsappQr,
   type AdvisorWhatsappConnection,
   type AdvisorWhatsappQrResult,
@@ -32,8 +36,15 @@ interface AdvisorWhatsappPanelProps {
 
 type BusyState =
   | { action: 'load' }
-  | { action: 'qr' | 'disconnect'; advisorId: string }
+  | { action: 'qr' | 'code' | 'disconnect'; advisorId: string }
   | null;
+
+/** Dígitos con indicativo; un celular colombiano de 10 dígitos recibe el 57. */
+function pairingPhoneDigits(value: string): string {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length === 10 && digits.startsWith('3')) return `57${digits}`;
+  return digits;
+}
 
 interface AdvisorRow {
   id: string;
@@ -109,6 +120,10 @@ export function AdvisorWhatsappPanel({ companyId }: AdvisorWhatsappPanelProps) {
   const [qrByAdvisor, setQrByAdvisor] = useState<Record<string, AdvisorWhatsappQrResult | undefined>>({});
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
+  // Vincular con código: formulario abierto (uid) y número escrito.
+  const [codeFormFor, setCodeFormFor] = useState<string | null>(null);
+  const [codePhone, setCodePhone] = useState('');
+  const [copiedFor, setCopiedFor] = useState<string | null>(null);
 
   const rows = useMemo<AdvisorRow[]>(() => {
     const connectionByAdvisor = new Map(connections.map((connection) => [connection.advisorId, connection]));
@@ -192,6 +207,70 @@ export function AdvisorWhatsappPanel({ companyId }: AdvisorWhatsappPanelProps) {
     }
   };
 
+  const openCodeForm = (advisorId: string, currentPhone?: string | null) => {
+    setError(null);
+    setCodeFormFor(advisorId);
+    setCodePhone(currentPhone ? currentPhone.replace(/\D/g, '') : '');
+  };
+
+  const requestCode = async (advisorId: string) => {
+    const phone = pairingPhoneDigits(codePhone);
+    if (phone.length < 10 || phone.length > 15) {
+      setError('Escribe el numero del asesor con indicativo, por ejemplo 57 300 123 4567.');
+      return;
+    }
+    setBusy({ action: 'code', advisorId });
+    setError(null);
+    setQrByAdvisor((prev) => ({ ...prev, [advisorId]: undefined }));
+    try {
+      const result = await requestAdvisorWhatsappPairingCode(companyId, advisorId, phone);
+      setQrByAdvisor((prev) => ({ ...prev, [advisorId]: result }));
+      setCodeFormFor(null);
+      await load(true);
+    } catch (err) {
+      console.error('[AdvisorWhatsappPanel] pairing code error:', err);
+      setError(err instanceof Error ? err.message : 'No se pudo generar el codigo.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyCode = async (advisorId: string, code: string) => {
+    try {
+      await navigator.clipboard.writeText(formatPairingCode(code));
+      setCopiedFor(advisorId);
+      window.setTimeout(() => setCopiedFor((prev) => (prev === advisorId ? null : prev)), 2000);
+    } catch {
+      /* el código sigue visible para copiarlo a mano */
+    }
+  };
+
+  // Mientras haya un código a la vista, revisar seguido para mostrar
+  // "conectado" apenas el asesor lo escriba en su celular.
+  const waitingCode = Object.values(qrByAdvisor).some((r) => r?.pairingCode);
+  useEffect(() => {
+    if (!waitingCode) return;
+    const timer = window.setInterval(() => load(true), 5_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingCode, companyId]);
+
+  // Al conectarse, quitar el código/QR que quedó en la tarjeta.
+  useEffect(() => {
+    const connected = new Set(connections.filter((c) => c.status === 'connected').map((c) => c.advisorId));
+    setQrByAdvisor((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of Object.keys(next)) {
+        if (next[id] && connected.has(id) && next[id]?.status !== 'connected') {
+          next[id] = undefined;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [connections]);
+
   const disconnect = async (advisorId: string, name: string) => {
     if (!confirm(`Desconectar el WhatsApp de ${name}?`)) return;
     setBusy({ action: 'disconnect', advisorId });
@@ -264,6 +343,8 @@ export function AdvisorWhatsappPanel({ companyId }: AdvisorWhatsappPanelProps) {
             const qrResult = qrByAdvisor[row.id];
             const cardIssue = issueText(connection);
             const qrBusy = busy?.action === 'qr' && busy.advisorId === row.id;
+            const codeBusy = busy?.action === 'code' && busy.advisorId === row.id;
+            const showCodeForm = codeFormFor === row.id;
             const disconnectBusy = busy?.action === 'disconnect' && busy.advisorId === row.id;
             // Asesor en coexistencia (API oficial): su "Mi WhatsApp" es su propia
             // línea por la API. NO se le ofrece Baileys (mismo número + cliente no
@@ -354,6 +435,16 @@ export function AdvisorWhatsappPanel({ companyId }: AdvisorWhatsappPanelProps) {
                         <QrCode size={14} /> Generar QR
                       </Button>
                     )}
+                    {!coex && status !== 'connected' && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => (showCodeForm ? setCodeFormFor(null) : openCodeForm(row.id, connection?.phone))}
+                        disabled={busy !== null}
+                      >
+                        <KeyRound size={14} /> Vincular con codigo
+                      </Button>
+                    )}
                     {/* "Desconectar" sigue disponible para limpiar cualquier sesión
                         Baileys residual en un número que ahora es de coexistencia. */}
                     <Button
@@ -366,6 +457,69 @@ export function AdvisorWhatsappPanel({ companyId }: AdvisorWhatsappPanelProps) {
                       <Unplug size={14} /> {coex ? 'Limpiar Baileys' : 'Desconectar'}
                     </Button>
                   </div>
+
+                  {showCodeForm && !coex && (
+                    <form
+                      className="grid gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 p-3 text-xs"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        requestCode(row.id);
+                      }}
+                    >
+                      <label htmlFor={`pairing-phone-${row.id}`} className="font-medium text-zinc-200">
+                        Numero de WhatsApp del asesor
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          id={`pairing-phone-${row.id}`}
+                          type="tel"
+                          inputMode="tel"
+                          autoFocus
+                          value={codePhone}
+                          onChange={(e) => setCodePhone(e.target.value)}
+                          placeholder="57 300 123 4567"
+                          className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-sm text-zinc-100 outline-none focus:border-violet-500"
+                        />
+                        <Button size="sm" type="submit" loading={codeBusy} disabled={busy !== null}>
+                          Generar codigo
+                        </Button>
+                      </div>
+                      <p className="text-zinc-500">
+                        Con indicativo de pais (57 para Colombia). Debe ser el mismo numero del celular donde esta el WhatsApp.
+                      </p>
+                    </form>
+                  )}
+
+                  {qrResult?.pairingCode && (
+                    <div className="grid gap-3 rounded-lg border border-violet-500/25 bg-violet-500/10 p-3 text-xs text-violet-100">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-semibold text-zinc-100">
+                          Codigo para {qrResult.pairingPhone ? formatPhone(`+${qrResult.pairingPhone}`) : row.displayName}
+                        </p>
+                        {qrResult.expiresAt && (
+                          <span className="text-violet-300">
+                            Vence {new Intl.DateTimeFormat('es-CO', { timeStyle: 'short' }).format(new Date(qrResult.expiresAt))}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="select-all rounded-lg bg-zinc-950 px-4 py-2 font-mono text-2xl font-bold tracking-[0.2em] text-white">
+                          {formatPairingCode(qrResult.pairingCode)}
+                        </span>
+                        <Button size="sm" variant="secondary" onClick={() => copyCode(row.id, qrResult.pairingCode!)}>
+                          <Copy size={14} /> {copiedFor === row.id ? 'Copiado' : 'Copiar'}
+                        </Button>
+                      </div>
+                      <ol className="list-decimal space-y-0.5 pl-4 leading-5 text-violet-200">
+                        <li>En el celular del asesor abre WhatsApp → <strong>Dispositivos vinculados</strong>.</li>
+                        <li>Toca <strong>Vincular un dispositivo</strong>.</li>
+                        <li>Abajo toca <strong>Vincular con el numero de telefono</strong> y escribe el codigo.</li>
+                      </ol>
+                      <p className="text-violet-300">
+                        Esta pantalla se actualiza sola cuando quede conectado. Si vence, genera otro.
+                      </p>
+                    </div>
+                  )}
 
                   {qrResult?.status === 'configuration_required' && (
                     <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">

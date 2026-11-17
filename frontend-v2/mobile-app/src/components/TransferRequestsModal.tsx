@@ -319,7 +319,7 @@ export function TransferRequestsModal({
                           borderColor: palette.amberBorder,
                         }}
                       >
-                        <Icon name="history" size={12} color={palette.amberText} />
+                        <Icon name="History" size={12} color={palette.amberText} />
                         <Text style={{ fontSize: 11, fontWeight: '700', color: palette.amberText }}>
                           Ver Bitácora
                         </Text>
@@ -348,7 +348,7 @@ export function TransferRequestsModal({
                           borderColor: palette.emeraldBorder,
                         }}
                       >
-                        <Icon name="file-text" size={12} color={palette.emeraldText} />
+                        <Icon name="FileText" size={12} color={palette.emeraldText} />
                         <Text style={{ fontSize: 11, fontWeight: '700', color: palette.emeraldText }}>
                           Ficha Técnica
                         </Text>

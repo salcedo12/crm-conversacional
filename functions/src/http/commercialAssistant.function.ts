@@ -1,7 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { z } from 'zod';
 import { db } from '../lib/admin';
-import { requireAuth } from '../lib/authContext';
+import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/authContext';
 import { getOpenAIClient } from '../integrations/openai/openai.client';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
@@ -23,12 +23,17 @@ const MERAKI_OFFICIAL_ADVISORS = [
 
 const AskCommercialAssistantSchema = z.object({
   companyId: z.string().min(1),
-  messages: z.array(
-    z.object({
-      role: z.enum(['user', 'assistant', 'system']),
-      content: z.string(),
-    })
-  ),
+  // Seguridad (R02): el cliente no puede inyectar mensajes de sistema y se
+  // limita el tamaño de la conversación para acotar consumo.
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().max(8000),
+      })
+    )
+    .min(1)
+    .max(200),
   periodContext: z
     .object({
       startDate: z.number().optional(),
@@ -126,7 +131,9 @@ function resolveBackendAdCampaignName(l: any): string {
 export const askCommercialAssistant = onCall(
   { region: 'us-central1', timeoutSeconds: 120, memory: '512MiB' },
   async (request) => {
-    requireAuth(request);
+    const ctx = requireAuth(request);
+    // Seguridad (R02): herramienta de gerencia; solo admin/manager de SU empresa.
+    requireRole(ctx, ADMIN_ROLES);
 
     const parsed = AskCommercialAssistantSchema.safeParse(request.data);
     if (!parsed.success) {
@@ -134,6 +141,7 @@ export const askCommercialAssistant = onCall(
     }
 
     const { companyId, messages, periodContext } = parsed.data;
+    assertCompany(ctx, companyId);
 
     const apiKey = env.openaiApiKey();
     if (!apiKey) {
@@ -815,7 +823,7 @@ Reglas fundamentales de Meraki:
     // Historial con mensajes
     const conversationMessages: any[] = [
       { role: 'system', content: systemPrompt },
-      ...messages.map((m) => ({ role: m.role, content: m.content })),
+      ...messages.slice(-30).map((m) => ({ role: m.role, content: m.content })),
     ];
 
     if (periodContext?.periodLabel) {

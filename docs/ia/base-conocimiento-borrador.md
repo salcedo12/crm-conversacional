@@ -12,6 +12,7 @@ grupoconstructormeraki.com.co (revisado el 2026-11-09). Este texto está pensado
 ### Reglas de uso de esta información
 - Usa esta información para responder dudas generales. No interpretes cláusulas para un caso particular, no calcules penalidades, intereses ni saldos y no des instrucciones de pago personalizadas: para eso, ofrece una llamada con un asesor o el canal de Servicio al Cliente.
 - Si el cliente ya compró (pagos, cuotas, mora, escritura de SU terreno, paz y salvo, cambios de contrato), remítelo a Servicio al Cliente.
+- Si preguntan por ceder o vender el terreno antes de escriturar, atrasos o mora, desistimiento o retracto, o quién paga los gastos de escritura (notaría, registro, retención), no des detalles: dile que esos temas los revisa el asesor con el contrato en la cita.
 
 ### La empresa
 - Grupo Constructor Meraki S.A.S. ZOMAC, en asociación con Grupo Dinheiro 1970 S.A.S. Las aldeas de Sobre Montañas se venden a través de Compañía Constructora Meraki S+M S.A.S.
@@ -21,15 +22,14 @@ grupoconstructormeraki.com.co (revisado el 2026-11-09). Este texto está pensado
   - Río Claro: Resolución 321 del 29 de noviembre de 2022, municipio de Mariquita.
   - Laguna Mar: Resolución RES 24-0-0152 del 22 de junio de 2024, municipio de Melgar.
   - Cañón de Arizona: licencia de parcelación del municipio de Alvarado.
-- Laguna Mar es un megaproyecto de 5 etapas: Mar Santorini y Mar Canarias están en venta; Mar Ibiza, Mar Mykonos y Mar Atenas están en desarrollo.
+- Laguna Mar es un megaproyecto de 5 etapas: Mar Santorini y Mar Canarias están en venta; Mar Ibiza, Mar Mykonos y Mar Atenas están en desarrollo. De las etapas en venta, solo Mar Santorini tiene obra en ejecución; Mar Canarias se vende sobre planos y su obra aún no ha iniciado.
 
 ### Cómo es el proceso de compra
 1. Separación: el cliente separa el terreno con la cuota de separación.
-2. Preventa: se firma electrónicamente el contrato de preventa con tres documentos: declaración de origen lícito de los recursos, información mínima del negocio (Ley 1480 y Circular 004 de 2024 de la SIC) y autorización de tratamiento de datos.
-3. Promesa de compraventa: se firma electrónicamente dentro de los 3 días hábiles siguientes a la preventa, con el mismo precio y plan de pagos.
-4. Plan de pagos: separación, cuotas mensuales ordinarias y, si el cliente quiere, cuotas extraordinarias. También se pueden usar las cesantías.
-5. Paz y salvo y escritura pública: se firma cuando el cliente terminó de pagar y el terreno está individualizado.
-6. Entrega del terreno.
+2. Preventa y promesa de compraventa: se envían juntas para firma electrónica, con tres documentos: declaración de origen lícito de los recursos, información mínima del negocio (Ley 1480 y Circular 004 de 2024 de la SIC) y autorización de tratamiento de datos.
+3. Plan de pagos: separación, cuotas mensuales ordinarias y, si el cliente quiere, cuotas extraordinarias. También se pueden usar las cesantías.
+4. Paz y salvo y escritura pública: se firma cuando el cliente terminó de pagar y el terreno está individualizado.
+5. Entrega del terreno.
 - La firma de todos los documentos es electrónica y tiene plena validez legal (Ley 527 de 1999).
 - Es una compra sobre planos: el terreno se individualiza con matrícula propia al registrar la escritura.
 
@@ -43,18 +43,10 @@ grupoconstructormeraki.com.co (revisado el 2026-11-09). Este texto está pensado
 - El bono es la última cuota del plan ("cuota bono descuento"): se aplica al final, al expedir el paz y salvo, solo si el cliente pagó todo sin caer en mora. No es dinero en efectivo.
 - Por eso las cuotas de la cotización ya vienen calculadas con el bono descontado del total.
 
-### Mora y desistimiento (explica solo en general)
-- Si un pago se atrasa, la constructora notifica y da un plazo para ponerse al día; después se pueden cobrar intereses de mora a la tasa máxima legal y reportar a centrales de riesgo.
-- Si el comprador desiste sin causa de la constructora, se aplican las arras pactadas en el contrato.
-- En la compra de inmuebles sobre planos no aplica el derecho de retracto.
-- Para cualquier caso concreto, remite al asesor o a Servicio al Cliente.
-
-### Escritura y gastos
+### Escritura
 - Cañón de Arizona y Llano Grande: el cliente puede escriturar en cuanto termine de pagar la totalidad del terreno.
 - Laguna Mar y Río Claro: todavía no se puede escriturar; la escritura individual se firma en el plazo pactado en la promesa, cuando el cliente termine de pagar y el terreno quede individualizado.
 - Requisitos para escriturar: paz y salvo total y terreno individualizado.
-- Gastos notariales: se pagan por partes iguales entre la constructora y el comprador.
-- Registro e impuesto de registro: a cargo del comprador. La retención en la fuente la paga la constructora.
 
 ### Entrega y servicios
 - La entrega se hace después de terminar las zonas comunes y de firmar la escritura, con acta de entrega.
@@ -68,9 +60,6 @@ grupoconstructormeraki.com.co (revisado el 2026-11-09). Este texto está pensado
 - Meraki ofrece construir la casa: trámite de licencia de construcción y planos arquitectónicos y estructurales incluidos, diseño interno personalizado, garantía de obra, informes quincenales con fotos y asesoría del arquitecto director de obra.
 - Casas modulares y tiny houses: modelos de 58, 77 y 100 m², tiny house de 16,2 m² y chalets de 13,5 m²; se fabrican en planta en Manizales en 10 a 15 días hábiles y se transportan a todo Colombia. Ideales para Airbnb y glamping.
 
-### Vender o ceder el terreno antes de escriturar
-- Se puede ceder la promesa con autorización escrita de la constructora, pagando el 5% del valor total del contrato y estando al día.
-
 ### Entrega anticipada
 - Si el plazo del plan supera 48 meses y el cliente lleva al menos 36 meses al día, puede pedir por escrito la entrega anticipada a título de mera tenencia; la constructora la evalúa.
 
@@ -80,7 +69,7 @@ grupoconstructormeraki.com.co (revisado el 2026-11-09). Este texto está pensado
 ### Amenidades oficiales por club (según contrato)
 - Cañón de Arizona: portería, administración, circuito cerrado de TV, pet park, parque infantil, BBQ, zona picnic, estancias biosaludables, zona de mallas, espacio para restaurante, kioskos tipo palapa, pool bar, zona de masajes, cancha de vóley playa, piscina para niños, jacuzzi, salón de eventos, juegos de mesa, cancha de tenis, sauna, turco, zona de meditación y yoga, sendero ecológico, piscina con playa en arena y tobogán.
 - Llano Grande: portería, administración, circuito cerrado de TV, piscina tipo playa, piscina para niños, pista canina, mallas antiestrés, parque infantil, salón social, cancha de vóley playa y coworking.
-- Río Claro: portería, administración, circuito cerrado de TV, piscina tipo playa, pista canina, mallas antiestrés, parque infantil, salón social, cancha de vóley playa; en la web además tobogán, río lento y parque lineal.
+- Río Claro: portería, administración, circuito cerrado de TV, piscina tipo playa, pista canina, mallas antiestrés, parque infantil, salón social y cancha de vóley playa.
 - Laguna Mar: portería, cancha sintética de fútbol, cancha de tenis, dog park, pista de calistenia, parque infantil, golfito, piscina con playa en arena, tobogán, salón social y zonas verdes.
 
 ### Servicio al Cliente (único canal para PQRS y clientes actuales)

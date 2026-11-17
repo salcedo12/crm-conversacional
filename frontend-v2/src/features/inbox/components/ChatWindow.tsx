@@ -50,14 +50,22 @@ export function ChatWindow({ lead, companyId, advisorNames, onOpenLeadDetails, o
 
   const { visibleMessages, hiddenCount } = useMemo(() => {
     if (!cutoffTime) return { visibleMessages: messages, hiddenCount: 0 };
+    const millisOf = (msg: Message) => msg.createdAt
+      ? (typeof msg.createdAt.toMillis === 'function'
+          ? msg.createdAt.toMillis()
+          : (msg.createdAt.seconds ? msg.createdAt.seconds * 1000 : 0))
+      : 0;
+    // El muro protege la gestión de OTRO asesor. Si antes del corte solo hubo cliente,
+    // IA y avisos del sistema, no hay nada que proteger: el asesor debe ver lo que la
+    // IA habló con el cliente para saber en qué va la conversación.
+    const priorHumanAdvisor = messages.some(
+      (msg) => msg.senderType === 'advisor' && millisOf(msg) < cutoffTime
+    );
+    if (!priorHumanAdvisor) return { visibleMessages: messages, hiddenCount: 0 };
     const visible: Message[] = [];
     let hidden = 0;
     for (const msg of messages) {
-      const msgMillis = msg.createdAt
-        ? (typeof msg.createdAt.toMillis === 'function'
-            ? msg.createdAt.toMillis()
-            : (msg.createdAt.seconds ? msg.createdAt.seconds * 1000 : 0))
-        : 0;
+      const msgMillis = millisOf(msg);
       if (msgMillis >= cutoffTime) {
         visible.push(msg);
       } else {

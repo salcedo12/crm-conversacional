@@ -18,6 +18,12 @@ import {
 import { PipelineColumn } from '../components/PipelineColumn';
 import { PipelineFilterDropdown, type FilterOption } from '../components/PipelineFilterDropdown';
 import { PipelineFilterDrawer } from '../components/PipelineFilterDrawer';
+import {
+  CommercialDateFilter,
+  buildPresetRange,
+  formatFriendlyRange,
+  type DateRangeValue,
+} from '@/features/commercial/components/CommercialDateFilter';
 
 const OFFICIAL_PROJECTS = [
   'Cañón de Arizona',
@@ -40,15 +46,23 @@ export function PipelinePage() {
   const [fichaTargetCard, setFichaTargetCard] = useState<PipelineCardItem | null>(null);
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
 
+  // Filtro de Fecha Interactivo (Calendario & Presets idénticos a Gestión Comercial)
+  const [dateRange, setDateRange] = useState<DateRangeValue>(() => buildPresetRange('30d'));
+
   // Opciones de filtros avanzados (SmartHome & Pauta)
-  const [filterOptions, setFilterOptions] = useState<PipelineFilterOptions>({
-    advisorId: isAdmin ? 'all' : (user?.uid || ''),
-    projectFilter: 'all',
-    groupFilter: 'all',
-    sourceFilter: 'all',
-    followUpStatus: 'all',
-    dateRange: 'all',
-    limitCount: 500,
+  const [filterOptions, setFilterOptions] = useState<PipelineFilterOptions>(() => {
+    const initPreset = buildPresetRange('30d');
+    return {
+      advisorId: isAdmin ? 'all' : (user?.uid || ''),
+      projectFilter: 'all',
+      groupFilter: 'all',
+      sourceFilter: 'all',
+      followUpStatus: 'all',
+      dateRange: 'last_30_days',
+      startDate: initPreset.startDate,
+      endDate: initPreset.endDate,
+      limitCount: 500,
+    };
   });
 
   const [stats, setStats] = useState<PipelineFilterStats>({
@@ -81,7 +95,12 @@ export function PipelinePage() {
     if (!companyId) return;
     // Si el usuario conectado es un asesor, bloquear estrictamente en sus prospectos asignados
     const defaultAdv = (!isAdmin && user?.uid) ? user.uid : 'all';
-    const initOpts = { ...filterOptions, advisorId: defaultAdv };
+    const initOpts: PipelineFilterOptions = {
+      ...filterOptions,
+      advisorId: defaultAdv,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+    };
     setFilterOptions(initOpts);
     loadData(initOpts);
   }, [companyId, user?.uid, isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -93,9 +112,9 @@ export function PipelinePage() {
     if (filterOptions.groupFilter && filterOptions.groupFilter !== 'all') count++;
     if (filterOptions.sourceFilter && filterOptions.sourceFilter !== 'all') count++;
     if (filterOptions.followUpStatus && filterOptions.followUpStatus !== 'all') count++;
-    if (filterOptions.dateRange && filterOptions.dateRange !== 'all') count++;
+    if (dateRange.preset !== 'all' && dateRange.startDate !== null) count++;
     return count;
-  }, [filterOptions]);
+  }, [filterOptions, dateRange]);
 
   // Filtrado en memoria por buscador y fase
   const filteredCards = useMemo(() => {
@@ -153,14 +172,14 @@ export function PipelinePage() {
     }
   };
 
-  // Métricas rápidas del embudo
+  // Métricas rápidas del embudo (calculadas sobre las tarjetas en pantalla)
   const metrics = useMemo(() => {
     let captacion = 0;
     let linea = 0;
     let cierre = 0;
     let noInteresado = 0;
 
-    cards.forEach((c) => {
+    filteredCards.forEach((c) => {
       if (c.group === 'captacion') captacion++;
       else if (c.group === 'linea') linea++;
       else if (c.group === 'cierre') cierre++;
@@ -170,8 +189,8 @@ export function PipelinePage() {
     const activeTotal = captacion + linea + cierre;
     const conversionRate = activeTotal > 0 ? Math.round((cierre / activeTotal) * 100) : 0;
 
-    return { total: cards.length, captacion, linea, cierre, noInteresado, conversionRate };
-  }, [cards]);
+    return { total: filteredCards.length, captacion, linea, cierre, noInteresado, conversionRate };
+  }, [filteredCards]);
 
   // Opciones para los selectores modernos con soporte dark mode completo
   const advisorOptions: FilterOption<string>[] = useMemo(() => {
@@ -229,7 +248,7 @@ export function PipelinePage() {
                 Embudo de Ventas & Tablero Comercial
               </h1>
               <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400 font-mono border border-zinc-700">
-                {cards.length} leads
+                {filteredCards.length} leads
               </span>
             </div>
             <p className="text-xs text-zinc-400 mt-0.5">
@@ -252,12 +271,33 @@ export function PipelinePage() {
 
         {/* ── Barra de Filtros ────────────────────────────────────────────────── */}
         <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-zinc-800/80">
+          {/* Calendario y Rango de Fechas Interactivo (Idéntico a Gestión Comercial) */}
+          <CommercialDateFilter
+            value={dateRange}
+            onChange={(newRange) => {
+              setDateRange(newRange);
+              const updated: PipelineFilterOptions = {
+                ...filterOptions,
+                dateRange: newRange.preset === 'all' ? 'all' : (newRange.preset === '30d' ? 'last_30_days' : 'custom'),
+                startDate: newRange.startDate,
+                endDate: newRange.endDate,
+              };
+              setFilterOptions(updated);
+              loadData(updated);
+            }}
+          />
+
           {/* Selector de Asesor (solo administradores) o Cartera Bloqueada (asesores) */}
           {isAdmin ? (
             <PipelineFilterDropdown
               value={filterOptions.advisorId || 'all'}
               onChange={(val) => {
-                const updated = { ...filterOptions, advisorId: val };
+                const advObj = advisors.find((a) => a.id === val);
+                const updated: PipelineFilterOptions = {
+                  ...filterOptions,
+                  advisorId: val,
+                  advisorName: advObj ? advObj.name : '',
+                };
                 setFilterOptions(updated);
                 loadData(updated);
               }}
@@ -349,6 +389,14 @@ export function PipelinePage() {
             <span className="px-2 py-1 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
               Cierre: {metrics.cierre}
             </span>
+            {metrics.noInteresado > 0 && (
+              <span className="px-2 py-1 rounded bg-red-500/10 text-red-300 border border-red-500/20">
+                Descarte: {metrics.noInteresado}
+              </span>
+            )}
+            <span className="px-2 py-1 rounded bg-violet-500/10 text-violet-300 border border-violet-500/20">
+              Conversión: {metrics.conversionRate}%
+            </span>
           </div>
         </div>
       </header>
@@ -406,6 +454,16 @@ export function PipelinePage() {
         onApplyFilters={(newOpts) => {
           const safeOpts = isAdmin ? newOpts : { ...newOpts, advisorId: user?.uid || '' };
           setFilterOptions(safeOpts);
+          if (safeOpts.startDate && safeOpts.endDate) {
+            setDateRange({
+              preset: safeOpts.dateRange === 'last_30_days' ? '30d' : 'custom',
+              startDate: safeOpts.startDate,
+              endDate: safeOpts.endDate,
+              label: safeOpts.dateRange === 'last_30_days' ? 'Últimos 30 días' : formatFriendlyRange(safeOpts.startDate, safeOpts.endDate),
+            });
+          } else if (safeOpts.dateRange === 'all') {
+            setDateRange(buildPresetRange('all'));
+          }
           loadData(safeOpts);
         }}
         advisors={advisors}

@@ -95,9 +95,9 @@ function routeLabel(
 const statusConfig: Record<string, { label: string; icon: string; className: string }> = {
   pending:   { label: 'Enviando…',     icon: '🕓', className: 'text-zinc-500' },
   sent:      { label: 'Enviado',       icon: '✓',  className: 'text-zinc-500' },
-  delivered: { label: 'Entregado',     icon: '✓✓', className: 'text-zinc-400' },
-  read:      { label: 'Leído',         icon: '✓✓', className: 'text-sky-400' },
-  failed:    { label: 'No entregado',  icon: '⚠',  className: 'text-red-400 font-medium' },
+  delivered: { label: 'Entregado',     icon: '✓✓', className: 'text-zinc-600 dark:text-zinc-400' },
+  read:      { label: 'Leído',         icon: '✓✓', className: 'text-sky-700 dark:text-sky-400 font-medium' },
+  failed:    { label: 'No entregado',  icon: '⚠',  className: 'text-red-600 dark:text-red-400 font-medium' },
 };
 
 /**
@@ -138,19 +138,19 @@ function friendlyFailureReason(code?: string, rawReason?: string): string | unde
 const senderConfig = {
   lead: {
     label:  'Lead',
-    bubble: 'bg-zinc-700 text-zinc-100',
+    bubble: 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 border border-zinc-200/90 dark:border-transparent shadow-xs',
   },
   ai: {
     label:  '🤖 Victoria IA',
-    bubble: 'bg-violet-600/20 border border-violet-500/20 text-violet-100',
+    bubble: 'bg-violet-50/90 dark:bg-violet-600/20 border border-violet-200 dark:border-violet-500/20 text-zinc-900 dark:text-violet-100 shadow-xs',
   },
   advisor: {
     label:  '✋ Asesor',
-    bubble: 'bg-blue-600/20 border border-blue-500/20 text-blue-100',
+    bubble: 'bg-sky-50 dark:bg-blue-600/20 border border-sky-200 dark:border-blue-500/20 text-zinc-900 dark:text-blue-100 shadow-xs',
   },
   system: {
     label:  'Sistema',
-    bubble: 'bg-zinc-800/80 border border-zinc-700 text-zinc-400 text-xs italic',
+    bubble: 'bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-400 text-xs italic',
   },
 };
 
@@ -206,7 +206,7 @@ export function MessageBubble({
   if (message.senderType === 'system') {
     return (
       <div className="flex justify-center my-2">
-        <span className="text-xs text-zinc-500 bg-zinc-800/80 border border-zinc-700 px-3 py-1 rounded-full">
+        <span className="text-xs text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 px-3 py-1 rounded-full shadow-2xs">
           {message.content}
         </span>
       </div>
@@ -232,7 +232,7 @@ export function MessageBubble({
   return (
     <div className={`flex flex-col gap-0.5 ${isSticker ? 'max-w-[160px]' : 'max-w-[75%]'} ${isOutbound ? 'self-end items-end' : 'self-start items-start'}`}>
       {/* Etiqueta del remitente */}
-      <span className={`text-[10px] text-zinc-500 px-1 ${isOutbound ? 'text-right' : 'text-left'}`}>
+      <span className={`text-[10px] text-zinc-600 dark:text-zinc-500 px-1 font-medium ${isOutbound ? 'text-right' : 'text-left'}`}>
         {senderLabel}
       </span>
 
@@ -387,7 +387,7 @@ export function MessageBubble({
           </button>
         </span>
       )}
-      <span className={`max-w-full rounded-full border border-zinc-800 bg-zinc-900/80 px-2 py-0.5 text-[10px] text-zinc-500 ${isOutbound ? 'text-right' : 'text-left'}`}>
+      <span className={`max-w-full rounded-full border border-zinc-200 dark:border-zinc-800 bg-zinc-100/90 dark:bg-zinc-900/80 px-2 py-0.5 text-[10px] text-zinc-600 dark:text-zinc-500 ${isOutbound ? 'text-right' : 'text-left'}`}>
         {route}
       </span>
     </div>

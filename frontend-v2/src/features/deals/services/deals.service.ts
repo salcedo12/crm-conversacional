@@ -75,6 +75,17 @@ export interface PaymentPlan {
   notes?:      string;
 }
 
+export interface DealPlanApproval {
+  id:              string;
+  status:          'pending' | 'approved' | 'rejected';
+  approverPhone:   string;
+  approverName?:   string;
+  requestedAt:     number | null;
+  resolvedAt?:     number | null;
+  resolvedBy?:     string | null;
+  responseNotes?:  string | null;
+}
+
 export interface DealSummary {
   id:            string;
   leadId:        string;
@@ -87,6 +98,7 @@ export interface DealSummary {
   buyerProfiles: ClientProfile[];
   lot:           DealLot | null;
   plan?:         PaymentPlan | null;
+  planApproval?: DealPlanApproval | null;
   documents?:    DealDocumentInfo[];
   attachments?:  DealAttachment[];
   cancelReason?: string;
@@ -100,6 +112,14 @@ export type DealAttachmentCategory =
   | 'referral_evidence'
   | 'separation_payment';
 
+export interface DocumentLot {
+  projectId?: string;
+  sector: string;
+  lotNumber: string;
+  lotCode?: string;
+  inventoryLotId?: string;
+}
+
 export interface DealAttachment {
   id:             string;
   category:       DealAttachmentCategory;
@@ -111,6 +131,7 @@ export interface DealAttachment {
   paymentAmount?: number;
   paymentDate?:   string;
   note?:          string;
+  lot?:           DocumentLot | null;
   uploadedAt:     number | null;
   uploadedBy:     string;
   uploadedByName: string;
@@ -154,6 +175,7 @@ export const GENDER_LABELS: Record<Gender, string> = {
 
 const _list   = httpsCallable<{ companyId: string; leadId: string }, { deals: DealSummary[] }>(functions, 'listLeadDeals');
 const _listCompany = httpsCallable<{ companyId: string }, { deals: DealSummary[] }>(functions, 'listCompanyDeals');
+const _get = httpsCallable<{ companyId: string; dealId: string }, { deal: DealSummary }>(functions, 'getDeal');
 const _create = httpsCallable<{ companyId: string; leadId: string }, { dealId: string }>(functions, 'createDeal');
 const _find   = httpsCallable<
   { companyId: string; identificationKind: IdentificationKind; identificationNumber: string },
@@ -169,6 +191,11 @@ export async function listLeadDeals(companyId: string, leadId: string): Promise<
 
 export async function listCompanyDeals(companyId: string): Promise<DealSummary[]> {
   return (await _listCompany({ companyId })).data.deals;
+}
+
+export async function getDeal(companyId: string, dealId: string): Promise<DealSummary> {
+  const res = await _get({ companyId, dealId });
+  return res.data.deal;
 }
 
 export async function createDeal(companyId: string, leadId: string): Promise<string> {
@@ -367,6 +394,66 @@ export async function saveDealPlan(companyId: string, dealId: string, plan: Omit
   return (await _savePlan({ companyId, dealId, plan })).data.status;
 }
 
+export interface PlanApprovalProposalInput {
+  termMonths:           number;
+  landValue:            number;
+  listPrice?:           number | null;
+  benefit:              number;
+  totalLand:            number;
+  separationSummary:    string;
+  ordinarySummary:      string;
+  extraordinarySummary?: string;
+  severanceSummary?:    string;
+  referredBy?:          string;
+  notes?:               string;
+}
+
+const _requestPlanApproval = httpsCallable<
+  {
+    companyId:     string;
+    dealId:        string;
+    approverPhone: string;
+    approverName?: string;
+    proposal:      PlanApprovalProposalInput;
+    planDraft?:    any;
+  },
+  {
+    ok:             boolean;
+    approvalId:     string;
+    status:         'pending';
+    approverPhone:  string;
+    sentVia:        string;
+    quickActionUrl: string;
+  }
+>(functions, 'requestPlanApproval', { timeout: 60_000 });
+
+export async function requestPlanApproval(
+  companyId:     string,
+  dealId:        string,
+  approverPhone: string,
+  proposal:      PlanApprovalProposalInput,
+  approverName?: string,
+  planDraft?:    any,
+) {
+  return (await _requestPlanApproval({ companyId, dealId, approverPhone, approverName, proposal, planDraft })).data;
+}
+
+const _checkPlanApprovalStatus = httpsCallable<
+  { companyId: string; dealId: string },
+  {
+    status:         'none' | 'pending' | 'approved' | 'rejected';
+    approvedBy?:    string;
+    responseNotes?: string;
+    approvedAt?:    number | null;
+    approverPhone?: string;
+    quickActionUrl?: string;
+  }
+>(functions, 'checkPlanApprovalStatus');
+
+export async function checkPlanApprovalStatus(companyId: string, dealId: string) {
+  return (await _checkPlanApprovalStatus({ companyId, dealId })).data;
+}
+
 // ─── Documentos: preventa y promesa (Fase 4) ─────────────────────────────────
 
 export type DealDocumentKind = 'preventa' | 'promesa';
@@ -406,6 +493,8 @@ export interface DealDocumentInfo {
   docublockDocumentId?: string;
   signedPdfStoragePath?: string;
   signature?:      DealSignatureInfo;
+  lot?:            DocumentLot | null;
+  superseded?:     { reason: string; at: number | null } | null;
 }
 
 // ─── Firma con DocuBlock (Fase 5) ────────────────────────────────────────────
@@ -489,6 +578,12 @@ export async function downloadDealDocument(companyId: string, dealId: string, ki
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+const _deleteDoc = httpsCallable<{ companyId: string; dealId: string; kind: DealDocumentKind; version: number }, { ok: true }>(functions, 'deleteDealDocument');
+
+export async function deleteDealDocument(companyId: string, dealId: string, kind: DealDocumentKind, version: number): Promise<void> {
+  await _deleteDoc({ companyId, dealId, kind, version });
 }
 
 export interface DocuBlockCountry { name: string; cities: string[] }

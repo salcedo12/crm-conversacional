@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Download, Eye, FileText, Loader2 } from 'lucide-react';
+import { Download, Eye, FileText, Loader2, Trash2 } from 'lucide-react';
 import {
+  deleteDealDocument,
   downloadDealDocument,
   fetchDealDocumentPdf,
   generateDealDocument,
@@ -63,6 +64,15 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
     await view(kind, res.version);
   });
 
+  const handleDelete = (kind: DealDocumentKind, version: number) => {
+    const label = `${LABELS[kind]} · v${version}`;
+    if (!window.confirm(`¿Seguro que deseas eliminar ${label}? Esta acción no se puede deshacer.`)) return;
+    run(`del-${kind}-${version}`, async () => {
+      await deleteDealDocument(companyId, deal.id, kind, version);
+      onChanged();
+    });
+  };
+
   return (
     <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 sm:rounded-md sm:px-2.5 sm:py-2">
       <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
@@ -92,6 +102,15 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
                   className={`${dealActionCls} font-normal text-zinc-400 hover:text-zinc-200`}
                 >
                   {busy === `dl-${d.kind}-${d.version}` ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />} Word
+                </button>}
+                {canDownload && <button
+                  type="button"
+                  disabled={!!busy}
+                  onClick={() => handleDelete(d.kind, d.version)}
+                  title="Eliminar este contrato"
+                  className={`${dealActionCls} font-normal text-red-400 hover:bg-red-500/10 hover:text-red-300`}
+                >
+                  {busy === `del-${d.kind}-${d.version}` ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />} Borrar
                 </button>}
               </span>
             </li>

@@ -123,15 +123,44 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
   }
 
   const now = Timestamp.now();
+
+  // Si el lead ya tiene otro negocio con compradores, heredarlos para no reescribirlos
+  const prevSnap = await dealsCol(data.companyId).where('leadId', '==', data.leadId).get();
+  const prevWithBuyers = prevSnap.docs
+    .map((d) => d.data() as Deal)
+    .filter((d) => Array.isArray(d.buyers) && d.buyers.length > 0)
+    .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))[0];
+
+  let inheritedBuyers = prevWithBuyers?.buyers ?? [];
+  let inheritedBuyerNames = prevWithBuyers?.buyerNames ?? [];
+  let inheritedBuyerAttachments = (prevWithBuyers?.attachments ?? [])
+    .filter((a) => a.category === 'buyer_identification');
+
+  // Si no había compradores en deals previos, buscar si hay clientes ya registrados para este lead en clientsCol
+  if (!inheritedBuyers.length) {
+    try {
+      const clientSnap = await clientsCol(data.companyId).where('leadIds', 'array-contains', data.leadId).get();
+      if (!clientSnap.empty) {
+        const sorted = clientSnap.docs.map((doc) => ({ ...(doc.data() as ClientProfile), id: doc.id }));
+        inheritedBuyers = sorted.map((c, i) => ({ clientId: c.id, order: i + 1 }));
+        inheritedBuyerNames = sorted.map((c) => `${c.firstNames} ${c.lastNames}`.trim());
+      }
+    } catch (clientErr) {
+      logger.warn('[Deals] Error buscando clientes existentes para lead', { leadId: data.leadId, error: clientErr });
+    }
+  }
+
   const deal: Omit<Deal, 'id'> = {
     companyId: data.companyId,
     leadId: data.leadId,
     advisorId: lead.assignedTo || ctx.uid,
     status: 'borrador',
-    buyers: [],
+    buyers: inheritedBuyers,
+    ...(inheritedBuyerNames.length ? { buyerNames: inheritedBuyerNames } : {}),
     lot: null,
     plan: null,
     documents: [],
+    ...(inheritedBuyerAttachments.length ? { attachments: inheritedBuyerAttachments } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -146,7 +175,7 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     actorId: ctx.uid,
     actorName: actor.name,
     event: 'created',
-    title: 'Negocio creado',
+    title: inheritedBuyers.length ? 'Nuevo negocio creado (compradores vinculados)' : 'Negocio creado',
   }));
   await batch.commit();
   logger.info('[Deals] Negocio creado', { companyId: data.companyId, leadId: data.leadId, dealId: ref.id });

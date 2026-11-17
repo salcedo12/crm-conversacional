@@ -25,6 +25,9 @@ export interface AdvisorWhatsappQrResult {
   configured: boolean;
   qrCode?: string;
   qrCodeDataUrl?: string;
+  /** Código de 8 caracteres para "Vincular con el número de teléfono". */
+  pairingCode?: string;
+  pairingPhone?: string;
   phone?: string;
   displayName?: string;
   lastSeenAt?: string;
@@ -39,7 +42,7 @@ const _listConnections = httpsCallable<
 >(functions, 'listAdvisorWhatsappConnections');
 
 const _requestQr = httpsCallable<
-  { companyId: string; advisorId?: string },
+  { companyId: string; advisorId?: string; pairingPhone?: string },
   AdvisorWhatsappQrResult
 >(functions, 'requestAdvisorWhatsappQr');
 
@@ -78,6 +81,25 @@ export async function requestAdvisorWhatsappQr(
   advisorId?: string
 ): Promise<AdvisorWhatsappQrResult> {
   return (await _requestQr({ companyId, advisorId })).data;
+}
+
+/**
+ * Pide un código de vinculación (en vez del QR). El asesor lo escribe en
+ * WhatsApp → Dispositivos vinculados → Vincular con el número de teléfono.
+ * `phone` con indicativo de país (57300...).
+ */
+export async function requestAdvisorWhatsappPairingCode(
+  companyId: string,
+  advisorId: string,
+  phone: string
+): Promise<AdvisorWhatsappQrResult> {
+  return (await _requestQr({ companyId, advisorId, pairingPhone: phone })).data;
+}
+
+/** Formato legible del código: ABCD-1234. */
+export function formatPairingCode(code: string): string {
+  const clean = code.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
 }
 
 export async function disconnectAdvisorWhatsapp(companyId: string, advisorId?: string): Promise<void> {

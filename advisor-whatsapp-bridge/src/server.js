@@ -523,12 +523,31 @@ const TERMINAL_CLOSES = {
   },
 };
 
+// Una sesión está vinculada cuando WhatsApp confirmó el emparejamiento
+// (`account` firmado). OJO: con código de vinculación Baileys llena `me.id`
+// apenas se PIDE el código, así que `me.id` solo ya no sirve como señal.
+function isLinkedCreds(creds) {
+  if (!creds) return false;
+  if (creds.account) return true;
+  return !!creds.me?.id && !creds.pairingCode;
+}
+
+// El código de vinculación dura lo que el socket siga esperando (Baileys lo
+// cierra cuando se acaban los "refs"). Con qrTimeout de 60 s eso son varios
+// minutos; se informa un margen conservador.
+const PAIRING_CODE_TTL_MS = 3 * 60_000;
+const PAIRING_SOCKET_QR_TIMEOUT_MS = 60_000;
+
 function newRecord(lidMaps) {
   return {
     status: 'qr_pending',
     error: '',
     qrCode: '',
     qrCodeDataUrl: '',
+    pairingPhone: '',
+    pairingCode: '',
+    pairingError: '',
+    pairingRequested: false,
     phone: '',
     displayName: '',
     lastSeenAt: '',
@@ -555,7 +574,7 @@ function releaseSocket(record) {
   try { sock.end?.(undefined); } catch { /* noop */ }
 }
 
-async function startSession(companyId, advisorId) {
+async function startSession(companyId, advisorId, pairingPhone = '') {
   const key = sessionKey(companyId, advisorId);
   let record = sessions.get(key);
   if (record?.sock) return record;
@@ -566,6 +585,7 @@ async function startSession(companyId, advisorId) {
     record = newRecord(await loadLidMaps(companyId, advisorId));
     sessions.set(key, record);
   }
+  if (pairingPhone) record.pairingPhone = pairingPhone;
   if (record.reconnectTimer) {
     clearTimeout(record.reconnectTimer);
     record.reconnectTimer = null;
@@ -575,8 +595,10 @@ async function startSession(companyId, advisorId) {
     await mkdir(sessionPath(companyId, advisorId), { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath(companyId, advisorId));
     const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
-    const wasRegistered = !!state.creds?.me?.id;
+    const wasRegistered = isLinkedCreds(state.creds);
     if (!wasRegistered) record.status = 'qr_pending';
+    // Modo código: solo aplica a sesiones sin vincular.
+    const pairingMode = !wasRegistered && !!record.pairingPhone;
     record.error = '';
 
     const sock = makeWASocket({
@@ -588,6 +610,7 @@ async function startSession(companyId, advisorId) {
       // notificaciones y la sesión se parece menos a un bot.
       markOnlineOnConnect: false,
       syncFullHistory: false,
+      ...(pairingMode ? { qrTimeout: PAIRING_SOCKET_QR_TIMEOUT_MS } : {}),
       // Responder reintentos de cifrado con el mensaje original (evita el
       // "Esperando este mensaje" del lado del cliente).
       getMessage: async (msgKey) => record.messageCache.get(msgKey.id) || undefined,
@@ -643,7 +666,25 @@ async function handleConnectionUpdate(companyId, advisorId, record, sock, update
   // Eventos tardíos de un socket ya reemplazado: ignorar.
   if (record.sock !== sock) return;
 
-  if (update.qr) {
+  if (update.qr && record.pairingPhone) {
+    // Modo código: el primer "qr" indica que el socket ya puede pedir el
+    // código de vinculación. No se muestra QR.
+    record.status = 'qr_pending';
+    if (!record.pairingCode && !record.pairingRequested) {
+      record.pairingRequested = true;
+      try {
+        const code = await sock.requestPairingCode(record.pairingPhone);
+        if (record.sock !== sock) return;
+        record.pairingCode = code;
+        record.pairingError = '';
+        record.expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS).toISOString();
+        log.info({ companyId, advisorId }, 'Codigo de vinculacion generado');
+      } catch (err) {
+        record.pairingError = err instanceof Error ? err.message : 'No se pudo generar el codigo.';
+        log.warn({ err, companyId, advisorId }, 'No se pudo generar codigo de vinculacion');
+      }
+    }
+  } else if (update.qr) {
     record.status = 'qr_pending';
     record.qrCode = update.qr;
     record.qrCodeDataUrl = await QRCode.toDataURL(update.qr, { margin: 1, width: 320 });
@@ -656,6 +697,7 @@ async function handleConnectionUpdate(companyId, advisorId, record, sock, update
     record.error = '';
     record.qrCode = '';
     record.qrCodeDataUrl = '';
+    clearPairing(record);
     record.reconnectAttempts = 0;
     record.phone = jidToPhone(sock.user?.id);
     record.displayName = sock.user?.name || '';
@@ -682,10 +724,13 @@ async function handleConnectionUpdate(companyId, advisorId, record, sock, update
 
   const statusCode = new Boom(update.lastDisconnect?.error).output.statusCode;
   const wasConnected = record.status === 'connected';
-  const neverLinked = !sock.authState?.creds?.me?.id;
+  const neverLinked = !isLinkedCreds(sock.authState?.creds);
   releaseSocket(record);
   record.qrCode = '';
   record.qrCodeDataUrl = '';
+  // El código solo vale para este socket (el 515 tras emparejar no lo necesita).
+  record.pairingCode = '';
+  record.pairingRequested = false;
   log.warn({ companyId, advisorId, statusCode, wasConnected }, 'WhatsApp desconectado');
 
   const terminal = TERMINAL_CLOSES[statusCode];
@@ -710,7 +755,10 @@ async function handleConnectionUpdate(companyId, advisorId, record, sock, update
   // (un QR cada 20 s, día y noche). El asesor pide uno nuevo desde el CRM.
   if (neverLinked && statusCode !== DisconnectReason.restartRequired) {
     record.status = 'disconnected';
-    record.error = 'El QR expiro sin escanearse. Genera uno nuevo.';
+    record.error = record.pairingPhone
+      ? 'El codigo de vinculacion expiro sin usarse. Genera uno nuevo.'
+      : 'El QR expiro sin escanearse. Genera uno nuevo.';
+    clearPairing(record);
     record.reconnectAttempts = 0;
     await rm(sessionPath(companyId, advisorId), { recursive: true, force: true }).catch(() => undefined);
     log.info({ companyId, advisorId, statusCode }, 'QR expirado sin escanear; sesion detenida');
@@ -746,11 +794,20 @@ function enqueueSend(record, task) {
   return run;
 }
 
+function clearPairing(record) {
+  record.pairingPhone = '';
+  record.pairingCode = '';
+  record.pairingError = '';
+  record.pairingRequested = false;
+}
+
 function publicSession(record) {
   return {
     status: record.status,
     qrCode: record.qrCode || undefined,
     qrCodeDataUrl: record.qrCodeDataUrl || undefined,
+    pairingCode: record.pairingCode || undefined,
+    pairingPhone: record.pairingPhone || undefined,
     phone: record.phone || undefined,
     displayName: record.displayName || undefined,
     lastSeenAt: record.lastSeenAt || undefined,
@@ -778,11 +835,79 @@ app.post('/advisor-whatsapp/session/qr', requireBridgeKey, async (req, res) => {
   }
 
   try {
+    const existing = sessions.get(sessionKey(companyId, advisorId));
+    if (existing?.pairingPhone && existing.status !== 'connected') {
+      // Venía en modo código: volver a QR con un socket limpio.
+      if (existing.reconnectTimer) {
+        clearTimeout(existing.reconnectTimer);
+        existing.reconnectTimer = null;
+      }
+      clearPairing(existing);
+      releaseSocket(existing);
+      await rm(sessionPath(companyId, advisorId), { recursive: true, force: true }).catch(() => undefined);
+    }
     const record = await startSession(companyId, advisorId);
     res.json(publicSession(record));
   } catch (err) {
     log.error({ err, companyId, advisorId }, 'No se pudo iniciar sesion');
     res.status(500).json({ message: err instanceof Error ? err.message : 'No se pudo iniciar sesion' });
+  }
+});
+
+// Vincular con código de 8 caracteres (WhatsApp → Dispositivos vinculados →
+// Vincular con el número de teléfono) en lugar de escanear el QR.
+app.post('/advisor-whatsapp/session/pairing-code', requireBridgeKey, async (req, res) => {
+  const { companyId, advisorId, phone } = req.body || {};
+  const pairingPhone = String(phone || '').replace(/\D/g, '');
+  if (!companyId || !advisorId) {
+    res.status(400).json({ message: 'companyId y advisorId son requeridos' });
+    return;
+  }
+  if (pairingPhone.length < 10 || pairingPhone.length > 15) {
+    res.status(400).json({ message: 'Numero invalido. Escribelo con indicativo de pais, por ejemplo 573001234567.' });
+    return;
+  }
+
+  try {
+    const key = sessionKey(companyId, advisorId);
+    const existing = sessions.get(key);
+    if (existing?.status === 'connected') {
+      res.json(publicSession(existing));
+      return;
+    }
+    if (existing?.sock && isLinkedCreds(existing.sock.authState?.creds)) {
+      res.status(409).json({ message: 'Este WhatsApp ya esta vinculado y se esta reconectando. Desconectalo primero si quieres vincularlo de nuevo.' });
+      return;
+    }
+
+    // Siempre un socket limpio en modo código: se descarta el QR o el código
+    // anterior que estuviera pendiente.
+    if (existing) {
+      if (existing.reconnectTimer) {
+        clearTimeout(existing.reconnectTimer);
+        existing.reconnectTimer = null;
+      }
+      releaseSocket(existing);
+      existing.qrCode = '';
+      existing.qrCodeDataUrl = '';
+      clearPairing(existing);
+    }
+    await rm(sessionPath(companyId, advisorId), { recursive: true, force: true }).catch(() => undefined);
+    const record = await startSession(companyId, advisorId, pairingPhone);
+
+    // Esperar a que WhatsApp entregue el código (normalmente 1–3 s).
+    const deadline = Date.now() + 20_000;
+    while (!record.pairingCode && !record.pairingError && record.status !== 'connected' && Date.now() < deadline) {
+      await sleep(300);
+    }
+    if (!record.pairingCode && record.status !== 'connected') {
+      res.status(502).json({ message: record.pairingError || 'WhatsApp no entrego el codigo a tiempo. Intenta de nuevo.' });
+      return;
+    }
+    res.json(publicSession(record));
+  } catch (err) {
+    log.error({ err, companyId, advisorId }, 'No se pudo generar codigo de vinculacion');
+    res.status(500).json({ message: err instanceof Error ? err.message : 'No se pudo generar el codigo.' });
   }
 });
 
@@ -899,7 +1024,7 @@ async function restoreSessions() {
     let registered = false;
     try {
       const creds = JSON.parse(await readFile(path.join(SESSION_DIR, dir.name, 'creds.json'), 'utf8'));
-      registered = !!creds?.registered || !!creds?.me?.id;
+      registered = isLinkedCreds(creds);
     } catch { /* sin creds */ }
     if (!registered) {
       log.info({ companyId, advisorId }, 'Sesion sin vincular; no se restaura');

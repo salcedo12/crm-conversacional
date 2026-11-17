@@ -161,7 +161,9 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
           info={selected ? (
             <span className="flex items-center gap-1.5 text-sm text-zinc-200 sm:text-xs">
               <MapPin size={14} className="shrink-0 text-emerald-400" />
-              <span className="truncate">{selected.sector} · Lote {selected.number} · {formatArea(selected.areaM2)}{selected.corner ? ' · Esquinero' : ''}</span>
+              <span className="truncate">
+                {selected.sector} · Lote {selected.number}{selected.code ? ` · Cód. ${selected.code}` : ''} · {formatArea(selected.areaM2)}{selected.corner ? ' · Esquinero' : ''}
+              </span>
             </span>
           ) : 'Toca un lote disponible para escogerlo.'}
           actions={<>
@@ -193,7 +195,14 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
                     : 'border-zinc-800 bg-zinc-950/40 hover:border-emerald-500/50'
                 }`}
               >
-                <p className="text-base font-semibold text-zinc-100 sm:text-sm">{lot.number}</p>
+                <div className="flex items-baseline justify-between gap-1">
+                  <p className="text-base font-semibold text-zinc-100 sm:text-sm">{lot.number}</p>
+                  {lot.code && (
+                    <span className="font-mono text-[10px] text-zinc-400 sm:text-[9px]">
+                      {lot.code}
+                    </span>
+                  )}
+                </div>
                 <p className="truncate text-[11px] text-zinc-500 sm:text-[10px]">{formatArea(lot.areaM2)}</p>
                 {(sectors.length > 1 && !sector) && <p className="truncate text-[10px] text-zinc-600 sm:text-[9px]">{lot.sector}</p>}
                 {lot.corner && <p className="mt-0.5 text-[10px] font-semibold uppercase text-amber-300/90 sm:text-[9px]">Esquinero</p>}

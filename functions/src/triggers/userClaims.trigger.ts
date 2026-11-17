@@ -58,6 +58,14 @@ export const onUserProfileWritten = onDocumentWritten(
       const role = rawRole === 'platformAdmin' ? 'admin' : rawRole;
       const active = data.active !== false;
 
+      // Seguridad (R01): conceder platformAdmin es un evento sensible; dejar rastro.
+      if (platformAdmin) {
+        const prevClaims = (await auth.getUser(userId).catch(() => null))?.customClaims ?? {};
+        if (prevClaims.platformAdmin !== true) {
+          logger.warn('[UserClaims][SECURITY] platformAdmin concedido', { userId, companyId, role });
+        }
+      }
+
       await auth.setCustomUserClaims(userId, { companyId, role, active, platformAdmin });
       logger.info('[UserClaims] Claims actualizados', { userId, companyId, role, active, platformAdmin });
     } catch (err) {

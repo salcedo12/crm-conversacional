@@ -7,8 +7,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -16,7 +18,10 @@ import { useAuth } from '../providers/AuthProvider';
 import { useTheme } from '../providers/ThemeProvider';
 import {
   disconnectAdvisorWhatsapp,
+  formatPairingCode,
   listAdvisorWhatsappConnections,
+  pairingPhoneDigits,
+  requestAdvisorWhatsappPairingCode,
   requestAdvisorWhatsappQr,
   type AdvisorWhatsappConnection,
   type AdvisorWhatsappQrResult,
@@ -34,13 +39,19 @@ export function AdvisorWhatsappScreen({ navigation }: Props) {
   const [qrResult, setQrResult] = useState<AdvisorWhatsappQrResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [codePhone, setCodePhone] = useState('');
+  const [showCodeForm, setShowCodeForm] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const load = async (silent = false) => {
     if (!companyId || !profile) return;
     if (!silent) setLoading(true);
     try {
       const connections = await listAdvisorWhatsappConnections(companyId, profile.id);
-      setConnection(connections[0] || null);
+      const next = connections[0] || null;
+      setConnection(next);
+      // Ya conectado: quitar el código/QR que quedó en pantalla.
+      if (next?.status === 'connected') setQrResult((prev) => (prev && prev.status !== 'connected' ? null : prev));
     } catch (err) {
       console.warn('[AdvisorWhatsappScreen] load error', err);
     } finally {
@@ -67,6 +78,48 @@ export function AdvisorWhatsappScreen({ navigation }: Props) {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Con un código a la vista, revisar seguido para mostrar "Conectado" apenas
+  // se escriba en WhatsApp.
+  const waitingCode = !!qrResult?.pairingCode;
+  useEffect(() => {
+    if (!waitingCode) return;
+    const interval = setInterval(() => void load(true), 5000);
+    return () => clearInterval(interval);
+  }, [waitingCode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openCodeForm = () => {
+    setShowCodeForm((open) => !open);
+    if (!codePhone && connection?.phone) setCodePhone(connection.phone.replace(/\D/g, ''));
+  };
+
+  const requestCode = async () => {
+    if (!companyId || !profile || busy) return;
+    const phone = pairingPhoneDigits(codePhone);
+    if (phone.length < 10 || phone.length > 15) {
+      Alert.alert('Número inválido', 'Escribe tu número con indicativo, por ejemplo 57 300 123 4567.');
+      return;
+    }
+    setBusy(true);
+    setQrResult(null);
+    try {
+      const result = await requestAdvisorWhatsappPairingCode(companyId, profile.id, phone);
+      setQrResult(result);
+      setShowCodeForm(false);
+      await load(true);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'No se pudo generar el código.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyCode = async () => {
+    if (!qrResult?.pairingCode) return;
+    await Clipboard.setStringAsync(formatPairingCode(qrResult.pairingCode));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const disconnect = async () => {
@@ -222,6 +275,83 @@ export function AdvisorWhatsappScreen({ navigation }: Props) {
             </Pressable>
           </View>
 
+          {status !== 'connected' ? (
+            <Pressable
+              disabled={busy || loading}
+              onPress={openCodeForm}
+              style={[
+                styles.secondaryBtn,
+                { borderColor: palette.borderStrong, backgroundColor: palette.bgElevated },
+                (busy || loading) && { opacity: 0.6 },
+              ]}
+            >
+              <Ionicons name="keypad-outline" size={16} color={palette.textPrimary} />
+              <Text style={[styles.secondaryBtnText, { color: palette.textPrimary }]}>
+                Vincular con código (sin QR)
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {showCodeForm && status !== 'connected' ? (
+            <View style={[styles.codeForm, { borderColor: palette.border, backgroundColor: palette.bgElevated }]}>
+              <Text style={[styles.codeLabel, { color: palette.textPrimary }]}>Tu número de WhatsApp</Text>
+              <TextInput
+                value={codePhone}
+                onChangeText={setCodePhone}
+                placeholder="57 300 123 4567"
+                placeholderTextColor={palette.textMuted}
+                keyboardType="phone-pad"
+                style={[
+                  styles.codeInput,
+                  { color: palette.textPrimary, borderColor: palette.borderStrong, backgroundColor: palette.bgSurface },
+                ]}
+              />
+              <Text style={[styles.codeHint, { color: palette.textMuted }]}>
+                Con indicativo de país (57 para Colombia).
+              </Text>
+              <Pressable
+                disabled={busy}
+                onPress={requestCode}
+                style={[styles.primaryBtn, { backgroundColor: palette.brand, flex: 0 }, busy && { opacity: 0.6 }]}
+              >
+                {busy ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.primaryBtnText}>Generar código</Text>
+                )}
+              </Pressable>
+            </View>
+          ) : null}
+
+          {qrResult?.pairingCode ? (
+            <View
+              style={[
+                styles.qrContainer,
+                { backgroundColor: palette.brandBg, borderColor: palette.brandBorder },
+              ]}
+            >
+              <Text style={[styles.qrTitle, { color: palette.textPrimary }]}>Tu código de vinculación</Text>
+              <Text selectable style={[styles.codeText, { color: palette.textPrimary }]}>
+                {formatPairingCode(qrResult.pairingCode)}
+              </Text>
+              <Pressable
+                onPress={copyCode}
+                style={[styles.secondaryBtn, { borderColor: palette.brandBorder, alignSelf: 'stretch' }]}
+              >
+                <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={16} color={palette.brandText} />
+                <Text style={[styles.secondaryBtnText, { color: palette.brandText }]}>
+                  {copied ? 'Copiado' : 'Copiar código'}
+                </Text>
+              </Pressable>
+              <Text style={[styles.qrSub, { color: palette.brandText, textAlign: 'left', alignSelf: 'stretch' }]}>
+                1. Abre WhatsApp → Dispositivos vinculados.{'\n'}
+                2. Toca «Vincular un dispositivo».{'\n'}
+                3. Toca «Vincular con el número de teléfono» y pega el código.{'\n'}
+                Vence en unos minutos; si vence, genera otro.
+              </Text>
+            </View>
+          ) : null}
+
           {qrResult?.qrCodeDataUrl ? (
             <View
               style={[
@@ -322,6 +452,21 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   dangerBtnText: { fontSize: 13, fontWeight: '700' },
+  secondaryBtn: {
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  secondaryBtnText: { fontSize: 13, fontWeight: '700' },
+  codeForm: { padding: 12, borderRadius: 10, borderWidth: 1, gap: 8 },
+  codeLabel: { fontSize: 13, fontWeight: '700' },
+  codeInput: { height: 44, borderRadius: 8, borderWidth: 1, paddingHorizontal: 12, fontSize: 16 },
+  codeHint: { fontSize: 11 },
+  codeText: { fontSize: 30, fontWeight: '800', letterSpacing: 4, marginVertical: 12, fontVariant: ['tabular-nums'] },
   qrContainer: {
     marginTop: 8,
     padding: 16,

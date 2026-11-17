@@ -4,7 +4,7 @@
  *   {#vendedor.esSM} / {^vendedor.esSM}  → Cañón (S+M) / resto (ZOMAC)
  *   {#proyecto.esCanon} {#proyecto.esRioClaro} {#proyecto.esLagunaMar} {#proyecto.esLlanoGrande}
  */
-const { replaceText, setCellText, wrapCell, deleteRow, wrapBlock, clearParagraphs, centerTableCells, setTableGrid, centerTable, tidyTable } = require('./docxXml.cjs');
+const { replaceText, setCellText, wrapCell, deleteRow, wrapBlock, clearParagraphs, centerTableCells, setTableGrid, centerTable, tidyTable, ensureAllTablesCantSplit } = require('./docxXml.cjs');
 const { prepareSignatureBoxes } = require('./signatureBoxes.cjs');
 
 const MARK_CANON = '(Texto para el proyecto CAÑON DE ARIZONA)';
@@ -34,6 +34,17 @@ function configureSeparationRows(xml) {
 }
 
 function convertPromesa(xml) {
+  // ── Pre-título: elimina Grupo 3 e image1.jpg del cuerpo para que el banner esté solo en el encabezado de la primera hoja ──
+  const titleText = 'CONTRATO DE PROMESA DE COMPRAVENTA';
+  const titleIdx = xml.indexOf(titleText);
+  if (titleIdx >= 0) {
+    const bodyStart = xml.indexOf('<w:body>') + 8;
+    const titleParaStart = xml.lastIndexOf('<w:p ', titleIdx);
+    if (titleParaStart > bodyStart) {
+      xml = xml.slice(0, bodyStart) + xml.slice(titleParaStart);
+    }
+  }
+
   // ── Tablas ──
   xml = setCellText(xml, 0, 0, 1, '{nombreCompleto}');               // compradores
   xml = setCellText(xml, 0, 1, 0, '{etiquetaId}:');
@@ -99,11 +110,99 @@ function convertPromesa(xml) {
   xml = wrapBlock(xml, { marker: MARK_CANON, lastStartsWith: 'El bien inmueble identificado hace parte del proyecto', open: '{#proyecto.esCanon}', close: '{/proyecto.esCanon}' });
   xml = wrapBlock(xml, { marker: MARK_RIO, lastStartsWith: 'El bien inmueble identificado hace parte del proyecto', open: '{#proyecto.esRioClaro}', close: '{/proyecto.esRioClaro}' });
   xml = wrapBlock(xml, { marker: MARK_LAGUNA, lastStartsWith: 'Las partes reconocen que, por tratarse', open: '{#proyecto.esLagunaMar}', close: '{/proyecto.esLagunaMar}' });
+
+  // Limpiar párrafos vacíos y espaciados entre la tabla de lote y la descripción del predio
+  const lotTableIdx = xml.indexOf('Condición del Terreno');
+  if (lotTableIdx !== -1) {
+    const tblEnd = xml.indexOf('</w:tbl>', lotTableIdx) + 8;
+    const paraPrimero = xml.indexOf('Parágrafo Primero: Naturaleza del bien prometido');
+    if (paraPrimero !== -1) {
+      const pBefore = xml.slice(0, paraPrimero);
+      const pStartMatch = [...pBefore.matchAll(/<w:p(?=[ >])/g)].pop();
+      const paraPrimeroStart = pStartMatch.index;
+      const chunk = xml.slice(tblEnd, paraPrimeroStart);
+
+      const extractProjectPara = (tag) => {
+        const o = chunk.indexOf('{#' + tag + '}');
+        const c = chunk.indexOf('{/' + tag + '}');
+        if (o === -1 || c === -1) return '';
+        const inside = chunk.slice(o, c);
+        const insideParas = inside.match(/<w:p\b[\s\S]*?<\/w:p>/g) || [];
+        return insideParas.find(p => p.replace(/<[^>]+>/g, '').trim().length > 50) || '';
+      };
+
+      const llanoP = extractProjectPara('proyecto.esLlanoGrande');
+      const canonP = extractProjectPara('proyecto.esCanon');
+      const rioP = extractProjectPara('proyecto.esRioClaro');
+      const lagunaP = extractProjectPara('proyecto.esLagunaMar');
+
+      if (llanoP && canonP && rioP && lagunaP) {
+        const cleanChunk =
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esLlanoGrande}</w:t></w:r></w:p>' +
+          llanoP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esLlanoGrande}</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esCanon}</w:t></w:r></w:p>' +
+          canonP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esCanon}</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esRioClaro}</w:t></w:r></w:p>' +
+          rioP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esRioClaro}</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t xml:space="preserve">{#proyecto.esLagunaMar}</w:t></w:r></w:p>' +
+          lagunaP +
+          '<w:p><w:r><w:t xml:space="preserve">{/proyecto.esLagunaMar}</w:t></w:r></w:p>';
+
+        xml = xml.slice(0, tblEnd) + cleanChunk + xml.slice(paraPrimeroStart);
+      }
+    }
+  }
   // Amenidades.
   xml = wrapBlock(xml, { marker: MARK_RIO, lastStartsWith: 'Portería, oficina', open: '{#proyecto.esRioClaro}', close: '{/proyecto.esRioClaro}' });
   xml = wrapBlock(xml, { marker: MARK_LLANO_REZAGO, lastStartsWith: 'Portería, oficina', open: '{#proyecto.esLlanoGrande}', close: '{/proyecto.esLlanoGrande}' });
   xml = wrapBlock(xml, { marker: MARK_CANON, lastStartsWith: 'portería, oficina', open: '{#proyecto.esCanon}', close: '{/proyecto.esCanon}' });
   xml = wrapBlock(xml, { marker: MARK_LAGUNA, lastStartsWith: 'Portería, cancha sintética', open: '{#proyecto.esLagunaMar}', close: '{/proyecto.esLagunaMar}' });
+
+  // Unificar amenidades de forma continua en el mismo párrafo ("de recorrido") y sin saltos vacíos
+  const startMarker = 'estarán compuestas por: </w:t></w:r>';
+  const startIdx = xml.indexOf(startMarker);
+  const endMarker = 'CLÁUSULA SEGUNDA';
+  const endIdx = xml.indexOf(endMarker, startIdx);
+  if (startIdx !== -1 && endIdx !== -1) {
+    const pBefore = xml.slice(0, endIdx);
+    const pStartMatch = [...pBefore.matchAll(/<w:p(?=[ >])/g)].pop();
+    const clausulaPStart = pStartMatch.index;
+    const regionToReplace = xml.slice(startIdx + startMarker.length, clausulaPStart);
+
+    const extractRuns = (tag) => {
+      const o = regionToReplace.indexOf('{#' + tag + '}');
+      const c = regionToReplace.indexOf('{/' + tag + '}');
+      if (o === -1 || c === -1) return '';
+      const inside = regionToReplace.slice(o, c);
+      const runs = inside.match(/<w:r(?=[ >])[\s\S]*?<\/w:r>/g) || [];
+      return runs.filter(r => !r.includes('{#' + tag + '}')).join('');
+    };
+
+    const rioRuns = extractRuns('proyecto.esRioClaro');
+    const llanoRuns = extractRuns('proyecto.esLlanoGrande');
+    const canonRuns = extractRuns('proyecto.esCanon');
+    const lagunaRuns = extractRuns('proyecto.esLagunaMar');
+
+    const inlineReplacement =
+      '<w:r><w:t xml:space="preserve">{#proyecto.esRioClaro}</w:t></w:r>' +
+      rioRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esRioClaro}</w:t></w:r>' +
+      '<w:r><w:t xml:space="preserve">{#proyecto.esLlanoGrande}</w:t></w:r>' +
+      llanoRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esLlanoGrande}</w:t></w:r>' +
+      '<w:r><w:t xml:space="preserve">{#proyecto.esCanon}</w:t></w:r>' +
+      canonRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esCanon}</w:t></w:r>' +
+      '<w:r><w:t xml:space="preserve">{#proyecto.esLagunaMar}</w:t></w:r>' +
+      lagunaRuns +
+      '<w:r><w:t xml:space="preserve">{/proyecto.esLagunaMar}</w:t></w:r>' +
+      '</w:p>';
+
+    xml = xml.slice(0, startIdx + startMarker.length) + inlineReplacement + xml.slice(clausulaPStart);
+  }
   // Cuentas bancarias.
   xml = wrapBlock(xml, { marker: '(Texto para el proyecto CAÑÓN DE ARIZONA)', lastStartsWith: 'y realizarse únicamente', open: '{#vendedor.esSM}', close: '{/vendedor.esSM}' });
   xml = wrapBlock(xml, { marker: MARK_OTHERS, lastStartsWith: 'y realizarse únicamente', open: '{^vendedor.esSM}', close: '{/vendedor.esSM}' });
@@ -115,7 +214,23 @@ function convertPromesa(xml) {
   xml = clearParagraphs(xml, 'GRUPO CONSTRUCTOR MERAKI S.A.S ZOMAC,');
   xml = clearParagraphs(xml, '(EL TEXTO VA CONTINUO SOLO CAMBIA EL NOMBRE DE LA EMPRESA DE ACUERDO AL PROYECTO)');
 
+  // Unificar "expedido por el área administrativa del {vendedor.razonSocial}," de forma continua sin espacios vacíos
+  const adminMarker = 'expedido por el área administrativa del';
+  const adminIdx = xml.indexOf(adminMarker);
+  const lote2Marker = '2. Que el lote objeto';
+  const lote2Idx = xml.indexOf(lote2Marker, adminIdx);
+  if (adminIdx !== -1 && lote2Idx !== -1) {
+    const pBeforeLote2 = xml.slice(0, lote2Idx);
+    const pLote2Start = [...pBeforeLote2.matchAll(/<w:p(?=[ >])/g)].pop();
+    if (pLote2Start) {
+      xml = xml.slice(0, adminIdx) +
+        'expedido por el área administrativa del {vendedor.razonSocial},</w:t></w:r></w:p>' +
+        xml.slice(pLote2Start.index);
+    }
+  }
+
   // ── Datos dentro de párrafos ──
+  xml = replaceText(xml, '<<CÓDIGO DE REFERENCIA DEL LOTE>>', '{lote.codigo}');
   xml = replaceText(xml, 'ETAPA MAR SANTORINI, ubicado', 'ETAPA {lote.sector}, ubicado');
   xml = replaceText(xml,
     'CIENTO CUARENTA Y CINCO MILLONES DE PESOS M/CTE ($145.000.000)',
@@ -157,6 +272,10 @@ function convertPromesa(xml) {
     /(<w:pPr><w:spacing [^>]*\/>)<w:ind w:left="610" w:right="0" w:firstLine="600"\/>(<w:jc w:val="center"\/><w:textDirection w:val="btLr"\/><\/w:pPr>(?:(?!<\/w:p>)[\s\S])*?>FIRMA<)/g,
     '$1$2');
   xml = prepareSignatureBoxes(xml, { heading: 'PROMITENTE COMPRADOR', sellerLines: 3 });
+  xml = ensureAllTablesCantSplit(xml);
+  // Unificar colores con el oro oficial Meraki (#D5B545)
+  xml = xml.replace(/B7871C/gi, 'D5B545');
+  xml = xml.replace(/<w:lastRenderedPageBreak\/>/g, '');
   return xml;
 }
 

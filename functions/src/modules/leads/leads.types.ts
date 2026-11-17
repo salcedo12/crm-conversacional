@@ -97,8 +97,17 @@ export interface Lead {
   assignedTo?:      string;           // userId del asesor asignado
   previousAdvisorId?: string | null;
   exclusivityExpiredAt?: Timestamp;
-  /** Inicio del tiempo de espera para que el asesor asignado haga primer contacto. */
+  /**
+   * Cuándo recibió el lead el asesor actual. También es el corte del muro de privacidad
+   * del chat (el asesor reasignado no ve lo anterior), por eso solo cambia cuando el
+   * lead cambia de asesor.
+   */
   advisorAssignedAt?: Timestamp;
+  /**
+   * Reinicio del reloj de primer contacto sin cambiar de asesor (la IA le pasa el lead,
+   * o no hubo asesor alterno). El reloj corre desde el mayor entre este y advisorAssignedAt.
+   */
+  firstContactClockAt?: Timestamp;
   /** Ultima reasignacion automatica por falta de primer contacto. */
   lastAutoReassignedAt?: Timestamp;
   /** Numero de reasignaciones automaticas realizadas antes del primer contacto. */
@@ -123,6 +132,12 @@ export interface Lead {
   legalWelcomeSent?: boolean;
   /** Cuándo el lead dijo que no le interesa o pidió no ser contactado. */
   aiRejectedAt?:    Timestamp;
+  /** Cuándo la IA le preguntó al lead por qué no le interesa (se pregunta una sola vez). */
+  aiNoInterestAskedAt?: Timestamp;
+  /** Cuándo el lead le dijo que no a la cita (la primera vez se sigue conversando). */
+  aiCitaDeclinedAt?: Timestamp;
+  /** Motivo de no interés que registró la IA (categoría = la de lossCategory del análisis). */
+  aiNoInterest?: { category: string; reason: string; definitive: boolean; at: Timestamp };
   takeoverBy?:      string;           // userId que tomó control manual
   aiDisabledAt?:    Timestamp;        // momento en que se apagó la IA (para SLA de 24h)
   aiTakeoverSlaStatus?: 'pending' | 'compliant' | 'overdue'; // estado SLA 24h tras apagar IA

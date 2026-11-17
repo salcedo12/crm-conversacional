@@ -248,10 +248,32 @@ export function formatDateTimeBogota(date: Date): string {
   return `${dName} ${dNum} ${mName} - ${String(h12).padStart(2, '0')}:${mins} ${ampm}`;
 }
 
+/**
+ * Bitácora que deja el sistema al aprobar un traslado de prospecto
+ * ("Traslado Aprobado / Gestión Comercial", "traslado_comercial", "Traslado comercial: <motivo>").
+ * No es una gestión del asesor.
+ */
+export function isTransferBitacora(action?: string | null, text?: string | null): boolean {
+  const clean = (s: unknown) =>
+    String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const a = clean(action);
+  const t = clean(text);
+  return (
+    a.includes('traslado') ||
+    a.includes('reasignacion') ||
+    t.includes('traslado') ||
+    t.includes('reasignacion') ||
+    t.includes('solicitud de traslado')
+  );
+}
+
 export function isRealCommercialFollowUp(action?: string | null, text?: string | null): boolean {
   const rawAction = String(action ?? '').trim();
   const rawText = String(text ?? '').trim();
   if (!rawAction && !rawText) return false;
+
+  // El traslado aprobado no cuenta como seguimiento del asesor que recibe el prospecto.
+  if (isTransferBitacora(rawAction, rawText)) return false;
 
   const aNorm = normalizeStr(rawAction);
   const dNorm = normalizeStr(rawText);

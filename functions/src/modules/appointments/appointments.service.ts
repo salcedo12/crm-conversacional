@@ -4,13 +4,15 @@ import { env } from '../../config/env';
 import { leadsRepository } from '../leads/leads.repository';
 import { assignLead } from '../leads/leadAssignment.service';
 import { googleConnectionRepository } from '../calendar/googleConnection.repository';
-import { createMeetEvent, deleteEvent } from '../../integrations/google/google.client';
+import { createMeetEvent, deleteEvent, patchEventDetails } from '../../integrations/google/google.client';
 import { appointmentsRepository } from './appointments.repository';
 import { assertAppointmentAvailability } from './availability.service';
-import { buildEventTitle, buildEventDescription } from './appointmentMessages';
+import { buildEventTitle, buildEventDescription, retitleForModality } from './appointmentMessages';
+import { sendAdvisorPush } from '../messages/pushNotifications.service';
 import { getAiConfig } from '../ai/aiConfig.repository';
 import { postLeadSmartHomeBitacora } from '../smarthome/smarthomeEvents.service';
 import { notifyAdvisorAppointmentBooked } from './advisorNotifier.service';
+import { isTestLead } from '../ai/aiRollout';
 import type { Appointment, AppointmentModality } from './appointments.types';
 
 export interface BookInput {
@@ -44,8 +46,10 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
   const endTime   = new Date(startTime.getTime() + durationMinutes * 60_000);
   const fromAi    = input.source === 'ai';
   const businessName = (await getAiConfig(companyId)).businessName;
-  const title       = input.title?.trim() || buildEventTitle(lead.name);
-  const description = input.description?.trim() || buildEventDescription(businessName, lead.name, fromAi);
+  const modality    = input.modality ?? 'llamada';
+  const title       = input.title?.trim() || buildEventTitle(lead.name, modality);
+  const description = input.description?.trim()
+    || buildEventDescription(businessName, lead.name, fromAi, { phone: lead.phone, modality });
 
   // Leads creados antes de tener asignación automática pueden no tener asesor:
   // se asigna de forma perezosa (round-robin) para que la cita pueda crearse en
@@ -111,7 +115,7 @@ export async function bookAppointment(input: BookInput): Promise<Appointment> {
     dateStyle: 'full',
     timeStyle: 'short',
   }).format(startTime);
-  try {
+  if (!isTestLead(lead)) try {
     await postLeadSmartHomeBitacora(
       { ...lead, assignedTo: advisorId, companyId, id: leadId },
       [
@@ -337,7 +341,11 @@ export async function hasPendingAppointment(companyId: string, leadId: string): 
   return appts.some((a) => a.status === 'scheduled' && a.startTime.toMillis() >= since);
 }
 
-/** Cambia solo la modalidad de la cita activa (llamada ↔ videollamada). */
+/**
+ * Cambia solo la modalidad de la cita activa (llamada ↔ videollamada). Actualiza el
+ * título (web, app y Google Calendar) y avisa al asesor, para que no llame a un cliente
+ * que espera el Meet, o al revés.
+ */
 export async function changeAppointmentModality(
   companyId: string,
   leadId: string,
@@ -345,6 +353,35 @@ export async function changeAppointmentModality(
 ): Promise<Appointment | null> {
   const active = await findActiveAppointmentForLead(companyId, leadId);
   if (!active || active.startTime.toMillis() < Date.now()) return null;
-  await appointmentsRepository.update(companyId, active.id, { modality });
-  return { ...active, modality };
+  if ((active.modality ?? 'llamada') === modality) return active;
+
+  const title = retitleForModality(active.title || buildEventTitle(active.leadName), modality);
+  const businessName = (await getAiConfig(companyId)).businessName;
+  const description = buildEventDescription(businessName, active.leadName, active.source === 'ai', { phone: active.leadPhone, modality });
+  await appointmentsRepository.update(companyId, active.id, { modality, title, description });
+
+  if (active.advisorId && active.googleEventId) {
+    try {
+      const conn = await googleConnectionRepository.getActive(companyId, active.advisorId);
+      if (conn) await patchEventDetails(conn.refreshToken, active.googleEventId, { title, description });
+    } catch (err) {
+      logger.warn('[Appointments] No se pudo actualizar el evento de Google con la modalidad', {
+        companyId, leadId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const when = new Intl.DateTimeFormat('es-CO', { timeZone: env.calendarTimeZone(), dateStyle: 'medium', timeStyle: 'short' })
+    .format(active.startTime.toDate());
+  await sendAdvisorPush(companyId, active.advisorId, {
+    title: `Cambio de cita: ${active.leadName?.trim() || active.leadPhone || 'cliente'}`,
+    body:  modality === 'videollamada'
+      ? `Ahora es por videollamada de Google Meet (${when}). No lo llames: conéctate al Meet.`
+      : `Ahora es por llamada telefónica (${when}). Llámalo al ${active.leadPhone || 'número del chat'}.`,
+    url:   `/dashboard/inbox?lead=${leadId}`,
+    type:  'lead-attention',
+    leadId,
+  }).catch(() => { /* best-effort */ });
+
+  return { ...active, modality, title, description };
 }

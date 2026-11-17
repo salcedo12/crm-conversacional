@@ -205,8 +205,13 @@ export async function runAndStoreLeadAnalysis(
   analyzedBy: string
 ): Promise<LeadAnalysis> {
   const { analysis, messageCount, model } = await analyzeLeadConversation(lead);
+  const told = lead.aiNoInterest;
   const stored: LeadAnalysis = {
     ...analysis,
+    ...(told?.category ? {
+      lossCategory: told.category as LeadAnalysis['lossCategory'],
+      lossRisk: told.reason ? `El cliente dijo: "${told.reason}"` : analysis.lossRisk,
+    } : {}),
     messageCount,
     model,
     analyzedBy,

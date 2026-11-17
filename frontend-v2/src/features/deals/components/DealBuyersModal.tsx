@@ -21,11 +21,14 @@ import { PlaceSelect } from './PlaceSelect';
 import { DealField as Field, DealSheet, DealSheetFooter, dealInputCls as inputCls } from './DealSheet';
 
 interface DealBuyersModalProps {
-  companyId: string;
-  deal:      DealSummary;
-  lead:      Lead;
-  onClose:   () => void;
-  onSaved:   () => void;
+  companyId:       string;
+  deal:            DealSummary;
+  /** Lead del negocio (para prellenar el titular). Desde Negocios puede no estar cargado aún. */
+  lead?:           Pick<Lead, 'name' | 'phone' | 'metadata'> | null;
+  /** Compradores de otro negocio del mismo cliente para prellenar si este negocio está vacío. */
+  fallbackBuyers?: ClientProfile[];
+  onClose:         () => void;
+  onSaved:         () => void;
 }
 
 const EMPTY_BUYER: ClientInput = {
@@ -42,13 +45,13 @@ const EMPTY_BUYER: ClientInput = {
   email: '',
 };
 
-function profileToInput(p: ClientProfile): ClientInput {
+export function profileToInput(p: ClientProfile): ClientInput {
   const { id: _id, leadIds: _leads, createdAt: _c, updatedAt: _u, ...input } = p;
   return { ...EMPTY_BUYER, ...input };
 }
 
 /** Primer comprador a partir del lead: "Carlos Andrés Prueba Uno" → 2 nombres + apellidos. */
-function buyerFromLead(lead: Lead): ClientInput {
+function buyerFromLead(lead: Partial<Pick<Lead, 'name' | 'phone' | 'metadata'>>): ClientInput {
   const words = (lead.name ?? '').trim().split(/\s+/).filter(Boolean);
   const cut = words.length >= 3 ? 2 : Math.min(1, words.length);
   const email = typeof lead.metadata?.email === 'string' ? lead.metadata.email : '';
@@ -64,13 +67,21 @@ function buyerFromLead(lead: Lead): ClientInput {
 /** Comprador en edición con una llave estable (para abrir/cerrar y quitar sin mezclar fichas). */
 interface BuyerDraft { key: number; data: ClientInput }
 
-export function DealBuyersModal({ companyId, deal, lead, onClose, onSaved }: DealBuyersModalProps) {
+export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose, onSaved }: DealBuyersModalProps) {
   // Ciudades con el nombre exacto de DocuBlock (si no coinciden, la firma falla).
   const docublock = useDocuBlockPlaces(companyId);
   const nextKey = useRef(0);
+  const initialProfiles = deal.buyerProfiles.length
+    ? deal.buyerProfiles
+    : fallbackBuyers && fallbackBuyers.length
+    ? fallbackBuyers
+    : null;
+
   const [buyers, setBuyers] = useState<BuyerDraft[]>(() =>
-    (deal.buyerProfiles.length ? deal.buyerProfiles.map(profileToInput) : [buyerFromLead(lead)])
-      .map((data) => ({ key: nextKey.current++, data })),
+    (initialProfiles
+      ? initialProfiles.map(profileToInput)
+      : [buyerFromLead(lead ?? { name: deal.leadName })]
+    ).map((data) => ({ key: nextKey.current++, data })),
   );
   // Abiertos al empezar: los que tienen datos pendientes (o el titular si todo está completo).
   const [open, setOpen] = useState<Set<number>>(() => {

@@ -118,7 +118,7 @@ function replaceText(xml, search, replacement, { nth = null, min = 1 } = {}) {
  * Deja una celda con un solo texto: conserva el primer párrafo y su primer run (formato),
  * borra el resto de runs y párrafos.
  */
-function setCellText(xml, tableIndex, rowIndex, cellIndex, text) {
+function setCellText(xml, tableIndex, rowIndex, cellIndex, text, options = {}) {
   const table = topTables(xml)[tableIndex];
   if (!table) throw new Error(`No existe la tabla ${tableIndex}`);
   const row = rowsOf(xml, table)[rowIndex];
@@ -130,9 +130,32 @@ function setCellText(xml, tableIndex, rowIndex, cellIndex, text) {
   const tcPrEnd = cellXml.indexOf('</w:tcPr>');
   const head = cellXml.slice(0, paras.length ? paras[0].start : (tcPrEnd >= 0 ? tcPrEnd + 9 : cellXml.indexOf('>') + 1));
   let para = paras.length ? cellXml.slice(paras[0].start, paras[0].end) : '<w:p></w:p>';
-  const pPr = (para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [''])[0];
+  let pPr = (para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [''])[0];
   const firstRun = para.match(/<w:r(?=[ >])[\s\S]*?<\/w:r>/);
-  const rPr = firstRun ? (firstRun[0].match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [''])[0] : '';
+  let rPr = firstRun ? (firstRun[0].match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [''])[0] : '';
+
+  if (options.bold === false) {
+    pPr = pPr.replace(/<w:b(?:\b[^>]*)?\/>/g, '').replace(/<w:bCs(?:\b[^>]*)?\/>/g, '');
+    rPr = rPr.replace(/<w:b(?:\b[^>]*)?\/>/g, '').replace(/<w:bCs(?:\b[^>]*)?\/>/g, '');
+  } else if (options.bold === true) {
+    if (!rPr.includes('<w:b/>')) {
+      rPr = rPr ? rPr.replace('</w:rPr>', '<w:b/><w:bCs/></w:rPr>') : '<w:rPr><w:b/><w:bCs/></w:rPr>';
+    }
+  }
+
+  if (options.sz) {
+    pPr = pPr.replace(/<w:sz(?:\b[^>]*)?\/>/g, '').replace(/<w:szCs(?:\b[^>]*)?\/>/g, '');
+    rPr = rPr.replace(/<w:sz(?:\b[^>]*)?\/>/g, '').replace(/<w:szCs(?:\b[^>]*)?\/>/g, '');
+    const szTag = `<w:sz w:val="${options.sz}"/><w:szCs w:val="${options.sz}"/>`;
+    rPr = rPr ? rPr.replace('</w:rPr>', `${szTag}</w:rPr>`) : `<w:rPr>${szTag}</w:rPr>`;
+  }
+
+  if (options.lineSpacing) {
+    pPr = pPr.replace(/<w:spacing(?:\b[^>]*)?\/>/g, '');
+    const spTag = `<w:spacing w:line="${options.lineSpacing}" w:lineRule="auto"/>`;
+    pPr = pPr ? pPr.replace('</w:pPr>', `${spTag}</w:pPr>`) : `<w:pPr>${spTag}</w:pPr>`;
+  }
+
   const pOpen = para.match(/^<w:p(?: [^>]*)?>/)[0].replace('/>', '>');
   para = `${pOpen}${pPr}<w:r>${rPr}${T(text)}</w:r></w:p>`;
   return xml.slice(0, cell.start) + head + para + '</w:tc>' + xml.slice(cell.end);
@@ -305,6 +328,163 @@ function tidyTable(xml, tableIndex, sideMargin = 70) {
   return xml.slice(0, t.start) + tbl + xml.slice(t.end);
 }
 
+/** Asegura que todas las filas de todas las tablas tengan cantSplit (no se parten entre páginas). */
+function ensureAllTablesCantSplit(xml) {
+  return xml.replace(/<w:tr(?=[ >])([\s\S]*?)<\/w:tr>/g, (tr) => {
+    if (tr.includes('<w:cantSplit/>')) return tr;
+    if (tr.includes('<w:trPr>')) {
+      return tr.replace('<w:trPr>', '<w:trPr><w:cantSplit/>');
+    }
+    return tr.replace(/^(<w:tr(?: [^>]*)?>)/, '$1<w:trPr><w:cantSplit/></w:trPr>');
+  });
+}
+
+/** Configura una fila de tabla como encabezado repetible con keepNext para que no se separe de las filas siguientes. */
+function makeTableHeader(xml, tableIndex, rowIndex = 0) {
+  const table = topTables(xml)[tableIndex];
+  if (!table) return xml;
+  const row = rowsOf(xml, table)[rowIndex];
+  if (!row) return xml;
+  let rowXml = xml.slice(row.start, row.end);
+  if (!rowXml.includes('<w:tblHeader/>')) {
+    if (rowXml.includes('<w:trPr>')) {
+      rowXml = rowXml.replace('<w:trPr>', '<w:trPr><w:tblHeader/><w:cantSplit/>');
+    } else {
+      rowXml = rowXml.replace(/^(<w:tr(?: [^>]*)?>)/, '$1<w:trPr><w:tblHeader/><w:cantSplit/></w:trPr>');
+    }
+  }
+  // Añadir keepNext a todos los párrafos de la fila
+  rowXml = rowXml.replace(/<w:p(?=[ >])([^>]*)>(<w:pPr>[\s\S]*?<\/w:pPr>)?/g, (_m, attrs, pPr) => {
+    if (!pPr) return `<w:p${attrs}><w:pPr><w:keepNext/></w:pPr>`;
+    if (pPr.includes('<w:keepNext/>')) return `<w:p${attrs}>${pPr}`;
+    return `<w:p${attrs}>${pPr.replace('<w:pPr>', '<w:pPr><w:keepNext/>')}`;
+  });
+  return xml.slice(0, row.start) + rowXml + xml.slice(row.end);
+}
+
+/** Añade w:keepNext a los párrafos que contengan determinado texto para evitar títulos huérfanos al fondo de página. */
+function addKeepNextToParagraphs(xml, search) {
+  const ps = innermostParagraphs(xml).reverse();
+  const hits = ps.filter((p) => textOf(xml.slice(p.start, p.end)).includes(search));
+  let out = xml;
+  for (const p of hits) {
+    let pXml = out.slice(p.start, p.end);
+    if (!pXml.includes('<w:keepNext/>')) {
+      if (pXml.includes('<w:pPr>')) {
+        pXml = pXml.replace('<w:pPr>', '<w:pPr><w:keepNext/>');
+      } else {
+        pXml = pXml.replace(/^(<w:p(?: [^>]*)?>)/, '$1<w:pPr><w:keepNext/></w:pPr>');
+      }
+      out = out.slice(0, p.start) + pXml + out.slice(p.end);
+    }
+  }
+  return out;
+}
+
+/** Añade w:pageBreakBefore a los párrafos que contengan determinado texto para iniciar página limpia. */
+function addPageBreakBefore(xml, search) {
+  const ps = innermostParagraphs(xml).reverse();
+  const hits = ps.filter((p) => textOf(xml.slice(p.start, p.end)).includes(search));
+  let out = xml;
+  for (const p of hits) {
+    let pXml = out.slice(p.start, p.end);
+    if (!pXml.includes('<w:pageBreakBefore/>')) {
+      if (pXml.includes('<w:pPr>')) {
+        pXml = pXml.replace('<w:pPr>', '<w:pPr><w:pageBreakBefore/>');
+      } else {
+        pXml = pXml.replace(/^(<w:p(?: [^>]*)?>)/, '$1<w:pPr><w:pageBreakBefore/></w:pPr>');
+      }
+      out = out.slice(0, p.start) + pXml + out.slice(p.end);
+    }
+  }
+  return out;
+}
+
+/**
+ * Ajusta con precisión milimétrica los anchos de columnas de una tabla (gridCol y tcW en todas las filas),
+ * y opcionalmente los márgenes internos de celda para aprovechar el ancho disponible.
+ */
+function setTableColumnWidths(xml, tableIndex, widths, sideMargin = 50) {
+  const tables = topTables(xml);
+  const t = tables[tableIndex];
+  if (!t) return xml;
+  let tbl = xml.slice(t.start, t.end);
+
+  // 1. GridCol y tblW
+  tbl = tbl.replace(/<w:tblGridChange[\s\S]*?<\/w:tblGridChange>/g, '');
+  tbl = tbl.replace(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/, `<w:tblGrid>${widths.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`);
+  tbl = tbl.replace(/<w:tblW [^>]*\/>/, `<w:tblW w:w="${widths.reduce((a, b) => a + b, 0)}" w:type="dxa"/>`);
+
+  // 2. Márgenes internos compactos
+  if (sideMargin !== null) {
+    const marXml = `<w:tblCellMar><w:top w:w="40" w:type="dxa"/><w:left w:w="${sideMargin}" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:right w:w="${sideMargin}" w:type="dxa"/></w:tblCellMar>`;
+    if (/<w:tblCellMar>[\s\S]*?<\/w:tblCellMar>/.test(tbl)) {
+      tbl = tbl.replace(/<w:tblCellMar>[\s\S]*?<\/w:tblCellMar>/, marXml);
+    } else {
+      tbl = tbl.replace('</w:tblPr>', `${marXml}</w:tblPr>`);
+    }
+  }
+
+  // 3. tcW en cada celda de cada fila
+  tbl = tbl.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (tr) => {
+    let colIdx = 0;
+    return tr.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (tc) => {
+      const w = widths[colIdx++];
+      if (w !== undefined) {
+        if (/<w:tcW [^>]*\/>/.test(tc)) {
+          tc = tc.replace(/<w:tcW [^>]*\/>/, `<w:tcW w:w="${w}" w:type="dxa"/>`);
+        }
+      }
+      return tc;
+    });
+  });
+
+  return xml.slice(0, t.start) + tbl + xml.slice(t.end);
+}
+
+/** Cambia el tamaño de fuente (en medios puntos, ej: '15' = 7.5pt) en una fila específica de una tabla. */
+function setTableRowFontSize(xml, tableIndex, rowIndex, szHalfPoints) {
+  const tables = topTables(xml);
+  const t = tables[tableIndex];
+  if (!t) return xml;
+  let tbl = xml.slice(t.start, t.end);
+  const rows = tbl.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [];
+  if (rows[rowIndex]) {
+    let targetRow = rows[rowIndex];
+    targetRow = targetRow.replace(/<w:sz [^>]*\/>/g, `<w:sz w:val="${szHalfPoints}"/>`);
+    targetRow = targetRow.replace(/<w:szCs [^>]*\/>/g, `<w:szCs w:val="${szHalfPoints}"/>`);
+    tbl = tbl.replace(rows[rowIndex], targetRow);
+  }
+  return xml.slice(0, t.start) + tbl + xml.slice(t.end);
+}
+
+/**
+ * Mantiene todas las filas de una tabla unidas en la misma página (evita que se parta entre páginas).
+ * Si keepWithNextElement es true, la última fila también lleva keepNext para mantenerse unida a la tabla siguiente.
+ */
+function keepTableTogether(xml, tableIndex, keepWithNextElement = true) {
+  const tables = topTables(xml);
+  const t = tables[tableIndex];
+  if (!t) return xml;
+  let tbl = xml.slice(t.start, t.end);
+  const rows = tbl.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [];
+
+  rows.forEach((row, i) => {
+    const isLastRow = i === rows.length - 1;
+    if (isLastRow && !keepWithNextElement) return;
+
+    let updatedRow = row;
+    updatedRow = updatedRow.replace(/<w:p(?=[ >])([^>]*)>(<w:pPr>[\s\S]*?<\/w:pPr>)?/g, (_m, attrs, pPr) => {
+      if (!pPr) return `<w:p${attrs}><w:pPr><w:keepNext/></w:pPr>`;
+      if (pPr.includes('<w:keepNext/>')) return `<w:p${attrs}>${pPr}`;
+      return `<w:p${attrs}>${pPr.replace('<w:pPr>', '<w:pPr><w:keepNext/>')}`;
+    });
+    tbl = tbl.replace(row, updatedRow);
+  });
+
+  return xml.slice(0, t.start) + tbl + xml.slice(t.end);
+}
+
 /** Texto de cada tabla/fila/celda (para depurar). */
 function describeTables(xml) {
   return topTables(xml).map((t, ti) => rowsOf(xml, t).map((r, ri) =>
@@ -315,4 +495,6 @@ module.exports = {
   elements, innermostParagraphs, textOf, replaceText, setCellText, wrapCell, deleteRow, describeTables,
   topTables, rowsOf, cellsOf, paragraphsWithText, wrapBlock, clearParagraphs,
   bodyElements, replaceRegion, centerTableCells, setTableGrid, centerTable, tidyTable,
+  ensureAllTablesCantSplit, makeTableHeader, addKeepNextToParagraphs, addPageBreakBefore,
+  setTableColumnWidths, setTableRowFontSize, keepTableTogether,
 };

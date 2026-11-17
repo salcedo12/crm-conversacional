@@ -59,6 +59,7 @@ export {
   getDealLotStatus,
 } from './http/dealLots.function';
 export { getDealPriceOptions, saveDealPlan } from './http/dealPlan.function';
+export { requestPlanApproval, checkPlanApprovalStatus, quickDealPlanApprovalAction } from './http/dealApproval.function';
 export { generateDealDocument, downloadDealDocument } from './http/dealDocuments.function';
 export {
   getDealSignatureOptions,
@@ -163,7 +164,7 @@ export {
 } from './http/leadForms.function';
 export { getAdvisorReports } from './http/advisorReports.function';
 export { getWeeklyFollowUpReport } from './http/weeklyFollowUpReport.function';
-export { getSalesCommissionReport, saveSalesReportDocument, deleteSalesReportVersion } from './http/salesReports.function';
+export { getSalesCommissionReport, saveSalesReportDocument, getSalesReportDocument, deleteSalesReportVersion } from './http/salesReports.function';
 export {
   syncLeadToSmartHomeCallable as syncLeadToSmartHome,
   listSmartHomeAdvisors,

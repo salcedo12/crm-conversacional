@@ -109,9 +109,10 @@ export async function executeResolveLeadTransferRequest(
 
     const transferBitacoraEntry = {
       fecha: nowFormatted,
-      action: 'Traslado Aprobado / Gestión Comercial',
+      action: 'Traslado Aprobado',
       description: followUpSummary,
-      asesor: newAdvisorName,
+      asesor: resolvedByName || 'Dirección Comercial',
+      system: true,
       lastDate: nowFormatted,
     };
     const existingBitacoras = [

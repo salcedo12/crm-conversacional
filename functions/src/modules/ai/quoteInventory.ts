@@ -125,7 +125,14 @@ export function availableAreaRange(lots: InventoryLot[], sectorFilter?: (sector:
     .map((l) => l.a as number)
     .sort((x, y) => x - y);
   if (!areas.length) return null;
-  return areas[0] === areas[areas.length - 1] ? m2(areas[0]) : `de ${m2(areas[0])} a ${m2(areas[areas.length - 1])}`;
+  const min = areas[0];
+  const max = areas[areas.length - 1];
+  if (min === max) return m2(min);
+  // Un terreno especial muy grande (ej. 6.000 m² entre lotes de 300) hace ver el rango raro:
+  // en ese caso solo se dice desde cuánto.
+  const typical = areas[Math.floor((areas.length - 1) * 0.9)];
+  if (areas.length >= 4 && max > typical * 3) return `desde unos ${m2(min)}`;
+  return `de ${m2(min)} a ${m2(max)}`;
 }
 
 /** Texto con las áreas disponibles hoy por club, para que la IA no use rangos viejos. */

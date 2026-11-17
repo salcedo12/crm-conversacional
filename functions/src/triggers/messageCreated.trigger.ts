@@ -8,6 +8,7 @@ import { recordMessageInLeadStats } from '../modules/leads/leadStats.service';
 import { getYcloudConfigForCompany } from '../modules/companies/channelCredentials.repository';
 import { normalizeBusinessNumber } from '../modules/whatsapp/inbox';
 import type { Message } from '../modules/messages/messages.types';
+import { messagesRepository } from '../modules/messages/messages.repository';
 
 const SALES_INBOX_PHONE = '+573176820728';
 
@@ -95,6 +96,12 @@ export const onMessageCreated = onDocumentCreated(
 
     // Solo procesar mensajes inbound del lead
     if (data.direction !== 'inbound' || data.senderType !== 'lead') {
+      return;
+    }
+
+    // Evento repetido (Firestore entrega al menos una vez): solo una ejecución sigue.
+    if (!(await messagesRepository.claimInbound(companyId, leadId, messageId))) {
+      logger.info('[Trigger] Evento repetido o ya procesado — se omite', { companyId, leadId, messageId });
       return;
     }
 

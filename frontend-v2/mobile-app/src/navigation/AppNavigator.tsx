@@ -23,6 +23,7 @@ import { CallOverlay } from '../components/CallOverlay';
 import { FichaTecnicaModal } from '../components/FichaTecnicaModal';
 import { listPlatformCompanies, type PlatformCompany } from '../services/enterprise';
 import { listLeadTransferRequests } from '../services/contacts';
+import { checkAndApplyUpdate } from '../services/updateService';
 import { navigationRef } from './navigationRef';
 import type { MainTabsParams, RootStackParams } from '../types';
 
@@ -530,8 +531,38 @@ function MainShell() {
                 ))}
               </View>
 
+              {/* Botón Buscar Actualizaciones OTA */}
+              <View style={[styles.logoutSection, { borderTopColor: palette.border, paddingBottom: 6 }]}>
+                <Pressable
+                  onPress={() => {
+                    void checkAndApplyUpdate(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.logoutBtn,
+                    {
+                      backgroundColor: pressed ? palette.brandBg : 'transparent',
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                      borderRadius: 10,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                    },
+                  ]}
+                >
+                  <Icon name="RefreshCw" size={16} color={palette.brand} />
+                  <Text style={[styles.logoutText, { color: palette.textPrimary, fontWeight: '600', marginLeft: 8 }]}>
+                    Buscar actualizaciones
+                  </Text>
+                  <Text style={{ fontSize: 11, color: palette.textSubtle, marginLeft: 'auto' }}>
+                    v1.0.51
+                  </Text>
+                </Pressable>
+              </View>
+
               {/* Botón Cerrar Sesión */}
-              <View style={[styles.logoutSection, { borderTopColor: palette.border }]}>
+              <View style={[styles.logoutSection, { borderTopColor: 'transparent', paddingTop: 0 }]}>
                 <Pressable
                   onPress={() => {
                     setMoreOpen(false);

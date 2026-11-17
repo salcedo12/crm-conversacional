@@ -17,6 +17,7 @@ import { asksAboutConstruction, CLUB_PAGE_URLS, CLUBS_WITH_UPDATES, loadRecentCo
 import { inventoryDb } from '../inventory/inventory.client';
 import { bumpAiDaily, recordAiUsage, type ModelUsage } from './aiUsage.service';
 import { sendAiFailureAlert } from './aiFailureAlert';
+import { personFirstName } from './personName';
 import { checkLotInInventory, deriveQuoteState, isShortFollowUp, lotCheckNote, type ChatTurn } from './quoteState';
 import {
   inventoryAreasText, inventorySectorFor, isLlanoGrandeSector, loadProjectLots, lotStatus, namedLlanoGrandeSector, pickLlanoGrandeSector,
@@ -69,20 +70,20 @@ const MIN_FOLLOWUP_DELAY_MINUTES = 60;
 const LEGAL_WELCOME =
   '🌳🌴 ¡Bienvenido a Grupo Constructor MERAKI! 🌴🌳\n\n' +
   'Este es nuestro canal oficial de ventas.\n\n' +
-  'Al comunicarte por este medio, y conforme a la ' +
-  'Ley 1581 de 2012, autorizas el tratamiento de tus datos personales para fines informativos, ' +
+  'Al comunicarse por este medio, y conforme a la ' +
+  'Ley 1581 de 2012, autoriza el tratamiento de sus datos personales para fines informativos, ' +
   'institucionales y comerciales.\n\n' +
   '✨ ¡Gracias por escribirnos! ¿Con quién tengo el gusto de hablar?';
 
 const CUSTOMER_SERVICE_REDIRECT =
-  'Gracias por escribirnos 😊 Para este tipo de solicitudes debes comunicarte con nuestro equipo de Servicio al Cliente.\n\n' +
+  'Gracias por escribirnos 😊 Para este tipo de solicitudes debe comunicarse con nuestro equipo de Servicio al Cliente.\n\n' +
   '📲 WhatsApp: 314 7868069\n\n' +
   '📧 Correo: servicioalcliente.grupomeraki@gmail.com\n\n' +
-  'Ellos podrán ayudarte de manera precisa con tu caso.';
+  'Ellos podrán ayudarle de manera precisa con su caso.';
 
 const SENSITIVE_INQUIRY_ESCALATION =
-  'Para darte información precisa y cuidar la disponibilidad actualizada, no manejamos listas completas de precios ni inventario por este canal. ' +
-  'Te puedo ayudar con una opción concreta o te conecto con un asesor para revisar tu caso. 🙏';
+  'Para darle información precisa y cuidar la disponibilidad actualizada, no manejamos listas completas de precios ni inventario por este canal. ' +
+  'Le puedo ayudar con una opción concreta o le conecto con un asesor para revisar su caso. 🙏';
 
 const QUOTATION_LIMIT = 5;
 
@@ -91,9 +92,11 @@ function describeLeadOrigin(lead: Pick<Lead, 'source' | 'sourceMeta'>): string {
   switch (lead.source) {
     case 'meta_ads': {
       const h = lead.sourceMeta?.headline;
-      return h
+      const body = String(lead.sourceMeta?.body ?? '').replace(/\s+/g, ' ').trim().slice(0, 450);
+      const base = h
         ? `llegó desde un anuncio de Meta ("${h}")`
         : 'llegó desde un anuncio de Meta (Facebook/Instagram)';
+      return body ? `${base}. Texto del anuncio: "${body}"` : base;
     }
     case 'google_ads': return 'llegó desde un anuncio de Google';
     case 'web':       return 'llegó desde la página web (formulario o botón de WhatsApp)';
@@ -104,6 +107,30 @@ function describeLeadOrigin(lead: Pick<Lead, 'source' | 'sourceMeta'>): string {
   }
 }
 
+const COUNTRY_BY_PREFIX: Array<[string, string | null]> = [
+  ['507', 'Panamá'], ['506', 'Costa Rica'], ['593', 'Ecuador'], ['353', 'Irlanda'],
+  ['34', 'España'], ['52', 'México'], ['56', 'Chile'], ['51', 'Perú'], ['58', 'Venezuela'], ['54', 'Argentina'],
+  ['55', 'Brasil'], ['44', 'el Reino Unido'], ['39', 'Italia'], ['49', 'Alemania'], ['33', 'Francia'],
+  ['41', 'Suiza'], ['31', 'los Países Bajos'], ['61', 'Australia'],
+  ['1', null], // Estados Unidos o Canadá: no se sabe cuál
+];
+
+/** ¿El número es de fuera de Colombia? Ante la duda, no. */
+export function isForeignPhone(phone: string | undefined): boolean {
+  const raw = String(phone ?? '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 8) return false;
+  if (raw.startsWith('+')) return !digits.startsWith('57');
+  return false;
+}
+
+/** "desde España" o "desde el exterior" cuando el código no dice el país con certeza. */
+export function abroadPhrase(phone: string | undefined): string {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  const hit = COUNTRY_BY_PREFIX.find(([prefix]) => digits.startsWith(prefix));
+  return hit?.[1] ? `desde ${hit[1]}` : 'desde el exterior';
+}
+
 function isKnownLeadName(name: string | undefined): name is string {
   const clean = name?.trim() ?? '';
   return clean.length > 1 && !/^lead\b/i.test(clean) && !/^\+?\d/.test(clean);
@@ -112,15 +139,15 @@ function isKnownLeadName(name: string | undefined): name is string {
 function buildLegalWelcome(lead: Pick<Lead, 'name' | 'source'>): string {
   if (!isKnownLeadName(lead.name)) return LEGAL_WELCOME;
   const intro = lead.source === 'web' || lead.source === 'meta_ads' || lead.source === 'manual'
-    ? `Hola, ${lead.name.trim()}. Gracias por dejarnos tus datos.`
+    ? `Hola, ${lead.name.trim()}. Gracias por dejarnos sus datos.`
     : `Hola, ${lead.name.trim()}. Gracias por escribirnos.`;
   return (
     '🌳🌴 ¡Bienvenido a Grupo Constructor MERAKI! 🌴🌳\n\n' +
     `${intro}\n\n` +
-    'Este es nuestro canal oficial de ventas. Al comunicarte por este medio, y conforme a la Ley 1581 de 2012, ' +
-    'autorizas el tratamiento de tus datos personales para fines informativos, institucionales y comerciales.\n\n' +
+    'Este es nuestro canal oficial de ventas. Al comunicarse por este medio, y conforme a la Ley 1581 de 2012, ' +
+    'autoriza el tratamiento de sus datos personales para fines informativos, institucionales y comerciales.\n\n' +
     'Actualmente tenemos clubes de campo en Alvarado, Melgar y Mariquita, Tolima.\n\n' +
-    '¿En cuál de estos municipios te gustaría invertir?'
+    '¿En cuál de estos municipios le gustaría invertir?'
   );
 }
 
@@ -133,10 +160,9 @@ const NOT_A_PERSON_NAME = /\b(GRUPO|CONSTRUCTOR|CONTABILIDAD|INMOBILIARIA|INVERS
 export function safeGreetingName(lead: Pick<Lead, 'name' | 'source'>): string {
   if (!isKnownLeadName(lead.name) || !lead.source) return '';
   if (['whatsapp', 'facebook', 'instagram'].includes(String(lead.source))) return '';
-  if (/\d/.test(lead.name) || NOT_A_PERSON_NAME.test(normKey(lead.name))) return '';
-  const first = lead.name.replace(/[^\p{L}\s'-]/gu, ' ').trim().split(/\s+/)[0] ?? '';
-  if (first.length < 2) return '';
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  if (NOT_A_PERSON_NAME.test(normKey(lead.name))) return '';
+  // En anuncios de WhatsApp el nombre es el del perfil: solo se usa si es un nombre de persona conocido.
+  return personFirstName(lead.name);
 }
 
 /**
@@ -144,12 +170,154 @@ export function safeGreetingName(lead: Pick<Lead, 'name' | 'source'>): string {
  * "No me interesa Río Claro" no cuenta: puede interesarle otro club.
  */
 export function detectsFinalRejection(text: string): boolean {
+  return detectsOptOut(text) || detectsPlainNoInterest(text);
+}
+
+const COURTESY_WORDS = new Set((
+  'GRACIAS MUCHAS MIL MUY OK OKEY OKAY OKI LISTO VALE DALE PERFECTO BUENO ENTENDIDO DE ACUERDO CLARO SUPER EXCELENTE ' +
+  'GENIAL BIEN AH VOY A LO LA REVISO REVISAR REVISARLO REVISARLA REVISO QUE AMABLE BENDICIONES DIOS LE PAGUE SENORITA ' +
+  'VICTORIA UN SALUDO SALUDOS FELIZ BUEN BUENA DIA DIAS TARDE NOCHE IGUALMENTE TAMBIEN ESTOY PENDIENTE QUEDO ATENTO ATENTA ' +
+  'TI USTED IGUAL BENDIGA BENDIGAN BENDICION MUCHO GUSTO SENOR SENORA EXITOS'
+).split(' '));
+
+/** Solo agradece o confirma que lo va a revisar ("Muchas gracias", "Ok, voy a revisarlo", "👍"). */
+export function isCourtesyOnly(text: string): boolean {
+  const raw = String(text ?? '').trim();
+  if (!raw || /\?/.test(raw)) return false;
+  const words = normKey(raw).split(/\s+/).filter(Boolean);
+  if (!words.length) return /\p{Extended_Pictographic}/u.test(raw); // solo emojis
+  return words.length <= 8 && words.every((w) => COURTESY_WORDS.has(w));
+}
+
+/** Respuesta corta a la plantilla "¿quiere que un asesor lo contacte? responda SÍ / NO". */
+export function templateYesNo(text: string): 'si' | 'no' | null {
+  const t = normKey(text);
+  const words = t.split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 6) return null;
+  if (/^NO( GRACIAS| YA| LA NECESITO| ME INTERESA| POR AHORA| MAS)*$/.test(t)) return 'no';
+  if (/^(SI|SII|SIII|CLARO|DALE|OK SI|BUENO SI)( SENOR| SENORA| POR FAVOR| GRACIAS| CLARO| ME INTERESA| QUIERO)*$/.test(t)) return 'si';
+  return null;
+}
+
+/**
+ * ¿Es el texto automático del botón del anuncio que pide precios? ("Hola, quiero conocer precios
+ * de los lotes. Ref. USA-LEE"). No lo escribió el cliente: solo tocó el botón.
+ */
+export function isAdPrefilledPriceRequest(text: string): boolean {
+  const t = normKey(text);
+  return /^HOLA QUIERO CONOCER (LOS )?PRECIOS DE LOS (LOTES|TERRENOS)( REF [A-Z0-9 ]{1,30})?$/.test(t) ||
+    (/\bREF\b/.test(t) && /\bPRECIOS?\b/.test(t) && t.split(/\s+/).length <= 14);
+}
+
+export const PRICE_HOLD_MARK = 'Con mucho gusto le comparto los precios';
+
+/** Primera respuesta al texto automático de precios: cálida y con una sola pregunta fácil, sin cifras. */
+export function buildPriceHoldReply(name: string, abroad: string | null): string {
+  const opener = abroad
+    ? `Qué bueno que nos escriba ${abroad}${name ? `, ${name}` : ''} 😊 ${PRICE_HOLD_MARK}.`
+    : `${PRICE_HOLD_MARK}${name ? `, ${name}` : ''} 😊`;
+  const question = name
+    ? '¿me cuenta desde qué ciudad nos escribe?'
+    : '¿me cuenta con quién tengo el gusto y desde qué ciudad nos escribe?';
+  return `${opener} Para recomendarle el terreno que mejor se ajuste a lo que busca, ${question}`;
+}
+
+/** Señales de que el lead no quiere avanzar ("no gracias", "no quiero para este lado", "muy caro", "ya compré"). */
+export function detectsDeclineCue(text: string): boolean {
+  const t = normKey(text);
+  return /\b(NO GRACIAS|NO QUIERO|NO ME INTERESA|NO ESTOY INTERESAD[OA]|NO ME QUEDA|NO ME SIRVE|NO ME CONVIENE|YA COMPRE|NO TENGO (DINERO|PLATA|PRESUPUESTO|COMO)|(MUY|DEMASIADO|SUPER) CAR[OA]|NO ME ALCANZA|POR AHORA NO|AHORA NO|NO POR AHORA|NO POR EL MOMENTO|LO VOY A PENSAR|LO PENSARE|NO ESTOY BUSCANDO)\b/.test(t) ||
+    /^NO( SENOR| SENORA| GRACIAS)?$/.test(t);
+}
+
+/** ¿Tu último mensaje ofrecía agendar una cita o llamada con el asesor? */
+export function lastAiOfferedCita(text: string): boolean {
+  const t = normKey(text);
+  return /\?/.test(text) && /\b(AGEND\w*|CITA|LLAMADA CON (UN|EL|NUESTRO) ASESOR|VIDEOLLAMADA)\b/.test(t);
+}
+
+/** La respuesta de la IA es una despedida (deja la puerta abierta y no pregunta nada). */
+export function isFarewellReply(text: string): boolean {
+  const t = normKey(text);
+  return !/\?/.test(text) && /\b(SI MAS ADELANTE|CUANDO (QUIERA|DESEE|GUSTE) RETOMAR|GRACIAS POR SU TIEMPO|AQUI ESTAREMOS|CON GUSTO LE ATENDERE|QUEDO ATENTA|DEJO LA PUERTA ABIERTA)\b/.test(t);
+}
+
+/** Categoría probable del motivo, para cuando el modelo no la registró. */
+export function inferNoInterestCategory(texts: string[]): string {
+  const t = normKey(texts.join(' '));
+  if (/\b(CAR[OA]|PLATA|DINERO|PRESUPUESTO|ALCANZA|COSTOS?O?)\b/.test(t)) return 'precio';
+  if (/\b(LEJOS|LADO|ZONA|UBICACION|TOLIMA|CLIMA|DISTANCIA|OTRA PARTE|OTRO SITIO)\b/.test(t)) return 'ubicacion';
+  if (/\b(YA COMPRE|OTRO PROYECTO|OTRA CONSTRUCTORA|COMPRE)\b/.test(t)) return 'competencia';
+  if (/\b(AHORA NO|POR AHORA|MAS ADELANTE|DESPUES|PENSAR|PENSARE|MOMENTO|TIEMPO)\b/.test(t)) return 'tiempo';
+  return 'otro';
+}
+
+/**
+ * ¿Es un proveedor ofreciendo servicios a la constructora (no un comprador)? Pide dos señales:
+ * que ofrezca algo y que hable de empresa/servicios, para no confundir "le escribo de Bogotá".
+ */
+export function detectsVendorPitch(text: string): boolean {
+  const t = normKey(text);
+  const offers = /\b(OFRECEMOS|OFRECERLE|OFRECERLES|LE OFREZCO|LES OFREZCO|APOYAMOS A|AYUDAMOS A (LAS )?(CONSTRUCTORAS|EMPRESAS)|SOMOS UNA EMPRESA|NUESTRA EMPRESA|NUESTROS SERVICIOS|NUESTRA PLATAFORMA|PORTAFOLIO DE SERVICIOS|PROPUESTA COMERCIAL|ALIANZA COMERCIAL|SOY PROVEEDOR|SOMOS PROVEEDORES)\b/.test(t);
+  const business = /\b(CONSTRUCTORAS?|SU EMPRESA|SUS PROYECTOS|PARA GRUPO CONSTRUCTOR|SERVICIOS|PLATAFORMA|SOFTWARE|MARKETING|PUBLICIDAD|SOLUCIONES|PROPIEDAD HORIZONTAL|ASAMBLEA)\b/.test(t);
+  return offers && business && t.split(/\s+/).length >= 10;
+}
+
+export const VENDOR_REPLY =
+  'Gracias por escribirnos. Este canal es exclusivo para la venta de terrenos en nuestros clubes de campo, así que por aquí no ' +
+  'gestionamos propuestas de proveedores. Le deseamos un excelente día.';
+
+/**
+ * ¿El lead nombró ese terreno? El modelo llegó a inventarlo: a "Y precios" respondió cotizando el
+ * terreno 21 (copiado del ejemplo de la herramienta) y le dijo al cliente que estaba vendido.
+ * Un número seguido de m², metros, millones, meses… es un área o una cifra, no un terreno.
+ */
+export function leadNamedLot(terreno: string, leadTexts: string[]): boolean {
+  const t = normKey(leadTexts.join(' '));
+  const digits = terreno.replace(/\D/g, '');
+  if (digits) {
+    const n = String(Number(digits));
+    const re = new RegExp(`(^|\\s)0*${n}(?!\\s*(M2|M|MTS|MT|METROS?|MILLONES?|MILL|MESES|MES|CUOTAS|ANOS|MINUTOS|HORAS|KM)\\b)(\\s|$)`);
+    return re.test(t);
+  }
+  const name = normKey(terreno);
+  return !!name && t.includes(name);
+}
+
+/** "un terreno de 471 metros", "uno de 400 o 500": habla de un ÁREA, no de un número de terreno. */
+export function mentionsAreaNotLot(text: string): boolean {
+  const t = normKey(text);
+  return /\b\d{3,5} ?(M2|M|MTS|MT|METROS?( CUADRADOS)?)\b/.test(t) ||
+    /\bUNO DE \d{3,4}\b/.test(t) || /\bDE \d{3,4} O \d{3,4}\b/.test(t);
+}
+
+/** Cualquier enlace a un dominio de Meraki que no sea el oficial se corrige (pasó con ".co.uk"). */
+export function fixMerakiLinks(text: string): string {
+  return text.replace(/(grupoconstructormeraki)\.(?!com\.co\b)[a-z]{2,3}(\.[a-z]{2})?/gi, '$1.com.co');
+}
+
+/** Pide que no lo contacten más o que borren sus datos: se respeta de inmediato. */
+export function detectsOptOut(text: string): boolean {
   const t = normKey(text);
   if (/\bNO (ME |NOS )?(VUELVAN A |SIGAN )?(ESCRIBAN|ESCRIBIR|ESCRIBIENDO|CONTACTEN|CONTACTAR|LLAMEN|LLAMAR|MOLESTEN)\b/.test(t)) return true;
   if (/\b(DEJEN|DEJA) DE (ESCRIBIR|ESCRIBIRME|LLAMAR|LLAMARME|CONTACTARME|MOLESTAR|MOLESTARME)\b/.test(t)) return true;
-  if (/\b(BORREN|ELIMINEN|QUITEN) MI (NUMERO|DATO|DATOS|CONTACTO)\b/.test(t)) return true;
-  return /^(NO GRACIAS )?(YA )?(NO ME INTERESA|NO ESTOY INTERESAD[OA])( YA| MAS)?( GRACIAS)?$/.test(t);
+  return /\b(BORREN|ELIMINEN|QUITEN) MI (NUMERO|DATO|DATOS|CONTACTO)\b/.test(t);
 }
+
+/** Solo dice que no le interesa, sin dar el motivo. */
+export function detectsPlainNoInterest(text: string): boolean {
+  return /^(NO GRACIAS )?(YA )?(NO ME INTERESA|NO ESTOY INTERESAD[OA])( YA| MAS)?( GRACIAS)?$/.test(normKey(text));
+}
+
+/** Pregunta del motivo de no interés (una sola vez). */
+export function noInterestReasonQuestion(name: string): string {
+  return `Entiendo${name ? `, ${name}` : ''}, gracias por contarme. ¿Me podría decir el motivo? Por ejemplo el precio, la ubicación o que no es el momento. ` +
+    'Así reviso si tengo una opción que le sirva mejor.';
+}
+
+export const NO_INTEREST_LABELS: Record<string, string> = {
+  precio: 'Precio', ubicacion: 'Ubicación', competencia: 'Compró o prefiere otra opción', tiempo: 'No es el momento',
+  no_califica: 'No califica', atencion: 'Atención recibida', otro: 'Otro motivo',
+};
 
 /** Aldeas de Sobre Montañas en orden (posición + 1 = número de aldea). */
 const ALDEA_NAMES = ['Gavilán', 'Golondrina', 'Carpintero', 'Guacamayas', 'Canario', 'Águila Real', 'Colibrí', 'Avestruz', 'Carbonero', 'Halcón', 'Azulejo', 'Gorrión', 'Guacharaca', 'Tucanes', 'Aveja Cacatúa', 'Cóndor', 'Loro'];
@@ -327,30 +495,41 @@ export function shouldAnswerAfterWelcome(text: string): boolean {
   return remaining.split(/\s+/).filter(Boolean).length >= 2;
 }
 
-export function buildVictoriaWelcomeSpeech(lead: Pick<Lead, 'name' | 'source'>): string {
+export function buildVictoriaWelcomeSpeech(lead: Pick<Lead, 'name' | 'source'>, short = false): string {
   const cleanName = safeGreetingName(lead);
   const greeting = cleanName
-    ? `¡Hola, ${cleanName}! Qué gusto saludarte. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki.`
-    : `¡Hola! Qué gusto saludarte. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki.`;
+    ? `¡Hola, ${cleanName}! Qué gusto saludarle. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki.`
+    : `¡Hola! Qué gusto saludarle. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki.`;
+
+  // Si el lead ya preguntó algo, la nota de voz solo saluda: la respuesta llega enseguida por escrito
+  // (antes la voz preguntaba el municipio y el texto lo volvía a preguntar).
+  if (short) {
+    return `${greeting} En Meraki llevamos más de 26 años y más de dos mil quince familias han confiado en nosotros. ` +
+      'Con mucho gusto le ayudo: ya mismo le respondo por aquí.';
+  }
 
   return (
     `${greeting} En Meraki contamos con más de 26 años de experiencia haciendo realidad el sueño de inversión y descanso de más de dos mil quince familias. ` +
     `Actualmente tenemos exclusivos clubes de campo en Alvarado, Melgar y Mariquita, en el Tolima. ` +
-    `Cuéntame, ¿en cuál de estos municipios te gustaría invertir o qué tienes en mente para tu descanso familiar?`
+    `Cuénteme, ¿en cuál de estos municipios le gustaría invertir o qué tiene en mente para su descanso familiar?`
   );
 }
 
 export function buildVictoriaWelcomeText(lead: Pick<Lead, 'name' | 'source'>): string {
   const cleanName = safeGreetingName(lead);
   const greeting = cleanName
-    ? `¡Hola, ${cleanName}! ☀️ Qué gusto saludarte. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki. 🌿`
-    : `¡Hola! ☀️ Qué gusto saludarte. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki. 🌿`;
+    ? `¡Hola, ${cleanName}! ☀️ Qué gusto saludarle. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki. 🌿`
+    : `¡Hola! ☀️ Qué gusto saludarle. Soy Victoria Sarmiento, asistente virtual de Grupo Constructor Meraki. 🌿`;
 
   return (
     `${greeting}\n\n` +
-    `Al comunicarte por este canal oficial de ventas, autorizas el tratamiento de tus datos personales para fines informativos y comerciales conforme a la Ley 1581 de 2012.`
+    `Al comunicarse por este canal oficial de ventas, autoriza el tratamiento de sus datos personales para fines informativos y comerciales conforme a la Ley 1581 de 2012.`
   );
 }
+
+/** Aviso de datos que va después de la nota de voz: ya se saludó, no se repite. */
+export const VICTORIA_DATA_NOTICE =
+  'Al comunicarse por este canal oficial de ventas, autoriza el tratamiento de sus datos personales para fines informativos y comerciales conforme a la Ley 1581 de 2012. 🌿';
 
 export function buildLegalWelcomeForCompany(
   config: Pick<AiConfig, 'agentProfile'>,
@@ -827,6 +1006,9 @@ export async function orchestrateAiResponse(
         logger.info('[AI] Transcribiendo audio con Whisper', { leadId });
         userMessage = await transcribeAudio(mediaUrl, mediaType);
         logger.info('[AI] Transcripción lista', { leadId, length: userMessage.length });
+        await db.collection('companies').doc(companyId).collection('leads').doc(leadId).collection('messages').doc(messageId)
+          .update({ 'metadata.transcription': userMessage.slice(0, 2000) })
+          .catch(() => { /* best-effort */ });
       } catch (err) {
         logger.error('[AI] Error transcribiendo audio', { error: String(err) });
         userMessage = '[El lead envió un audio que no se pudo transcribir]';
@@ -863,10 +1045,35 @@ export async function orchestrateAiResponse(
   const customerServiceIntent = shouldRedirectToCustomerService(userMessage);
   const sensitiveInquiry      = detectsSensitiveInquiry(userMessage);
 
+  // 2b-bis2. Proveedor ofreciendo servicios: no es un comprador. Se responde una vez, se califica
+  //          como "no es cliente" y se pausa la IA (antes recibía bienvenida y seguimientos).
+  if (usesConsultiveAgent(config) && detectsVendorPitch(userMessage)) {
+    logger.info('[AI] Proveedor ofreciendo servicios — se califica y se pausa la IA', { leadId });
+    await saveAndSendAiResponse(companyId, leadId, lead, VENDOR_REPLY);
+    await recordAiFicha(companyId, leadId, {
+      kind: 'proveedor',
+      result: 'Proveedor ofreciendo servicios a la constructora; no es un comprador',
+      nextAction: 'Sin seguimiento comercial',
+      notes: `Mensaje: "${userMessage.replace(/\s+/g, ' ').slice(0, 200)}"`,
+      dedupeKey: 'proveedor',
+    });
+    await followUpsRepository.cancelPendingForLead(companyId, leadId);
+    await leadsRepository.update(companyId, leadId, {
+      legalWelcomeSent: true,
+      aiEnabled: false,
+      aiDisabledAt: Timestamp.now(),
+      aiNoInterest: { category: 'no_califica', reason: 'Proveedor ofreciendo servicios', definitive: true, at: Timestamp.now() },
+    });
+    await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+    return;
+  }
+
   // 2b-ter. PRIMER CONTACTO: aviso legal de bienvenida (Ley 1581) determinista.
   // Se envía aunque el lead venga de formulario/pauta si todavía no hay evidencia
   // de aviso legal previo. Si ya conocemos el nombre, no lo volvemos a pedir.
   let justWelcomed = false;
+  let welcomeDoneAtMs = 0;          // para dejar una pausa natural antes de la respuesta
+  let welcomeAskedMunicipio = false; // la bienvenida larga ya preguntó el municipio
   if (!freshLead.legalWelcomeSent) {
     const previous = await messagesRepository.getRecent(companyId, leadId, 10);
     const legalAlreadySent = hasLegalWelcome(previous);
@@ -880,11 +1087,15 @@ export async function orchestrateAiResponse(
       let voiceWelcomeSent = false;
       if (isVoiceEnabled(config) && (!lead.channel || lead.channel === 'whatsapp')) {
         // Enviar nota de voz de bienvenida de Victoria Sarmiento (reutiliza audio cacheado si no tiene nombre específico)
-        const speechText = buildVictoriaWelcomeSpeech(lead);
-        const cacheKey = safeGreetingName(lead) ? undefined : 'welcome_general_v4';
+        // ¿Se va a responder de una vez lo que preguntó? Entonces la voz solo saluda.
+        const answersRightAway = usesConsultiveAgent(config) && !customerServiceIntent && !sensitiveInquiry &&
+          shouldAnswerAfterVoiceWelcome(userMessage);
+        const speechText = buildVictoriaWelcomeSpeech(lead, answersRightAway);
+        welcomeAskedMunicipio = !answersRightAway;
+        const cacheKey = safeGreetingName(lead) ? undefined : (answersRightAway ? 'welcome_short_v1_usted' : 'welcome_general_v5_usted');
         try {
           const voiceRes = await generateVictoriaVoiceNote(companyId, leadId, speechText, cacheKey);
-          if (voiceRes?.audioUrl) {
+          if (voiceRes?.audioUrl && await aiStillInControl(companyId, leadId)) {
             const voiceSent = await sendMediaToLeadChannel({ ...lead, companyId }, voiceRes.audioUrl, voiceRes.mimeType);
             voiceWelcomeSent = true;
             await messagesRepository.create({
@@ -908,7 +1119,17 @@ export async function orchestrateAiResponse(
         } catch (vErr) {
           logger.warn('[AI] No se pudo enviar audio de bienvenida, se enviará texto', { vErr });
         }
-        sentAt = await saveAndSendAiResponse(companyId, leadId, lead, buildLegalWelcomeForCompany(config, lead));
+        // Tras la nota de voz va solo el aviso de datos (sin repetir el saludo), con una pausa
+        // para que no lleguen los mensajes de golpe y el audio llegue primero.
+        if (voiceWelcomeSent && usesConsultiveAgent(config)) {
+          await sleep(2500);
+          sentAt = await saveAndSendAiResponse(companyId, leadId, lead, welcomeAskedMunicipio
+            ? `${VICTORIA_DATA_NOTICE}\n\n¿En qué municipio le gustaría invertir: Alvarado, Melgar o Mariquita?`
+            : VICTORIA_DATA_NOTICE);
+        } else {
+          welcomeAskedMunicipio = false;
+          sentAt = await saveAndSendAiResponse(companyId, leadId, lead, buildLegalWelcomeForCompany(config, lead));
+        }
       } else {
         sentAt = await saveAndSendAiResponse(companyId, leadId, lead, buildLegalWelcomeForCompany(config, lead));
       }
@@ -959,26 +1180,57 @@ export async function orchestrateAiResponse(
       });
       const answerNow = voiceWelcomeSent ? shouldAnswerAfterVoiceWelcome(userMessage) : shouldAnswerAfterWelcome(userMessage);
       justWelcomed = true;
+      welcomeDoneAtMs = Date.now();
+      if (!(await aiStillInControl(companyId, leadId))) {
+        await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+        return;
+      }
       if (!usesConsultiveAgent(config) || !answerNow) {
         await messagesRepository.markAiProcessed(companyId, leadId, messageId);
         await scheduleFollowUps(companyId, leadId, sentAt, config);
+        return;
+      }
+      // Texto automático del anuncio pidiendo precios: los asesores obtenían respuesta del 61 %
+      // saludando y preguntando con quién hablan y desde dónde escribe; con el precio de entrada, nadie
+      // respondía. Primero conversación; el precio va en el siguiente mensaje.
+      if (isAdPrefilledPriceRequest(userMessage)) {
+        await sleep(Math.max(0, 4000 - (Date.now() - welcomeDoneAtMs)));
+        const holdAt = await saveAndSendAiResponse(companyId, leadId, lead,
+          buildPriceHoldReply(safeGreetingName(lead), isForeignPhone(lead.phone) ? abroadPhrase(lead.phone) : null));
+        await leadsRepository.update(companyId, leadId, aiHourlyPatch(freshLead, nowMs, windowActive, priorCount, 2));
+        await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+        await scheduleFollowUps(companyId, leadId, holdAt, config);
+        logger.info('[AI] Texto automático de precios — primero se pregunta nombre y ciudad', { leadId });
         return;
       }
     }
     await leadsRepository.update(companyId, leadId, { legalWelcomeSent: true });
   }
 
+  // "No me interesa" sin motivo: la primera vez se le pregunta el motivo (una sola vez),
+  // para ofrecerle una alternativa y saber por qué se pierden los leads.
+  if (usesConsultiveAgent(config) && !detectsOptOut(userMessage) && detectsPlainNoInterest(userMessage) &&
+      !freshLead.aiNoInterestAskedAt) {
+    logger.info('[AI] El lead dijo que no le interesa — se le pregunta el motivo', { leadId });
+    await saveAndSendAiResponse(companyId, leadId, lead, noInterestReasonQuestion(safeGreetingName(freshLead)));
+    await followUpsRepository.cancelPendingForLead(companyId, leadId);
+    await leadsRepository.update(companyId, leadId, { aiNoInterestAskedAt: Timestamp.now() });
+    await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+    return;
+  }
+
   // Rechazo definitivo: se despide, sin más seguimientos, y queda para el asesor.
   if (usesConsultiveAgent(config) && detectsFinalRejection(userMessage)) {
     logger.info('[AI] El lead rechazó el contacto — se pausa la IA sin seguimientos', { leadId });
+    const optOut = detectsOptOut(userMessage);
     await recordAiFicha(companyId, leadId, {
       kind: 'desistimiento',
-      result: 'El cliente dijo que no le interesa o pidió no ser contactado',
+      result: optOut ? 'El cliente pidió no ser contactado' : 'El cliente dijo que no le interesa y no dio el motivo',
       nextAction: 'Sin seguimiento; el asesor decide si retoma',
       notes: `Mensaje del cliente: "${userMessage.slice(0, 200)}"`,
       dedupeKey: 'desistimiento',
     });
-    await saveAndSendAiResponse(companyId, leadId, lead, 'Te entiendo, gracias por escribirnos. Cuando quieras retomarlo, aquí estaremos. 🌿');
+    await saveAndSendAiResponse(companyId, leadId, lead, 'Le entiendo, gracias por escribirnos. Cuando quiera retomarlo, aquí estaremos. 🌿');
     await followUpsRepository.cancelPendingForLead(companyId, leadId);
     await leadsRepository.update(companyId, leadId, {
       aiEnabled: false,
@@ -1037,6 +1289,59 @@ export async function orchestrateAiResponse(
     return;
   }
 
+  // 2b-quater. Respuesta SÍ / NO a la plantilla de seguimiento que pregunta si quiere un asesor.
+  let wantsAdvisorFromTemplate = false;
+  const yesNo = usesConsultiveAgent(config) ? templateYesNo(userMessage) : null;
+  if (yesNo) {
+    const recentForTemplate = await messagesRepository.getRecent(companyId, leadId, 6);
+    const lastAiMsg = [...recentForTemplate].reverse().find((m) => m.direction === 'outbound' && m.senderType === 'ai');
+    const lastTemplate = String(lastAiMsg?.metadata?.templateName ?? '');
+    const askedYesNo = !!lastTemplate && /RESPONDE SI\b.*RESPONDE NO\b/.test(normKey(lastAiMsg?.content ?? ''));
+    if (askedYesNo && yesNo === 'no') {
+      logger.info('[AI] Respondió NO a la plantilla de seguimiento — se cierra la solicitud', { leadId, lastTemplate });
+      await leadsRepository.update(companyId, leadId, {
+        aiNoInterest: { category: 'otro', reason: 'Respondió NO al mensaje de seguimiento', definitive: true, at: Timestamp.now() },
+      });
+      await recordAiFicha(companyId, leadId, {
+        kind: 'desistimiento',
+        result: 'Respondió NO al seguimiento: cerró su solicitud de información',
+        nextAction: 'Sin seguimiento; el asesor decide si retoma',
+        dedupeKey: 'desistimiento',
+      });
+      await saveAndSendAiResponse(companyId, leadId, lead, 'Entendido, gracias por avisarnos. Cerramos su solicitud; si más adelante quiere retomarla, aquí estaremos. 🌿');
+      await followUpsRepository.cancelPendingForLead(companyId, leadId);
+      await leadsRepository.update(companyId, leadId, {
+        aiEnabled: false,
+        aiDisabledAt: Timestamp.now(),
+        aiRejectedAt: Timestamp.now(),
+        ...humanHandoffPatch(freshLead),
+      });
+      await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+      return;
+    }
+    if (askedYesNo && yesNo === 'si') wantsAdvisorFromTemplate = true;
+  }
+
+  // 2c. Solo agradece y Victoria ya cerró sin pregunta pendiente: no se repite el cierre.
+  //     Se reprograma el seguimiento desde este mensaje para retomarlo después.
+  if (usesConsultiveAgent(config) && isCourtesyOnly(userMessage)) {
+    const recent = await messagesRepository.getRecent(companyId, leadId, 12);
+    const lastAi = [...recent].reverse().find((m) =>
+      m.direction === 'outbound' && m.senderType === 'ai' && !!m.content?.trim() &&
+      !/ley\s*1581/i.test(m.content ?? '') && !m.metadata?.origin);
+    // Solo si TODO lo que escribió desde la última respuesta es agradecimiento: si antes preguntó
+    // algo (y esa respuesta se descartó por llegar este mensaje), la pregunta se responde.
+    const sinceLastAi = recent.filter((m) => m.direction === 'inbound' && m.senderType === 'lead' &&
+      (!lastAi || m.createdAt.toMillis() > lastAi.createdAt.toMillis()));
+    const onlyCourtesy = sinceLastAi.every((m) => m.id === messageId || isCourtesyOnly(m.content ?? ''));
+    if (lastAi && onlyCourtesy && !/\?/.test(lastAi.content ?? '')) {
+      logger.info('[AI] El lead solo agradeció tras el cierre — no se responde de nuevo', { leadId });
+      await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+      await scheduleFollowUps(companyId, leadId, Timestamp.now(), config);
+      return;
+    }
+  }
+
   // 3. Detectar keyword de transferencia a humano
   if (detectsTransferKeyword(userMessage, config.transferKeywords)) {
     logger.info('[AI] Keyword de transferencia detectado', { leadId, userMessage });
@@ -1047,7 +1352,7 @@ export async function orchestrateAiResponse(
       nextAction: 'El asesor contacta al cliente',
       notes: `Mensaje del cliente: "${userMessage.slice(0, 200)}"`,
     });
-    const transferMsg = '¡Claro! Te voy a conectar con uno de nuestros asesores. Por favor espera un momento. 🙏';
+    const transferMsg = '¡Claro! Le voy a conectar con uno de nuestros asesores. Por favor espere un momento. 🙏';
     await saveAndSendAiResponse(companyId, leadId, lead, transferMsg);
     // Pausar IA automáticamente e iniciar SLA de 24h para el asesor
     await leadsRepository.update(companyId, leadId, {
@@ -1096,7 +1401,7 @@ export async function orchestrateAiResponse(
           modalidad: leadPreferredModality([
             ...history.filter((m) => m.direction === 'inbound' && m.senderType === 'lead').slice(-6).map((m) => m.content ?? ''),
             userMessage,
-          ]) ?? 'llamada',
+          ]) ?? (isForeignPhone(lead.phone) ? 'videollamada' : 'llamada'),
         }),
       },
     }, config.businessName, userMessage);
@@ -1171,7 +1476,9 @@ export async function orchestrateAiResponse(
     role: 'system',
     content:
       `Datos internos del lead para esta conversación: nombre registrado: "${lead.name || ''}". ` +
-      `Si ese nombre parece una marca, un apodo o un perfil raro, no lo uses para dirigirte al lead. ` +
+      (safeGreetingName(lead)
+        ? `Si lo nombras, dile solo "${safeGreetingName(lead)}". `
+        : 'Ese nombre es el de su perfil y no parece un nombre de persona: NO lo uses para dirigirte al lead (háblale sin nombre hasta que te lo diga). ') +
       `Teléfono registrado: "${lead.phone || ''}". ` +
       `Si el teléfono registrado no está vacío y el lead quiere agendar, NO preguntes a qué número desea ` +
       `recibir la llamada de entrada: confirma ese número exacto. Si el lead dice "a este número", ` +
@@ -1221,7 +1528,7 @@ export async function orchestrateAiResponse(
       `específico (p. ej. "me gusta el 71", "el lote amarillo"), NO vuelvas a llamar enviar_plano y NO ` +
       `saltes a pedir el número de contacto de golpe: ` +
       (config.quoteMode !== 'off'
-        ? `sigue el flujo de cotización (forma de pago una sola vez y enviar_cotizacion) y después ofrece la cita. `
+        ? `sigue el flujo de cotización (enviar_cotizacion; si no dio forma de pago, el sistema cotiza a 40 meses) y después ofrece la cita. `
         : `primero, de forma natural, OFRÉCELE agendar una cita con un asesor para darle información personalizada y una cotización de ese terreno, y espera a que acepte. `) +
       `Cuando acepte la cita, confirma el teléfono ` +
       `registrado si existe; si no existe, pídelo. Después de confirmar el número, NO preguntes qué día ` +
@@ -1234,7 +1541,9 @@ export async function orchestrateAiResponse(
       `El saludo/aviso legal de bienvenida lo gestiona el sistema automáticamente: NO lo envíes tú ni ` +
       `vuelvas a pedir el consentimiento de datos. Origen del lead: ${describeLeadOrigin(lead)}. ` +
       `Un lead puede llegar de una pauta (incluso del exterior), de un formulario o de WhatsApp directo; ` +
-      `ubícate con naturalidad según su origen y su mensaje. Responde SIEMPRE, y SOLO con la información ` +
+      `ubícate con naturalidad según su origen y su mensaje. Si el anuncio promete algo (por ejemplo un recorrido por videollamada ` +
+      `o que Meraki se encarga de construir), conéctalo en tu respuesta. Los precios y áreas válidos son SOLO los de tus instrucciones ` +
+      `y del sistema, aunque el anuncio diga otro valor: no menciones esa diferencia. Responde SIEMPRE, y SOLO con la información ` +
       `de tus instrucciones: si te preguntan algo que no está ahí (o un dato que no tienes), dilo con ` +
       `transparencia y ofrece que un asesor lo confirme. Nunca inventes precios, áreas, fechas, estados ` +
       `de obra ni características.`,
@@ -1343,16 +1652,14 @@ export async function orchestrateAiResponse(
         `NO vuelvas a preguntar por la forma de pago ni ofrezcas cotizarlo de nuevo; simplemente responde a su pregunta ` +
         `y ofrécele agendar una llamada con un asesor. ` +
         (usesConsultiveAgent(config)
-          ? `Si el lead eligió un terreno pero NO ha dicho explícitamente cómo desea pagar, ESTÁ ESTRICTAMENTE PROHIBIDO llamar enviar_cotizacion y ESTÁ ESTRICTAMENTE PROHIBIDO asumir o enviar pago de contado por defecto. ` +
-            `Pregúntale UNA sola vez, sin reconfirmar el terreno, ofreciendo las opciones autorizadas de forma clara y directa: ` +
-            `"¿prefieres pago de contado o pago a plazos? Si eliges cuotas, ¿a cuántos meses te gustaría el plan de pago: 20, 30 o 40 meses?". ` +
-            `SOLO cuando el lead responda si quiere contado o elija los meses (20, 30 o 40), procede a llamar enviar_cotizacion con esa modalidad elegida. ` +
+          ? `Si el lead eligió un terreno pero NO ha dicho cómo desea pagar, NO le preguntes la forma de pago: llama enviar_cotizacion SIN tipo_pago y el sistema lo cotiza a 40 meses (la cuota más cómoda) y le explica que de contado o a menos meses el valor total es menor. ` +
+            `NUNCA cotices de contado por defecto. Si el lead ya eligió contado o 20, 30 o 40 meses, cotiza con esa modalidad. ` +
             `NUNCA hagas preguntas abiertas sin nombrar los 20, 30 o 40 meses. NUNCA uses la palabra "financiación". `
           : `Si aún no has enviado la cotización de ese terreno, NO inventes el ` +
             `precio: pregúntale si lo quiere de contado o en cuotas (y si es en cuotas, a cuántos meses), y ` +
             `luego usa la herramienta enviar_cotizacion — ella calcula el valor real y envía la imagen. `) +
         (proactivo
-          ? `Ofrece la cotización de forma proactiva apenas el lead elija un terreno (preguntando primero la forma de pago). `
+          ? `Ofrece la cotización de forma proactiva apenas el lead elija un terreno (sin preguntar la forma de pago: si no la dio, se cotiza a 40 meses). `
           : `Cotiza cuando el lead pregunte por el precio de un terreno. `) +
         `El parámetro "sector" de enviar_cotizacion DEBE ser el SECTOR o ETAPA EXACTO, NUNCA el nombre general del club de campo (única excepción: Llano Grande, ver abajo). ` +
         `Mapa de sectores válidos: ` +
@@ -1417,14 +1724,13 @@ export async function orchestrateAiResponse(
           `- Selecciona amenidades relevantes según su motivación y explica sus beneficios (sin listas excesivas tipo catálogo).\n` +
           `6. PLANO Y COTIZACIÓN (FLUJO COMERCIAL CORRECTO):\n` +
           `- Si el cliente pide directamente el plano, envíalo de inmediato con enviar_plano.\n` +
-          `- Si el cliente elige un terreno o pide cotización pero NO ha indicado la forma de pago:\n` +
-          `  ESTÁ PROHIBIDO llamar enviar_cotizacion de contado por defecto. Primero pregúntale: "¿prefieres pago de contado o pago a plazos? Si eliges cuotas, ¿a cuántos meses te gustaría el plan de pago: 20, 30 o 40 meses?".\n` +
-          `  Una vez el cliente elija la modalidad (contado, o 20, 30 o 40 meses), envía la cotización correspondiente con enviar_cotizacion.\n` +
+          `- Si el cliente elige un terreno o pide cotización pero NO ha indicado la forma de pago: NO le preguntes la forma de pago. Llama enviar_cotizacion sin tipo_pago y el sistema lo cotiza a 40 meses.\n` +
+          `  Si después pide contado o 20 o 30 meses, cotiza esa modalidad (el valor total es menor).\n` +
           `7. MEMORIA Y CERO PREGUNTAS REDUNDANTES:\n` +
           `- Victoria NUNCA debe volver a preguntar información que el cliente ya proporcionó.\n` +
           `- Si el cliente YA indicó que quiere cuotas/plazos (o mencionó meses), NO preguntes si prefiere contado o cuotas.\n` +
           `- Si el cliente solicita un plazo no autorizado (p. ej. 24 meses), indícale amablemente que las opciones son 20, 30 o 40 meses y pregúntale directamente cuál de esos tres plazos prefiere.\n` +
-          `- Si el cliente elige un terreno y aún no ha indicado forma de pago: "¿prefieres pago de contado o pago a plazos? Si eliges cuotas, ¿a cuántos meses te gustaría: 20, 30 o 40 meses?".\n` +
+          `- Si el cliente elige un terreno y aún no ha indicado forma de pago: cotízalo de una vez (enviar_cotizacion sin tipo_pago, el sistema usa 40 meses). No preguntes contado o cuotas.\n` +
           `8. PROHIBICIÓN TOTAL DE PREGUNTAS ABIERTAS DE PLAZO (ANTI-BUCLE):\n` +
           `NUNCA preguntes "¿a cuántos meses le gustaría financiar?" ni dejes el plazo abierto.\n` +
           `9. MODALIDADES AUTORIZADAS: Exclusivamente contado, 20 meses, 30 meses y 40 meses.\n` +
@@ -1496,10 +1802,81 @@ export async function orchestrateAiResponse(
     });
   }
 
+  if (freshLead.aiNoInterestAskedAt && !freshLead.aiNoInterest) {
+    messages.push({
+      role: 'system',
+      content: 'Antes le preguntaste al cliente por qué no le interesa. Si en este mensaje da el motivo, llama registrar_no_interes ' +
+        'con la categoría y el motivo en sus palabras, y sigue lo que te indique la herramienta. Si cambia de tema o vuelve a mostrar interés, ' +
+        'responde normal. No vuelvas a preguntar el motivo.',
+    });
+  }
+
   if (justWelcomed) {
     messages.push({
       role: 'system',
-      content: 'Acabas de enviar la bienvenida (y, si hubo nota de voz, ya te presentaste y preguntaste el municipio). NO vuelvas a saludar, a presentarte ni a repetir esa pregunta: responde directo a lo que pidió el lead.',
+      content: welcomeAskedMunicipio
+        ? 'Acabas de enviar la bienvenida: ya te presentaste y preguntaste en qué municipio le gustaría invertir. NO vuelvas a saludar, a presentarte ni a repetir esa pregunta: responde directo a lo que pidió el lead y cierra con otra pregunta distinta.'
+        : 'Acabas de saludar y presentarte por nota de voz, y le dijiste que ya le respondes por aquí. NO vuelvas a saludar ni a presentarte: empieza respondiendo directo y con calidez lo que preguntó el lead.',
+    });
+  }
+
+  // Si en el mensaje anterior se le prometieron los precios, ahora se le dan.
+  const lastAiForPrice = [...longHistory].reverse().find((m) => m.direction === 'outbound' && m.senderType === 'ai');
+  if (lastAiForPrice?.content?.includes(PRICE_HOLD_MARK)) {
+    messages.push({
+      role: 'system',
+      content: 'En tu mensaje anterior le dijiste al lead que con gusto le compartías los precios y le preguntaste su nombre y su ciudad. ' +
+        'Ahora agradécele con su nombre si lo dio, dale los precios como indican tus instrucciones (precio desde, bonos y pago directo a 20, 30 o 40 meses) ' +
+        'y, según la ciudad que diga, recomiéndale la zona más cercana. Cierra con una sola pregunta sobre el municipio o club que le interesa.',
+    });
+  }
+
+  // "No gracias" a la cita no es un no al terreno: la primera vez se sigue conversando.
+  //  Si vuelve a decir que no, o si el "no" es al club, se le pregunta el motivo una vez.
+  const declineNow = usesConsultiveAgent(config) && detectsDeclineCue(userMessage);
+  if (declineNow) {
+    const lastAiText = [...longHistory].reverse().find((m) => m.direction === 'outbound' && m.senderType === 'ai' && !!m.content?.trim())?.content ?? '';
+    if (lastAiOfferedCita(lastAiText) && !freshLead.aiCitaDeclinedAt && !freshLead.aiNoInterestAskedAt) {
+      await leadsRepository.update(companyId, leadId, { aiCitaDeclinedAt: Timestamp.now() });
+      messages.push({
+        role: 'system',
+        content: 'El lead le dijo que no a la CITA, no al terreno. NO te despidas ni registres no interés. Dile con amabilidad que no hay problema, ' +
+          'sin compromiso, y hazle UNA sola pregunta para seguir asesorándolo: qué le pareció la cotización o el club, o si prefiere otro plazo, ' +
+          'pago de contado u otro terreno. No vuelvas a ofrecer la cita en este mensaje.',
+      });
+    } else if (!/^NO( SENOR| SENORA)?$/.test(normKey(userMessage))) {
+      // (un "no" suelto a otra pregunta, como ver el plano, lo maneja el modelo sin forzar el motivo)
+      messages.push({
+        role: 'system',
+        content: inferNoInterestCategory([userMessage]) !== 'otro'
+          ? `El lead ya dijo el motivo (${NO_INTEREST_LABELS[inferNoInterestCategory([userMessage])]}): NO se lo preguntes. Llama registrar_no_interes ` +
+            'con esa categoría y sus palabras (definitivo=false) y ofrécele en el mismo mensaje UNA alternativa que resuelva ese motivo ' +
+            '(si es precio o tamaño: terrenos de menor área de Mar Canarias o Sobre Montañas; si es ubicación: el club más cercano a su ciudad).'
+          : freshLead.aiNoInterestAskedAt
+          ? 'El lead está diciendo que no le interesa y ya le preguntaste el motivo. Llama registrar_no_interes con la categoría y el motivo en sus palabras (definitivo=true si no quiere continuar) y sigue lo que te indique la herramienta.'
+          : 'El lead está diciendo que no le interesa o no quiere avanzar. Si no te ha dicho el motivo, pregúntaselo UNA sola vez, con amabilidad, antes de despedirte (sección 8b). ' +
+            'Si ya dijo el motivo, llama registrar_no_interes. Nunca te despidas sin hacer una de las dos cosas.',
+      });
+      if (!freshLead.aiNoInterestAskedAt) await leadsRepository.update(companyId, leadId, { aiNoInterestAskedAt: Timestamp.now() });
+    }
+  }
+
+  if (mentionsAreaNotLot(userMessage)) {
+    messages.push({
+      role: 'system',
+      content: 'El lead habla de un ÁREA en metros cuadrados, no de un número de terreno: NO llames enviar_cotizacion con ese número. ' +
+        'Dile qué club o etapa tiene terrenos de ese tamaño (según las áreas disponibles hoy) y ofrécele el plano para que elija uno de esa área y se lo cotices.',
+    });
+  }
+
+  if (isForeignPhone(lead.phone)) {
+    messages.push({
+      role: 'system',
+      content:
+        `El lead escribe ${abroadPhrase(lead.phone)} (número de fuera de Colombia). En tu primera respuesta reconócelo con calidez ` +
+        `(por ejemplo: "Qué bueno que nos escriba ${abroadPhrase(lead.phone)}"), sin preguntarle dónde vive. Cuando venga al caso, cuéntale que ` +
+        'puede comprar desde allá: la firma de los documentos es electrónica, el pago es directo con la constructora y puede conocer el club ' +
+        'sin viajar, con un recorrido por videollamada con un asesor. Su cita es por videollamada de Google Meet (salvo que pida una llamada).',
     });
   }
 
@@ -1529,7 +1906,9 @@ export async function orchestrateAiResponse(
       }
       const ready = !!quoteState.pago && !quoteState.quoted &&
         (quoteState.lotThisTurn || quoteState.paymentThisTurn || isShortFollowUp(userMessage));
-      if (ready && check?.kind === 'found' && check.available) {
+      // Sin forma de pago: se cotiza igual (a 40 meses) apenas elige el terreno.
+      const readyDefault = !quoteState.pago && !quoteState.quoted && quoteState.lotThisTurn && usesConsultiveAgent(config);
+      if ((ready || readyDefault) && check?.kind === 'found' && check.available) {
         const sectorArg = activePlanoClub === 'llano-grande' ? 'Llano Grande' : quoteSectorArg(check.sector);
         forcedToolCall = {
           id: `forced_quote_${messageId}`,
@@ -1539,7 +1918,7 @@ export async function orchestrateAiResponse(
             arguments: JSON.stringify({
               sector: sectorArg,
               terreno: quoteState.terreno,
-              tipo_pago: quoteState.pago,
+              ...(quoteState.pago ? { tipo_pago: quoteState.pago } : {}),
               ...(quoteState.pago === 'cuotas' && quoteState.meses ? { meses: quoteState.meses } : {}),
             }),
           },
@@ -1570,9 +1949,20 @@ export async function orchestrateAiResponse(
     }
   }
 
+  // SÍ a la plantilla de seguimiento: se le ofrecen de una vez los horarios con el asesor.
+  if (!forcedToolCall && wantsAdvisorFromTemplate) {
+    forcedToolCall = {
+      id: `forced_horarios_${messageId}`,
+      type: 'function',
+      function: { name: 'consultar_horarios', arguments: '{}' },
+    };
+    logger.info('[AI] Respondió SÍ a la plantilla de seguimiento — se ofrecen horarios', { leadId });
+  }
+
   // 6. Llamar a OpenAI con herramienta de agendamiento
   let aiReply: string;
   let appointmentScheduled = false; // true si en este turno se agendó/reagendó una cita
+  let leadDeclined = false;         // true si el lead dijo que definitivamente no le interesa
   let fichasThisTurn = 0;
   if (detectsBudgetObjection(userMessage) && await recordAiFicha(companyId, leadId, {
     kind: 'objecion_presupuesto',
@@ -1589,8 +1979,8 @@ export async function orchestrateAiResponse(
     logger.info('[AI] Llamando a OpenAI', { leadId, historyLength: history.length, hasMedia: !!mediaUrl });
 
     const toolsToUse = config.quoteMode !== 'off'
-      ? [...APPOINTMENT_TOOLS, PORTAFOLIO_TOOL, AVANCE_OBRA_TOOL, getCotizacionToolForCompany(config)]
-      : [...APPOINTMENT_TOOLS, PORTAFOLIO_TOOL, AVANCE_OBRA_TOOL];
+      ? [...APPOINTMENT_TOOLS, PORTAFOLIO_TOOL, AVANCE_OBRA_TOOL, NO_INTERES_TOOL, getCotizacionToolForCompany(config)]
+      : [...APPOINTMENT_TOOLS, PORTAFOLIO_TOOL, AVANCE_OBRA_TOOL, NO_INTERES_TOOL];
 
     const runCompletion = async (forceQuote: boolean) => {
       const params = buildCompletionParamsForCompany(config, currentTurnHasImage, messages, toolsToUse);
@@ -1649,6 +2039,12 @@ export async function orchestrateAiResponse(
       let directMessage: string | null = null;
       const asksConstructionThisTurn = toolCalls.some((c) => c.type === 'function' && c.function.name === 'consultar_avance_obra');
       for (const call of toolCalls) {
+        // Si el asesor tomó el chat mientras la IA pensaba, no se envía nada más.
+        if (!(await aiStillInControl(companyId, leadId))) {
+          logger.info('[AI] El asesor tomó el chat durante el turno — se cancela la respuesta', { leadId });
+          await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+          return;
+        }
         const toolName = call.type === 'function' ? call.function.name : '';
         let result: unknown;
         if (toolName === 'enviar_portafolio' && asksConstructionThisTurn) {
@@ -1669,6 +2065,11 @@ export async function orchestrateAiResponse(
           result = await runCotizacionTool(companyId, leadId, lead, call, config, userMessage);
         } else if (toolName === 'consultar_horarios') {
           result = await runAvailabilityTool(companyId, leadId, lead, call);
+        } else if (toolName === 'registrar_no_interes') {
+          const r = await runNoInterestTool(companyId, leadId, lead, call);
+          if (r.definitivo) leadDeclined = true;
+          if (r.fichaRecorded) fichasThisTurn += 1;
+          result = r;
         } else {
           result = await runAppointmentTool(companyId, leadId, call, config.businessName, userMessage);
         }
@@ -1721,6 +2122,38 @@ export async function orchestrateAiResponse(
   }
 
   await recordAiUsage(companyId, leadId, config.model || 'default', usages);
+
+  // 6a. Si la IA se despidió de un lead que dijo que no y no registró el motivo, se registra igual
+  //     (antes quedaban como "nuevo" leads que habían dicho "no gracias").
+  if (!aiFailed && !leadDeclined && usesConsultiveAgent(config) && isFarewellReply(aiReply)) {
+    const recentLeadTexts = [...longHistory]
+      .filter((m) => m.direction === 'inbound' && m.senderType === 'lead')
+      .slice(-3)
+      .map((m) => m.content ?? '')
+      .concat(userMessage);
+    if (recentLeadTexts.some((t) => detectsDeclineCue(t))) {
+      const reason = [...recentLeadTexts].reverse().find((t) => detectsDeclineCue(t)) ?? userMessage;
+      const r = await runNoInterestTool(companyId, leadId, lead, {
+        id: `auto_no_interes_${messageId}`,
+        type: 'function',
+        function: { name: 'registrar_no_interes', arguments: JSON.stringify({ categoria: inferNoInterestCategory(recentLeadTexts), motivo: reason, definitivo: true }) },
+      });
+      if (r.definitivo) leadDeclined = true;
+      if (r.fichaRecorded) fichasThisTurn += 1;
+      logger.info('[AI] La IA se despidió de un lead que dijo que no — se registró el no interés', { leadId });
+    }
+  }
+
+  // 6b. Pausa natural: que la respuesta no llegue pegada a la bienvenida.
+  if (welcomeDoneAtMs) await sleep(Math.max(0, 4000 - (Date.now() - welcomeDoneAtMs)));
+
+  // 6c. Si el lead escribió otra vez mientras se preparaba esta respuesta, no se envía:
+  //     el mensaje más nuevo responde con los dos en contexto (evita la doble respuesta).
+  if (!aiFailed && await newerLeadMessageArrived(companyId, leadId, messageId)) {
+    logger.info('[AI] Llegó un mensaje más nuevo del lead — se descarta esta respuesta', { leadId, messageId });
+    await messagesRepository.markAiProcessed(companyId, leadId, messageId);
+    return;
+  }
 
   // 7. Guardar respuesta IA + enviar por el canal del lead (en audio si el lead envió audio)
   const aiSentAt = await saveAndSendAiResponse(
@@ -1790,7 +2223,16 @@ export async function orchestrateAiResponse(
   // Con cada ficha nueva se recalcula el análisis IA (puntaje, temperatura, presupuesto).
   if (fichasThisTurn > 0) await refreshLeadAnalysis(companyId, leadId);
 
-  if (appointmentScheduled) {
+  if (leadDeclined) {
+    await followUpsRepository.cancelPendingForLead(companyId, leadId);
+    await leadsRepository.update(companyId, leadId, {
+      aiEnabled: false,
+      aiDisabledAt: Timestamp.now(),
+      aiRejectedAt: Timestamp.now(),
+      ...humanHandoffPatch(freshLead),
+    });
+    logger.info('[AI] El lead no quiere continuar — IA pausada sin seguimientos', { leadId });
+  } else if (appointmentScheduled) {
     await followUpsRepository.cancelPendingForLead(companyId, leadId);
     logger.info('[AI] Cita agendada — follow-ups cancelados', { leadId });
   } else {
@@ -1924,6 +2366,90 @@ const APPOINTMENT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+const NO_INTERES_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'registrar_no_interes',
+    description:
+      'Registra por qué el lead no está interesado. Úsala cuando el lead diga el motivo por el que no le interesa o no quiere avanzar ' +
+      '(precio, ubicación, ya compró en otro lado, no es el momento, etc.). No envía nada al lead. ' +
+      'definitivo=false si el motivo tiene solución y le vas a ofrecer una alternativa; definitivo=true si no quiere continuar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        categoria: {
+          type: 'string',
+          enum: ['precio', 'ubicacion', 'competencia', 'tiempo', 'no_califica', 'atencion', 'otro'],
+          description: 'precio = caro o no le alcanza; ubicacion = la zona no le sirve; competencia = compró o prefiere otra opción; ' +
+            'tiempo = no es el momento; no_califica = no busca comprar un terreno; atencion = está molesto con la atención; otro = cualquier otro.',
+        },
+        motivo: { type: 'string', description: 'El motivo en palabras del lead, corto.' },
+        definitivo: { type: 'boolean', description: 'true si no quiere continuar; false si le ofrecerás una alternativa.' },
+      },
+      required: ['categoria', 'motivo', 'definitivo'],
+    },
+  },
+};
+
+/** Guarda el motivo de no interés; si es definitivo, deja la ficha de desistimiento y avisa al asesor. */
+async function runNoInterestTool(
+  companyId: string,
+  leadId: string,
+  lead: Pick<Lead, 'name' | 'phone' | 'assignedTo'>,
+  call: OpenAI.Chat.Completions.ChatCompletionMessageToolCall
+): Promise<{ ok: boolean; definitivo?: boolean; fichaRecorded?: boolean; mensaje?: string; error?: string }> {
+  if (call.type !== 'function') return { ok: false, error: 'herramienta desconocida' };
+  let args: { categoria?: string; motivo?: string; definitivo?: boolean } = {};
+  try { args = JSON.parse(call.function.arguments || '{}'); } catch { /* argumentos inválidos */ }
+  const categoria = args.categoria && NO_INTEREST_LABELS[args.categoria] ? args.categoria : 'otro';
+  const label = NO_INTEREST_LABELS[categoria];
+  const motivo = String(args.motivo ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  const definitivo = args.definitivo === true;
+  await leadsRepository.update(companyId, leadId, {
+    aiNoInterest: { category: categoria, reason: motivo, definitive: definitivo, at: Timestamp.now() },
+  });
+  await bumpAiDaily(companyId, { [`noInteres.${categoria}`]: 1 });
+  logger.info('[AI] Motivo de no interés registrado', { leadId, categoria, definitivo });
+  if (!definitivo) {
+    const objection = categoria === 'precio'
+      ? await recordAiFicha(companyId, leadId, {
+          kind: 'objecion_presupuesto',
+          result: 'El cliente planteó una objeción de precio o presupuesto',
+          nextAction: 'Ofrecer plan de pagos, bono y terrenos de menor valor',
+          notes: motivo ? `En palabras del cliente: "${motivo}"` : undefined,
+          dedupeKey: 'objecion_presupuesto',
+        })
+      : false;
+    return {
+      ok: true, definitivo: false, fichaRecorded: objection,
+      mensaje: 'Registrado. Ofrécele UNA alternativa que resuelva ese motivo (sección "Cuando dice que no le interesa") y termina con una sola pregunta. ' +
+        'Si la rechaza, llama registrar_no_interes con definitivo=true.',
+    };
+  }
+  const fichaRecorded = await recordAiFicha(companyId, leadId, {
+    kind: 'desistimiento',
+    result: `No le interesa. Motivo: ${label}`,
+    pipelineStage: categoria === 'precio' ? 'no_interesado_dinero'
+      : categoria === 'ubicacion' ? 'no_interesado_ubicacion'
+      : categoria === 'no_califica' ? 'no_interesado_otra'
+      : undefined,
+    nextAction: 'Sin seguimiento; el asesor decide si retoma',
+    notes: motivo ? `En palabras del cliente: "${motivo}"` : undefined,
+    dedupeKey: 'desistimiento',
+  });
+  await sendAdvisorPush(companyId, lead.assignedTo, {
+    title: `${lead.name?.trim() || lead.phone || 'Un lead'} no quiere continuar`,
+    body:  `Motivo: ${label}${motivo ? ` — "${motivo.slice(0, 120)}"` : ''}. La IA se despidió y se pausó.`,
+    url:   `/dashboard/inbox?lead=${leadId}`,
+    type:  'lead-attention',
+    leadId,
+  }).catch(() => { /* best-effort */ });
+  return {
+    ok: true, definitivo: true, fichaRecorded,
+    mensaje: 'Registrado. Agradece, deja la puerta abierta y despídete en una o dos frases, de usted. No ofrezcas nada más ni hagas preguntas.',
+  };
+}
+
 const AVANCE_OBRA_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
@@ -1988,11 +2514,11 @@ export const COTIZACION_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
             'Laguna Mar → Mar Santorini, Mar Canarias. Sobre Montañas → sector "Sobre Montañas" y terreno = número o nombre de la aldea (1 a 17); sus plazos son 12, 18 o 24 meses. ' +
             'Pasa el sector tal como lo nombró el lead, p. ej. "Las Vegas", "Texas", "Mar Santorini", "Valle de Aburrá".',
         },
-        terreno: { type: 'string', description: 'Número del terreno/lote, p. ej. "21", "7", "216".' },
+        terreno: { type: 'string', description: 'Número del terreno EXACTAMENTE como lo dijo el lead. NUNCA inventes un número: si el lead no ha dicho uno, NO llames esta herramienta (ofrécele el plano).' },
         tipo_pago: {
           type: 'string',
           enum: ['contado', 'cuotas'],
-          description: 'Forma de pago elegida por el lead.',
+          description: 'Forma de pago elegida por el lead. Omítela si el lead no la ha dicho (el sistema cotiza a 40 meses).',
         },
         meses: { type: 'number', description: 'Solo si tipo_pago = cuotas: número de meses (plazo).' },
         bono_ganado: {
@@ -2002,7 +2528,7 @@ export const COTIZACION_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
             '(p. ej. 50000000 si dijo "gané 50 millones"). Si viene, se usa ese bono en vez del bono base.',
         },
       },
-      required: ['sector', 'terreno', 'tipo_pago'],
+      required: ['sector', 'terreno'],
     },
   },
 };
@@ -2015,8 +2541,7 @@ export const COTIZACION_TOOL_DEMO: OpenAI.Chat.Completions.ChatCompletionTool = 
       'Envía al lead, por WhatsApp, la IMAGEN oficial de una cotización de un terreno específico. ' +
       'Úsala EXCLUSIVAMENTE cuando el lead ya eligió un terreno (número + sector) y solicita conocer su valor específico o propuesta de pago. ' +
       'Modalidades comerciales autorizadas: pago de contado, 20 meses, 30 meses o 40 meses. ' +
-      'Si el lead aún no dio la forma de pago, pregúntala UNA sola vez con las modalidades explícitas: ' +
-      '"¿Prefiere pago de contado o pago a plazos? Si elige cuotas, puede escoger 20, 30 o 40 meses." ' +
+      'Si el lead aún no dio la forma de pago, NO la preguntes: llama la herramienta sin tipo_pago y el sistema cotiza a 40 meses (la cuota más cómoda; 24 en Sobre Montañas). ' +
       'Si ya la dio (aunque haya sido para otro terreno), cotiza de una vez: no la vuelvas a preguntar ni reconfirmes el terreno. ' +
       'PROHIBIDO llamarla ante consultas generales de precios (las consultas generales se responden con el precio "desde" vigente y las modalidades de pago). ' +
       'Si ya enviaste la cotización y el lead solo responde "sí", "ese", "me gusta", "listo" o confirma cita, NO la vuelvas a llamar salvo que pida cambiar de modalidad (ej. cambiar a 20, 30 o 40 meses) o pida reenvío explícito.',
@@ -2033,11 +2558,11 @@ export const COTIZACION_TOOL_DEMO: OpenAI.Chat.Completions.ChatCompletionTool = 
             'Laguna Mar → Mar Santorini, Mar Canarias. Sobre Montañas → sector "Sobre Montañas" y terreno = número o nombre de la aldea (1 a 17); sus plazos son 12, 18 o 24 meses. ' +
             'Pasa el sector tal como lo nombró el lead, p. ej. "Las Vegas", "Texas", "Mar Santorini", "Valle de Aburrá".',
         },
-        terreno: { type: 'string', description: 'Número del terreno/lote, p. ej. "21", "7", "216".' },
+        terreno: { type: 'string', description: 'Número del terreno EXACTAMENTE como lo dijo el lead. NUNCA inventes un número: si el lead no ha dicho uno, NO llames esta herramienta (ofrécele el plano).' },
         tipo_pago: {
           type: 'string',
           enum: ['contado', 'cuotas'],
-          description: 'Forma de pago elegida por el lead.',
+          description: 'Forma de pago elegida por el lead. Omítela si el lead no la ha dicho (el sistema cotiza a 40 meses).',
         },
         meses: {
           type: 'number',
@@ -2051,7 +2576,7 @@ export const COTIZACION_TOOL_DEMO: OpenAI.Chat.Completions.ChatCompletionTool = 
             '(p. ej. 50000000 si dijo "gané 50 millones"). Si viene, se usa ese bono en vez del bono base.',
         },
       },
-      required: ['sector', 'terreno', 'tipo_pago'],
+      required: ['sector', 'terreno'],
     },
   },
 };
@@ -2075,6 +2600,12 @@ export function leadChosePaymentTerm(leadTexts: string[], pago: string, meses?: 
   return /\b(CONTADO|EFECTIVO|UN SOLO PAGO)\b/.test(text);
 }
 
+/** ¿El lead mencionó alguna forma de pago o plazo (aunque no sea uno autorizado)? */
+export function leadMentionedPaymentTerm(leadTexts: string[]): boolean {
+  const text = normKey(leadTexts.join(' '));
+  return /\b(CONTADO|EFECTIVO|UN SOLO PAGO|CREDITO|\d{1,2} ?(MESES|CUOTAS)|(DOCE|DIECIOCHO|VEINTE|VEINTICUATRO|TREINTA|TREINTA Y SEIS|CUARENTA) (MESES|CUOTAS))\b/.test(text);
+}
+
 export function validateQuotationModalities(
   config: Pick<AiConfig, 'agentProfile'>,
   pago: string,
@@ -2096,7 +2627,7 @@ export function validateQuotationModalities(
     return {
       ok: false,
       reason: 'falta_tipo_pago',
-      mensaje: 'Falta la forma de pago. Pregúntale al lead con las opciones autorizadas: "¿prefieres pago de contado o pago a plazos? Si eliges cuotas, ¿a cuántos meses te gustaría el plan de pago: 20, 30 o 40 meses?". NUNCA envíes cotización de contado por defecto sin que el lead lo haya solicitado.',
+      mensaje: 'Falta la forma de pago. Pregúntale al lead con las opciones autorizadas: "¿Prefiere pago de contado o pago a plazos? Si elige cuotas, ¿a cuántos meses le gustaría el plan de pago: 20, 30 o 40 meses?". NUNCA envíes cotización de contado por defecto sin que el lead lo haya solicitado.',
     };
   }
 
@@ -2189,9 +2720,28 @@ async function runCotizacionTool(
   if (sector.toUpperCase() === 'SAN FRANCISCO') sector = 'Sn.FRANCISCO';
   let terreno      = String(args.terreno ?? '').trim();
   if (/^\d+$/.test(terreno)) terreno = String(Number(terreno));
+  // El terreno debe salir de lo que escribió (o dijo) el lead. Las cotizaciones deterministas
+  // (forced_quote_) ya vienen del texto del lead o de la imagen del plano que él marcó.
+  if (terreno && !call.id.startsWith('forced_quote_')) {
+    const recentLead = (await messagesRepository.getRecent(companyId, leadId, 20))
+      .filter((m) => m.direction === 'inbound' && m.senderType === 'lead')
+      .slice(-6);
+    const sentImage = recentLead.some((m) => String((m as { mediaType?: string }).mediaType ?? m.metadata?.mediaType ?? '').startsWith('image/'));
+    const texts = [userMessage, ...recentLead.map((m) => `${m.content ?? ''} ${String(m.metadata?.transcription ?? '')}`)];
+    if (!sentImage && !leadNamedLot(terreno, texts)) {
+      logger.warn('[AI] Cotización frenada: el lead no nombró ese terreno', { leadId, terreno });
+      return {
+        ok: false,
+        reason: 'terreno_no_indicado',
+        mensaje: 'El lead NO ha dicho ningún número de terreno. No inventes uno ni digas que un terreno está vendido. ' +
+          'Si pregunta precios, dale la referencia (desde cuánto, bonos y plazos) y ofrécele el plano para que elija un terreno y cotizárselo.',
+      };
+    }
+  }
   const rawPago    = (args.tipo_pago ?? '').trim().toLowerCase();
-  const pago       = rawPago === 'cuotas' ? 'cuotas' : rawPago === 'contado' ? 'efectivo' : rawPago;
-  const meses      = args.meses;
+  let pago         = rawPago === 'cuotas' ? 'cuotas' : rawPago === 'contado' ? 'efectivo' : rawPago;
+  let meses        = args.meses;
+  let defaultTerm  = false;
   const bonoGanado = Math.max(0, Number(args.bono_ganado) || 0);
   if (sector && terreno) {
     const recentForPlano = await messagesRepository.getRecent(companyId, leadId, QUOTE_STATE_WINDOW);
@@ -2219,6 +2769,21 @@ async function runCotizacionTool(
   }
 
   const aldea = sobreMontanasAldea(sector, terreno);
+  // Sin forma de pago elegida: se cotiza de una vez al plazo más largo (la cuota más cómoda).
+  // Si después pide menos meses o contado, el valor total baja en vez de subir.
+  if (usesConsultiveAgent(config)) {
+    const recentLeadTexts = (await messagesRepository.getRecent(companyId, leadId, 20))
+      .filter((m) => m.direction === 'inbound' && m.senderType === 'lead')
+      .slice(-8)
+      .map((m) => m.content ?? '');
+    const texts = [userMessage, ...recentLeadTexts];
+    const chosen = !!pago && leadChosePaymentTerm(texts, pago, meses);
+    if (!chosen && !leadMentionedPaymentTerm(texts)) {
+      pago = 'cuotas';
+      meses = aldea !== null ? 24 : 40;
+      defaultTerm = true;
+    }
+  }
   if (aldea !== null) {
     if (!config.sobreMontanasQuotes) {
       logger.info('[AI] Cotización de Sobre Montañas bloqueada', { leadId, sector, terreno });
@@ -2309,7 +2874,7 @@ async function runCotizacionTool(
       .filter((message) => message.direction === 'inbound' && message.senderType === 'lead')
       .slice(-8)
       .map((message) => message.content ?? '');
-    if (!leadChosePaymentTerm([userMessage, ...leadTexts], pago, meses)) {
+    if (!defaultTerm && !leadChosePaymentTerm([userMessage, ...leadTexts], pago, meses)) {
       logger.info('[AI] Cotización frenada: el lead no eligió esa forma de pago', { leadId, pago, meses });
       return {
         ok: false,
@@ -2346,8 +2911,8 @@ async function runCotizacionTool(
       reason: 'limite_cotizaciones',
       mensaje:
         'El lead ya alcanzó el límite de 5 cotizaciones. No envíes más cotizaciones ni listas de precios. ' +
-        'Dile con naturalidad: "Ya revisamos varias opciones para ti. Para cuidarte información precisa y actualizada, ' +
-        'mejor te ayudo a elegir entre esas alternativas o agendamos una llamada corta con un asesor para revisar disponibilidad en vivo."',
+        'Dile con naturalidad: "Ya revisamos varias opciones para usted. Para darle información precisa y actualizada, ' +
+        'mejor le ayudo a elegir entre esas alternativas o agendamos una llamada corta con un asesor para revisar disponibilidad en vivo."',
     };
   }
 
@@ -2430,21 +2995,26 @@ async function runCotizacionTool(
     meses: meses ?? null,
     quotationCount: slot.count,
   });
-  const plazo = pago === 'cuotas' ? `en ${meses} cuotas` : 'de contado';
+  const plazo = defaultTerm
+    ? `a ${meses} meses, la opción con la cuota mensual más cómoda`
+    : pago === 'cuotas' ? `en ${meses} cuotas` : 'de contado';
+  const otherTerms = defaultTerm
+    ? 'Si prefiere pagarlo en menos tiempo o de contado, el valor total es menor y con gusto se lo cotizo. '
+    : '';
   const terrenoLabel = aldea
     ? `aldea ${terreno} (${aldeaName(aldea)}) de Sobre Montañas`
     : `terreno ${terreno} del sector ${sectorLabel}`;
   const confirmationMessage = bonoGanado > 0
     // Ya jugó y ganó: aplicar su bono, felicitar y NO volver a invitar a jugar.
-    ? `¡Felicidades! 🎉 Te compartí la cotización del ${terrenoLabel} ${plazo} con tu bono de ` +
+    ? `¡Felicidades! 🎉 Le compartí la cotización del ${terrenoLabel} ${plazo} con su bono de ` +
       `${cop(Math.min(bonoGanado, quoteBonusMax(config)))} ya aplicado (en reemplazo del bono inicial). ` +
-      `El bono queda sujeto a validación. Para separarlo, lo mejor es una llamada con un asesor. ` +
-      `¿Te gustaría que la agendemos?`
+      `El bono queda sujeto a validación. ${otherTerms}Para separarlo, lo mejor es una llamada con un asesor. ` +
+      `¿Le gustaría que la agendemos?`
     // Bono base de 20M: invitar a probar suerte para cambiarlo/mejorarlo por uno mayor (no acumulable).
-    : `Te compartí la cotización del ${terrenoLabel} ${plazo}. Ya incluye un bono de ${cop(quoteBonusBase(config))} de descuento 🎁. ` +
-      `Y si quieres probar suerte jugando por un bono mayor, puedes ingresar aquí: ${env.puertabonoUrl()} 🎟️ ` +
-      `(el bono que saques reemplaza al inicial, no son acumulables). ` +
-      `Para ver las opciones de pago y separarlo, lo mejor es una llamada con un asesor. ¿Te gustaría que la agendemos?`;
+    : `Le compartí la cotización del ${terrenoLabel} ${plazo}. Ya incluye un bono de ${cop(quoteBonusBase(config))} de descuento 🎁. ${otherTerms}` +
+      `Y si quiere probar suerte jugando por un bono mayor, puede ingresar aquí: ${env.puertabonoUrl()} 🎟️ ` +
+      `(el bono que saque reemplaza al inicial, no son acumulables). ` +
+      `Para ver las opciones de pago y separarlo, lo mejor es una llamada con un asesor. ¿Le gustaría que la agendemos?`;
   return {
     ok: true,
     enviado: `${sector} ${terreno} (${plazo})`,
@@ -2821,7 +3391,7 @@ async function runPortfolioTool(
 async function runAvailabilityTool(
   companyId: string,
   leadId:    string,
-  lead:      Pick<Lead, 'assignedTo'>,
+  lead:      Pick<Lead, 'assignedTo' | 'phone'>,
   call:      OpenAI.Chat.Completions.ChatCompletionMessageToolCall
 ): Promise<object> {
   if (call.type !== 'function') return { ok: false, error: 'herramienta desconocida' };
@@ -2868,8 +3438,9 @@ async function runAvailabilityTool(
     ok: true,
     advisorId,
     slots: formatted,
-    confirmationMessage:
-      `Tengo disponibles estos horarios para la llamada:\n\n${lines}\n\n¿Cuál de estos horarios te queda mejor? El asesor te llama por teléfono; si prefieres videollamada por Google Meet, dímelo junto con el horario (por ejemplo: "1 por Meet").`,
+    confirmationMessage: isForeignPhone(lead.phone)
+      ? `Tengo disponibles estos horarios para la videollamada:\n\n${lines}\n\n¿Cuál de estos horarios le queda mejor? Es por videollamada de Google Meet, así puede conocer el club sin viajar; si prefiere que el asesor le llame, dígamelo junto con el horario (por ejemplo: "1 por llamada").`
+      : `Tengo disponibles estos horarios para la llamada:\n\n${lines}\n\n¿Cuál de estos horarios le queda mejor? El asesor le llama por teléfono; si prefiere videollamada por Google Meet, dígamelo junto con el horario (por ejemplo: "1 por Meet").`,
   };
 }
 
@@ -3044,7 +3615,16 @@ async function runAppointmentTool(
     const requestedModality: AppointmentModality | undefined =
       args.modalidad === 'videollamada' || args.modalidad === 'llamada' ? args.modalidad : undefined;
     // Lo que diga el lead en su mensaje manda sobre lo que deduzca el modelo.
-    const modality: AppointmentModality | undefined = detectAppointmentModality(userMessage) ?? requestedModality;
+    let modality: AppointmentModality | undefined = detectAppointmentModality(userMessage) ?? requestedModality;
+    // Número del exterior: la cita es por Meet salvo que el lead haya pedido una llamada.
+    if (name === 'agendar_cita' && !detectAppointmentModality(userMessage)) {
+      const leadDoc = await leadsRepository.findById(companyId, leadId);
+      if (isForeignPhone(leadDoc?.phone)) {
+        const recent = (await messagesRepository.getRecent(companyId, leadId, 12))
+          .filter((m) => m.direction === 'inbound' && m.senderType === 'lead').map((m) => m.content ?? '');
+        modality = leadPreferredModality(recent) ?? 'videollamada';
+      }
+    }
 
     // ── Cambiar solo la modalidad ─────────────────────────────────────────────
     if (name === 'cambiar_modalidad_cita') {
@@ -3180,6 +3760,19 @@ async function runAppointmentTool(
   }
 }
 
+/** ¿Llegó un mensaje del lead posterior a este? (el último entrante del lead ya no es este). */
+async function newerLeadMessageArrived(companyId: string, leadId: string, messageId: string): Promise<boolean> {
+  const recent = await messagesRepository.getRecent(companyId, leadId, 15).catch(() => [] as Message[]);
+  const lastLead = [...recent].reverse().find((m) => m.direction === 'inbound' && m.senderType === 'lead');
+  return !!lastLead && lastLead.id !== messageId;
+}
+
+/** ¿La IA sigue a cargo del chat? false si un asesor lo tomó (aiEnabled apagado). */
+async function aiStillInControl(companyId: string, leadId: string): Promise<boolean> {
+  const current = await leadsRepository.findById(companyId, leadId).catch(() => null);
+  return current?.aiEnabled !== false;
+}
+
 /** Guarda y envía la respuesta IA. Retorna el Timestamp del mensaje guardado. */
 async function saveAndSendAiResponse(
   companyId: string,
@@ -3189,7 +3782,14 @@ async function saveAndSendAiResponse(
   extraMetadata?: AiResponseMetadata,
   sendAsVoice?: boolean
 ): Promise<Timestamp> {
-  const content = (!lead.channel || lead.channel === 'whatsapp') ? formatForWhatsApp(rawContent) : rawContent;
+  // El asesor pudo tomar el chat mientras la IA preparaba la respuesta (nota de voz, herramientas):
+  // en ese caso no se envía nada para no pisar su conversación.
+  if (!(await aiStillInControl(companyId, leadId))) {
+    logger.info('[AI] El asesor ya tomó el chat — no se envía la respuesta de la IA', { leadId });
+    return Timestamp.now();
+  }
+  const fixedContent = fixMerakiLinks(rawContent);
+  const content = (!lead.channel || lead.channel === 'whatsapp') ? formatForWhatsApp(fixedContent) : fixedContent;
   const now = Timestamp.now();
   let status: 'sent' | 'failed' = 'sent';
   let externalMsgId: string | undefined;

@@ -256,7 +256,7 @@ export function lotCheckNote(check: LotCheck, terreno: string, clubLabel: string
     const where = `el terreno ${terreno} de ${sectorLabelOf(check.sector)} (${clubLabel})`;
     if (check.available) {
       return `INVENTARIO: ${where} está DISPONIBLE${check.area ? ` (${Math.round(check.area)} m²)` : ''}. ` +
-        'Si el lead aún no eligió forma de pago, pregúntasela; si ya la eligió, cotiza.';
+        'Cotízalo: si el lead no ha elegido forma de pago, el sistema lo cotiza a 40 meses (no se la preguntes).';
     }
     return `INVENTARIO: ${where} NO está disponible (${check.status.toLowerCase()}). Díselo con amabilidad y ofrécele estos disponibles cercanos del mismo sector: ` +
       `${check.nearby.join(', ') || 'revisa el plano'}. NO le preguntes la forma de pago de un terreno que no está disponible.`;

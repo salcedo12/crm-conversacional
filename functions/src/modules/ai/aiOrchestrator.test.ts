@@ -325,7 +325,10 @@ describe('piloto (rollout)', () => {
 
 describe('traspaso y compradores', () => {
   it('reinicia el reloj de reasignación solo si estaba pendiente', () => {
-    expect(humanHandoffPatch({ pendingFirstContact: true }).advisorAssignedAt).toBeDefined();
+    const patch = humanHandoffPatch({ pendingFirstContact: true });
+    expect(patch.firstContactClockAt).toBeDefined();
+    // No mueve la asignación: el muro de privacidad le ocultaría al asesor el chat de la IA.
+    expect(patch.advisorAssignedAt).toBeUndefined();
     expect(humanHandoffPatch({ pendingFirstContact: false })).toEqual({});
   });
   it('normaliza los formatos de teléfono de SmartHome', () => {
@@ -512,8 +515,10 @@ describe('avance de obra bajo pedido', () => {
   it('solo cuenta como pregunta de obra si la menciona', () => {
     for (const t of ['¿Cómo van las obras?', 'quisiera saber cómo van los avances', '¿ya están construyendo?', '¿cómo va el proyecto de Laguna Mar?'])
       expect(asksAboutConstruction([t])).toBe(true);
-    for (const t of ['Y Cañón de Arizona?', 'Quiero el plano', 'cuánto vale'])
+    for (const t of ['Y Cañón de Arizona?', 'Quiero el plano', 'cuánto vale', '¿La construcción es libre?', '¿Qué puedo construir en el terreno?', 'Formas de pago. La construcción es libre. Escritura al día', '¿Necesito licencia de construcción?'])
       expect(asksAboutConstruction([t])).toBe(false);
+    for (const t of ['¿Cómo va la construcción?', '¿Cuándo empieza la construcción de Mar Canarias?', 'avance de la construcción'])
+      expect(asksAboutConstruction([t])).toBe(true);
   });
   it('toma los informes del último mes, del más nuevo al más viejo', () => {
     const now = Date.parse('2026-11-09T00:00:00Z');

@@ -11,7 +11,7 @@ const DEFAULT_AI_CONFIG: Omit<AiConfig, 'updatedAt' | 'companyId'> = {
   basePrompt:         VICTORIA_BASE_PROMPT,
   tone:               'professional',
   knowledgeBase:      '',
-  fallbackMessage:    'En este momento no puedo procesar tu mensaje. Un asesor se comunicará contigo muy pronto. 🙏',
+  fallbackMessage:    'En este momento no puedo procesar su mensaje. Un asesor se comunicará con usted muy pronto. 🙏',
   maxContextMessages: 20,
   transferKeywords:   ['hablar con un asesor', 'hablar con asesor', 'quiero un asesor', 'necesito un asesor', 'hablar con un humano', 'hablar con una persona', 'persona real', 'quiero hablar con alguien', 'con un agente'],
   blockedTopics:      [],

@@ -7,14 +7,38 @@ export interface VoiceGenerationResult {
   mimeType: string;
 }
 
+const HOUR_WORDS = ['doce', 'una', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce'];
+const MONTHS = 'enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre';
+const YEAR_AFTER_DATE = new RegExp(`\\b(\\d{1,2} de (?:${MONTHS}))(?: de|,)? 20\\d{2}\\b`, 'gi');
+
+/** "1:30 p. m." → "la una y media de la tarde" (el TTS leía "p. m." letra por letra). */
+function spokenTime(h: string, min: string | undefined, ap: string): string {
+  const hour = Number(h);
+  const minutes = Number(min ?? 0);
+  if (hour < 1 || hour > 12 || minutes > 59) return `${h}${min ? ':' + min : ''}`;
+  const pm = ap.toLowerCase() === 'p';
+  const period = !pm
+    ? (hour === 12 ? 'de la noche' : 'de la mañana')
+    : hour === 12 ? 'del mediodía' : hour <= 6 ? 'de la tarde' : 'de la noche';
+  const mins = minutes === 0 ? '' : minutes === 15 ? ' y cuarto' : minutes === 30 ? ' y media' : ` y ${minutes}`;
+  return `${hour === 1 ? 'la' : 'las'} ${HOUR_WORDS[hour]}${mins} ${period}`;
+}
+
 /**
  * Convierte abreviaturas técnicas, números con puntos y símbolos en palabras habladas naturales
  * para que el modelo TTS de ElevenLabs no balbucee ni diga cosas raras.
  */
-function cleanTextForSpeech(raw: string): string {
+export function cleanTextForSpeech(raw: string): string {
   let t = raw
     // Quitar enlaces URLs
     .replace(/https?:\/\/\S+/g, '')
+    // Horas con a. m. / p. m. → "la una y media de la tarde" (reemplaza el "la/las" que ya traiga)
+    .replace(/\b(?:las?\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s?m\.?(?![a-záéíóúñ])/gi,
+      (_m, h, min, ap) => spokenTime(h, min, ap))
+    // El año sobra al hablar: "10 de noviembre de 2026" → "10 de noviembre"
+    .replace(YEAR_AFTER_DATE, '$1')
+    // Listas numeradas "1. martes" → "1, martes" (que no lea "uno punto")
+    .replace(/^\s*(\d{1,2})[.)]\s+/gm, '$1, ')
     // Expandir m² y m2 a "metros cuadrados"
     .replace(/(\d+)\s*(?:m²|m2)/gi, (_m, p1) => `${p1} metros cuadrados`)
     .replace(/m²|m2/gi, 'metros cuadrados')
@@ -40,6 +64,8 @@ function cleanTextForSpeech(raw: string): string {
     .replace(/[*_#`~]/g, '')
     // Quitar emojis
     .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+    // Un salto de línea sin puntuación es una pausa (opciones de una lista)
+    .replace(/([^\s.,;:!?¿¡])[ \t]*\n+/g, '$1. ')
     // Espacios múltiples y saltos dobles
     .replace(/\s+/g, ' ')
     .trim();

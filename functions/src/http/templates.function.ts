@@ -14,6 +14,9 @@ import {
 } from '../modules/templates/templates.helpers';
 import { sendTemplateToLead } from '../modules/messages/templateSender.service';
 import { pauseAiForAdvisorMessage } from '../modules/ai/aiRollout';
+import { Timestamp } from 'firebase-admin/firestore';
+import { syncLeadToSmartHome } from '../modules/smarthome/smarthomeSync.service';
+import { isDirectAdvisorLead, countsAs317LineLead } from '../modules/leads/leadClassification';
 import { requireAuth, requireRole, assertCompany, ADMIN_ROLES, WRITE_ROLES } from '../lib/authContext';
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -342,9 +345,38 @@ export const sendTemplateMessage = onCall(
         advisorId: ctx.uid,
         fromInboxId,
       });
+      // Una plantilla del asesor es contacto con el cliente, igual que un mensaje de texto:
+      // sin esto el lead seguía "pendiente de primer contacto" y a los 15 minutos la
+      // reasignación automática se lo quitaba (pasó con Jayson Pinilla el 12-nov).
+      const now = Timestamp.now();
+      const isFirstAdvisorContact = !lead.advisorFirstContactAt;
+      await leadsRepository.update(companyId, leadId, {
+        lastAdvisorMessageAt: now,
+        pendingFirstContact:  false,
+        ...(isFirstAdvisorContact ? { advisorFirstContactAt: now, advisorFirstContactBy: ctx.uid } : {}),
+      }).catch((err) => {
+        logger.warn('[Templates] No se pudo registrar el contacto del asesor', { leadId, err: String(err) });
+      });
       await pauseAiForAdvisorMessage(companyId, lead, ctx.uid).catch((err) => {
         logger.warn('[Templates] No se pudo pausar la IA tras la plantilla del asesor', { leadId, err: String(err) });
       });
+      // Primer contacto de un lead de la línea 317: se sincroniza con SmartHome (mejor esfuerzo).
+      if (isFirstAdvisorContact && !lead.smartHomeCustomerId && !isDirectAdvisorLead(lead) && countsAs317LineLead(lead)) {
+        await Promise.race([
+          syncLeadToSmartHome({
+            ...lead,
+            id: leadId,
+            companyId,
+            assignedTo: lead.assignedTo ?? ctx.uid,
+            advisorFirstContactAt: now,
+            advisorFirstContactBy: ctx.uid,
+            lastAdvisorMessageAt: now,
+          }).catch((err) => {
+            logger.warn('[Templates] SmartHome no sincronizado en primer contacto', { leadId, err: String(err) });
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 25_000)),
+        ]);
+      }
       return { messageId };
     } catch (err) {
       throw new HttpsError('internal', err instanceof Error ? err.message : String(err));

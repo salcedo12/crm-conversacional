@@ -9,6 +9,7 @@ import { inventoryDb } from '../modules/inventory/inventory.client';
 import { availableLotsFromSummary, INVENTORY_PROJECT_NAMES, normalizeStatus, type SummaryEntry } from '../modules/inventory/inventory.logic';
 import { getLotStatus, releaseLot, reserveLot } from '../modules/inventory/lotReservation.service';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
+import { lotLabel, supersedeForLotChange } from '../modules/deals/dealDocumentLot';
 
 /**
  * Módulo Negocios — Fase 2: lote del negocio desde el inventario de disponibilidad.
@@ -88,8 +89,10 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
   const previous = deal.lot?.inventoryLotId;
   try {
     const now = Timestamp.now();
+    // Preventa/promesa de otro lote: quedan vencidas (historial), no sirven para este lote.
+    const { documents, superseded } = supersedeForLotChange(deal.documents ?? [], deal.lot, dealLot, now);
     const batch = db.batch();
-    batch.update(ref, { lot: dealLot, status: draftStatusFor({ ...deal, lot: dealLot }), updatedAt: now });
+    batch.update(ref, { lot: dealLot, documents, status: draftStatusFor({ ...deal, lot: dealLot }), updatedAt: now });
     batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
       companyId: data.companyId,
       leadId: deal.leadId,
@@ -101,6 +104,7 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
       lines: [
         `${dealLot.projectId} · ${dealLot.sector} · Lote ${dealLot.lotNumber} · ${dealLot.areaM2} m²${dealLot.corner ? ' · Esquinero' : ''}`,
         ...(dealLot.reservedUntil ? [`Reserva vigente hasta ${dealLot.reservedUntil}`] : []),
+        ...superseded.map((d) => `${d.kind === 'preventa' ? 'Preventa' : 'Promesa'} v${d.version} (${d.lot ? lotLabel(d.lot) : 'lote anterior'}) queda vencida`),
       ],
       createdAt: now,
     }));

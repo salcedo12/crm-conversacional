@@ -1,6 +1,6 @@
 import {
   collection, doc, getDocs, limit, query, updateDoc, serverTimestamp,
-  Timestamp, addDoc, where, arrayUnion,
+  Timestamp, addDoc, where, arrayUnion, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/config/firebase';
 import { normalizeProject } from '@/features/database/pages/DatabasePage';
@@ -8,6 +8,7 @@ import {
   PIPELINE_STAGES, PIPELINE_GROUPS, type PipelineCardItem,
   type PipelineStageConfig, type PipelineGroup,
 } from '../types/pipeline.types';
+import { isAdvisorMatch, MERAKI_OFFICIAL_ADVISORS } from '@/features/commercial/services/commercialReports.service';
 
 export function getStageConfig(stageId: string): PipelineStageConfig {
   return PIPELINE_STAGES.find((s) => s.id === stageId) || PIPELINE_STAGES[0];
@@ -84,13 +85,69 @@ export function derivePipelineStage(data: Record<string, unknown>): PipelineStag
 }
 
 /**
+ * Parsea con tolerancia múltiples formatos de fechas de Firestore y strings
+ */
+export function parseDate(ts: unknown): Date | null {
+  if (!ts) return null;
+  if (ts instanceof Timestamp) return ts.toDate();
+  if (typeof (ts as any).toDate === 'function') return (ts as any).toDate();
+  if (typeof ts === 'object' && ('_seconds' in (ts as any) || 'seconds' in (ts as any))) {
+    const s = (ts as any)._seconds ?? (ts as any).seconds;
+    return new Date(s * 1000);
+  }
+  if (typeof ts === 'string' || typeof ts === 'number') {
+    const clean = String(ts).trim().replace(' ', 'T');
+    const d = new Date(clean);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+
+/**
+ * Determina si un prospecto pertenece a la cartera del asesor consultado.
+ *
+ * REGLA DE NEGOCIO ESTRICTA:
+ * Si un prospecto se reasigna, el ÚNICO que puede verlo y gestionarlo es el asesor
+ * actualmente asignado (assignedTo / advisorId). Aunque se haya reasignado varias veces
+ * o tenga bitácoras de otros asesores en su historial, la pertenencia es exclusiva del
+ * asesor actual.
+ */
+export function leadBelongsToAdvisor(
+  lead: {
+    assignedTo?: string;
+    advisorId?: string;
+    assignedToName?: string;
+    advisorName?: string;
+    smartHomeAdvisorName?: string;
+    metadata?: Record<string, unknown>;
+  },
+  targetAdvisorId?: string,
+  targetAdvisorName?: string
+): boolean {
+  if (!targetAdvisorId || targetAdvisorId === 'all') return true;
+
+  // 1. REGLA ESTRICTA DE ASIGNACIÓN ACTUAL POR ID:
+  const currentAssignedId = lead.advisorId || lead.assignedTo || '';
+  if (currentAssignedId) {
+    return currentAssignedId === targetAdvisorId;
+  }
+
+  // 2. Si el prospecto NO tiene ID asignado (casos legacy de importación o sin UID):
+  if (targetAdvisorName) {
+    const currentName = lead.assignedToName || lead.smartHomeAdvisorName || lead.advisorName || '';
+    if (currentName && isAdvisorMatch(currentName, targetAdvisorName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Normaliza fecha para agrupar por mes estilo SmartHome: "Registro de agosto 2026 (X)"
  */
-function formatMonthYearHeader(ts: unknown): { label: string; dateStr: string; dateObj: Date | null } {
-  let date: Date | null = null;
-  if (ts instanceof Timestamp) date = ts.toDate();
-  else if (typeof ts === 'string' && ts) date = new Date(ts);
-  else if (typeof ts === 'number') date = new Date(ts);
+function formatMonthYearHeader(ts: unknown, fallbackDate?: Date | null): { label: string; dateStr: string; dateObj: Date | null } {
+  const date = parseDate(ts) || fallbackDate || null;
 
   if (!date || isNaN(date.getTime())) {
     return { label: 'Sin fecha registrada', dateStr: '—', dateObj: null };
@@ -106,12 +163,15 @@ function formatMonthYearHeader(ts: unknown): { label: string; dateStr: string; d
 }
 
 export interface PipelineFilterOptions {
-  advisorId?: string; // 'all' o uid
+  advisorId?: string; // 'all' o uid o fakeId
+  advisorName?: string;
   projectFilter?: string; // 'all' o nombre de proyecto
   groupFilter?: PipelineGroup | 'all';
   sourceFilter?: string; // 'all' | 'meta_ads' | 'smarthome' | 'whatsapp_ia' | 'advisor_whatsapp' | 'ferias' | 'web'
   followUpStatus?: 'all' | 'uncontacted' | 'overdue' | 'active';
-  dateRange?: 'all' | 'last_30_days' | 'last_60_days' | 'year_2026' | 'year_2025' | 'year_2024';
+  dateRange?: 'all' | 'last_30_days' | 'last_60_days' | 'year_2026' | 'year_2025' | 'year_2024' | 'today' | 'yesterday' | 'week' | 'custom';
+  startDate?: Date | null;
+  endDate?: Date | null;
   limitCount?: number; // 100, 250, 500, 1000
 }
 
@@ -156,20 +216,23 @@ export async function fetchPipelineCards(
         groupFilter: 'all',
         sourceFilter: 'all',
         followUpStatus: 'all',
-        dateRange: 'all',
+        dateRange: 'last_30_days',
         limitCount: 500,
       }
     : {
         advisorId: filterOrAdvisorId.advisorId || 'all',
+        advisorName: filterOrAdvisorId.advisorName,
         projectFilter: filterOrAdvisorId.projectFilter || 'all',
         groupFilter: filterOrAdvisorId.groupFilter || 'all',
         sourceFilter: filterOrAdvisorId.sourceFilter || 'all',
         followUpStatus: filterOrAdvisorId.followUpStatus || 'all',
-        dateRange: filterOrAdvisorId.dateRange || 'all',
+        dateRange: filterOrAdvisorId.dateRange || 'last_30_days',
+        startDate: filterOrAdvisorId.startDate,
+        endDate: filterOrAdvisorId.endDate,
         limitCount: filterOrAdvisorId.limitCount || 500,
       };
 
-  // 1. Obtener asesores de la empresa (tolerante a fallos)
+  // 1. Obtener asesores de la empresa y complementar con oficiales de Meraki
   const advMap = new Map<string, string>();
   const advisorsList: { id: string; name: string }[] = [];
   try {
@@ -184,64 +247,124 @@ export async function fetchPipelineCards(
     console.warn('[pipeline.service] Error consultando usuarios de la empresa:', usersErr);
   }
 
-  // 2. Consulta de leads inteligente:
-  // - Si se filtra por asesor: consulta específica por assignedTo
-  // - Si es 'all': consulta prioritaria de leads con etapa de embudo activa (pipelineStage != null)
-  //   combinada con la muestra general para garantizar que los leads con ficha o movidos siempre aparezcan.
-  const maxLimit = Math.min(Math.max(opts.limitCount || 250, 50), 1000);
-  const docsMap = new Map<string, any>();
-
-  if (opts.advisorId && opts.advisorId !== 'all') {
-    try {
-      const advSnap = await getDocs(
-        query(
-          collection(db, 'companies', companyId, 'leads'),
-          where('assignedTo', '==', opts.advisorId),
-          limit(maxLimit)
-        )
-      );
-      advSnap.docs.forEach((d) => docsMap.set(d.id, d));
-    } catch (err) {
-      console.warn('[pipeline.service] Error consultando leads por asesor:', err);
+  MERAKI_OFFICIAL_ADVISORS.forEach((offName) => {
+    const alreadyPresent = advisorsList.some((a) => isAdvisorMatch(a.name, offName));
+    if (!alreadyPresent) {
+      const fakeId = `advisor_${offName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      advMap.set(fakeId, offName);
+      advisorsList.push({ id: fakeId, name: offName });
     }
-  } else {
-    // 2a. Leads con etapa explícita en el embudo (siempre presentes en el pipeline)
-    try {
-      const stagedSnap = await getDocs(
-        query(
-          collection(db, 'companies', companyId, 'leads'),
-          where('pipelineStage', '!=', null),
-          limit(200)
-        )
-      );
-      stagedSnap.docs.forEach((d) => docsMap.set(d.id, d));
-    } catch (err) {
-      console.warn('[pipeline.service] Error consultando leads con pipelineStage:', err);
-    }
+  });
 
-    // 2b. Muestra general de leads para auto-deducción de etapas
-    try {
-      const generalSnap = await getDocs(
-        query(
-          collection(db, 'companies', companyId, 'leads'),
-          limit(maxLimit)
-        )
-      );
-      generalSnap.docs.forEach((d) => {
-        if (!docsMap.has(d.id)) {
-          docsMap.set(d.id, d);
-        }
-      });
-    } catch (err) {
-      console.warn('[pipeline.service] Error consultando muestra general de leads:', err);
+  // Determinar nombre del asesor objetivo para filtrado estricto
+  let targetAdvisorName = opts.advisorName || '';
+  if (!targetAdvisorName && opts.advisorId && opts.advisorId !== 'all') {
+    const foundAdv = advisorsList.find((a) => a.id === opts.advisorId || isAdvisorMatch(a.id, opts.advisorId) || isAdvisorMatch(a.name, opts.advisorId));
+    if (foundAdv) {
+      targetAdvisorName = foundAdv.name;
+    } else {
+      targetAdvisorName = advMap.get(opts.advisorId) || opts.advisorId;
     }
   }
 
+  // 2. Determinar rango de fechas efectivo
+  const now = new Date();
+  let effectiveStart: Date | null = null;
+  let effectiveEnd: Date | null = null;
+
+  if (opts.startDate !== undefined && opts.endDate !== undefined) {
+    effectiveStart = opts.startDate;
+    effectiveEnd = opts.endDate;
+  } else if (opts.dateRange === 'today') {
+    effectiveStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    effectiveEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  } else if (opts.dateRange === 'yesterday') {
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    effectiveStart = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 0, 0, 0, 0);
+    effectiveEnd = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 23, 59, 59, 999);
+  } else if (opts.dateRange === 'last_30_days') {
+    const s = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    s.setHours(0, 0, 0, 0);
+    effectiveStart = s;
+    effectiveEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  } else if (opts.dateRange === 'last_60_days') {
+    const s = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+    s.setHours(0, 0, 0, 0);
+    effectiveStart = s;
+    effectiveEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  } else if (opts.dateRange === 'year_2026') {
+    effectiveStart = new Date(2026, 0, 1, 0, 0, 0, 0);
+    effectiveEnd = new Date(2026, 11, 31, 23, 59, 59, 999);
+  } else if (opts.dateRange === 'year_2025') {
+    effectiveStart = new Date(2025, 0, 1, 0, 0, 0, 0);
+    effectiveEnd = new Date(2025, 11, 31, 23, 59, 59, 999);
+  } else if (opts.dateRange === 'year_2024') {
+    effectiveStart = new Date(2024, 0, 1, 0, 0, 0, 0);
+    effectiveEnd = new Date(2024, 11, 31, 23, 59, 59, 999);
+  }
+  const isHistorical = effectiveStart === null && effectiveEnd === null;
+
+  // 3. Consultas en Firestore optimizadas
+  const maxLimit = Math.min(Math.max(opts.limitCount || 500, 100), 1000);
+  const docsMap = new Map<string, any>();
+  const leadCol = collection(db, 'companies', companyId, 'leads');
+
+  const queriesToRun: Promise<any>[] = [];
+
+  if (!isHistorical && effectiveStart && effectiveEnd) {
+    const startTs = Timestamp.fromDate(effectiveStart);
+    const endTs = Timestamp.fromDate(effectiveEnd);
+
+    // Leads con seguimiento registrado en el período
+    queriesToRun.push(
+      getDocs(query(leadCol, where('lastFollowUpAt', '>=', startTs), where('lastFollowUpAt', '<=', endTs), limit(500)))
+    );
+    // Leads captados/creados en el período
+    queriesToRun.push(
+      getDocs(query(leadCol, where('createdAt', '>=', startTs), where('createdAt', '<=', endTs), limit(500)))
+    );
+    // Leads asignados en el período
+    queriesToRun.push(
+      getDocs(query(leadCol, where('advisorAssignedAt', '>=', startTs), where('advisorAssignedAt', '<=', endTs), limit(300)))
+    );
+  }
+
+  // Leads con etapa explícita de embudo
+  queriesToRun.push(
+    getDocs(query(leadCol, where('pipelineStage', '!=', null), limit(300)))
+  );
+
+  // Si se filtra por asesor por UID
+  if (opts.advisorId && opts.advisorId !== 'all') {
+    queriesToRun.push(
+      getDocs(query(leadCol, where('assignedTo', '==', opts.advisorId), limit(maxLimit)))
+    );
+  }
+
+  // Muestra general reciente ordenada por última actividad o creación
+  queriesToRun.push(
+    (async () => {
+      try {
+        return await getDocs(query(leadCol, orderBy('lastMessageAt', 'desc'), limit(maxLimit)));
+      } catch {
+        return await getDocs(query(leadCol, limit(maxLimit)));
+      }
+    })()
+  );
+
+  const queryResults = await Promise.allSettled(queriesToRun);
+  queryResults.forEach((res) => {
+    if (res.status === 'fulfilled' && res.value?.docs) {
+      res.value.docs.forEach((d: any) => docsMap.set(d.id, d));
+    }
+  });
+
   const allLeadDocs = Array.from(docsMap.values());
   const cards: PipelineCardItem[] = [];
-  const now = Date.now();
+  const nowMs = Date.now();
 
-  // Estadísticas acumuladas para los badges del drawer
+  // Estadísticas acumuladas
   const stats: PipelineFilterStats = {
     totalSample: allLeadDocs.length,
     byProject: {},
@@ -255,16 +378,67 @@ export async function fetchPipelineCards(
     const data = d.data();
     const meta = (data.metadata || {}) as Record<string, unknown>;
 
-    // Asesor
+    // ── FILTRO ESTRICTO DE ASESOR ──
+    if (opts.advisorId && opts.advisorId !== 'all') {
+      const belongs = leadBelongsToAdvisor(
+        {
+          assignedTo: data.assignedTo,
+          advisorId: data.assignedTo || data.advisorId,
+          assignedToName: data.assignedToName,
+          advisorName: data.advisorName,
+          smartHomeAdvisorName: data.smartHomeAdvisorName,
+          metadata: meta,
+        },
+        opts.advisorId,
+        targetAdvisorName
+      );
+      if (!belongs) return;
+    }
+
+    // ── FILTRO ESTRICTO DE FECHA / SEGUIMIENTO ──
+    // "que si selecciona tal fecha a tal fecha, que sean los prospectos que les han hecho seguimiento esos días"
+    if (!isHistorical && effectiveStart && effectiveEnd) {
+      const createdDate = parseDate(data.createdAt);
+      const followUpDate = parseDate(data.lastFollowUpAt) || parseDate(data.smartHomeLastBitacoraAt);
+      const assignedDate = parseDate(data.advisorAssignedAt) || parseDate(data.transferDate);
+      const messageDate = parseDate(data.lastMessageAt);
+      const updatedDate = parseDate(data.updatedAt);
+
+      const allBitacoras = [
+        ...(Array.isArray(data.bitacoras) ? data.bitacoras : []),
+        ...(Array.isArray(meta.smarthomeBitacoras) ? meta.smarthomeBitacoras : []),
+        ...(Array.isArray(data.smarthomeBitacoras) ? data.smarthomeBitacoras : []),
+      ];
+
+      const hasBitacoraInPeriod = allBitacoras.some((b) => {
+        if (!b) return false;
+        const bDate = parseDate(b.fecha || b.lastDate || b.date);
+        return bDate ? bDate >= effectiveStart! && bDate <= effectiveEnd! : false;
+      });
+
+      const hasCreationInPeriod = createdDate ? createdDate >= effectiveStart && createdDate <= effectiveEnd : false;
+      const hasFollowUpInPeriod = followUpDate ? followUpDate >= effectiveStart && followUpDate <= effectiveEnd : false;
+      const hasAssignedInPeriod = assignedDate ? assignedDate >= effectiveStart && assignedDate <= effectiveEnd : false;
+      const hasMessageInPeriod = messageDate ? messageDate >= effectiveStart && messageDate <= effectiveEnd : false;
+      const hasUpdateInPeriod = updatedDate ? updatedDate >= effectiveStart && updatedDate <= effectiveEnd : false;
+
+      const hasActivityInPeriod = hasBitacoraInPeriod || hasFollowUpInPeriod || hasCreationInPeriod || hasAssignedInPeriod || hasMessageInPeriod || hasUpdateInPeriod;
+
+      if (!hasActivityInPeriod) {
+        return; // Excluir si no tuvo seguimiento, bitácora ni actividad en el período
+      }
+    }
+
+    // Asesor mostrado
     const rawAssigned = data.assignedTo as string | undefined;
-    const advisorName = (rawAssigned && advMap.get(rawAssigned)) || (meta.smarthomeAsesorOriginal as string) || 'Sin Asignar';
+    const advisorName = (rawAssigned && advMap.get(rawAssigned)) || data.assignedToName || data.smartHomeAdvisorName || (meta.smarthomeAsesorOriginal as string) || 'Sin Asignar';
 
     // Proyecto normalizado
     const rawProj = (Array.isArray(data.projectInterest) ? data.projectInterest[0] : data.projectInterest)
       || meta.smarthomeProyectoOriginal || meta.webArea || '';
     const projName = normalizeProject(rawProj) || 'Sin especificar';
 
-    // Source label y clasificación con soporte de fuenteUbicacion
+    // Origen
     const specificFuente = String(data.fuenteUbicacion || meta.smarthomeFuenteOriginal || '').trim();
     let sourceLabel = specificFuente || String(data.source || 'Directo');
     let sourceCategory = 'otro';
@@ -293,18 +467,18 @@ export async function fetchPipelineCards(
     }
 
     // Fecha de creación y antigüedad
-    const dateInfo = formatMonthYearHeader(data.createdAt);
+    const dateInfo = formatMonthYearHeader(data.createdAt, parseDate(data.lastFollowUpAt) || parseDate(data.lastMessageAt));
     const cDate = dateInfo.dateObj;
     const cYear = cDate ? cDate.getFullYear() : null;
-    const ageDays = cDate ? Math.floor((now - cDate.getTime()) / (1000 * 60 * 60 * 24)) : 999;
+    const ageDays = cDate ? Math.floor((nowMs - cDate.getTime()) / (1000 * 60 * 60 * 24)) : 999;
 
     // Estado de seguimiento
     const isUncontacted = !data.lastMessageAt && !data.lastFollowUpAt && !data.advisorFirstContactAt;
     const nextDateMillis = data.nextFollowUpDate ? Date.parse(data.nextFollowUpDate) : null;
-    const isOverdue = !!nextDateMillis && !isNaN(nextDateMillis) && nextDateMillis < now;
-    const isActiveFollowUp = !!nextDateMillis && !isNaN(nextDateMillis) && nextDateMillis >= now;
+    const isOverdue = !!nextDateMillis && !isNaN(nextDateMillis) && nextDateMillis < nowMs;
+    const isActiveFollowUp = !!nextDateMillis && !isNaN(nextDateMillis) && nextDateMillis >= nowMs;
 
-    // Acumular estadísticas globales de la muestra
+    // Acumular estadísticas
     stats.byProject[projName] = (stats.byProject[projName] || 0) + 1;
     stats.bySource[sourceCategory] = (stats.bySource[sourceCategory] || 0) + 1;
 
@@ -320,10 +494,7 @@ export async function fetchPipelineCards(
     else if (ageDays <= 60) stats.byAge.from30to60Days++;
     else stats.byAge.over60Days++;
 
-    // ── FILTROS IN-MEMORY ──
-    if (opts.advisorId !== 'all' && rawAssigned !== opts.advisorId) {
-      return;
-    }
+    // Filtros adicionales in-memory
     if (opts.projectFilter !== 'all' && projName !== opts.projectFilter) {
       return;
     }
@@ -345,28 +516,42 @@ export async function fetchPipelineCards(
       return;
     }
 
-    // Filtro por fecha / antigüedad
-    if (opts.dateRange === 'last_30_days' && ageDays > 30) return;
-    if (opts.dateRange === 'last_60_days' && ageDays > 60) return;
-    if (opts.dateRange === 'year_2026' && cYear !== 2026) return;
-    if (opts.dateRange === 'year_2025' && cYear !== 2025) return;
-    if (opts.dateRange === 'year_2024' && cYear !== 2024) return;
-
     const stageConfig = derivePipelineStage(data);
 
-    // Filtro por grupo/fase si aplica
     if (opts.groupFilter && opts.groupFilter !== 'all' && stageConfig.group !== opts.groupFilter) {
       return;
     }
 
-    // Última bitácora
-    const bitacoras = (data.bitacoras || meta.smarthomeBitacoras) as Array<{ action?: string; description?: string; lastDate?: string }> | undefined;
-    const latestBitacora = Array.isArray(bitacoras) && bitacoras.length > 0 ? bitacoras[0] : null;
+    // Bitácoras deduplicadas y ordenadas
+    const rawCombinedBitacoras = [
+      ...(Array.isArray(data.bitacoras) ? data.bitacoras : []),
+      ...(Array.isArray(meta.smarthomeBitacoras) ? meta.smarthomeBitacoras : []),
+      ...(Array.isArray(data.smarthomeBitacoras) ? data.smarthomeBitacoras : []),
+    ];
+
+    rawCombinedBitacoras.sort((a, b) => {
+      const da = parseDate(a?.fecha || a?.lastDate || a?.date)?.getTime() || 0;
+      const db = parseDate(b?.fecha || b?.lastDate || b?.date)?.getTime() || 0;
+      return db - da;
+    });
+
+    const latestBitacora = rawCombinedBitacoras.length > 0 ? rawCombinedBitacoras[0] : null;
+    let lastBitacoraText: string | undefined;
+    let lastBitacoraDateStr: string | undefined;
+
+    if (latestBitacora) {
+      lastBitacoraText = `${latestBitacora.action ? latestBitacora.action + ': ' : ''}${latestBitacora.description || ''}`;
+      lastBitacoraDateStr = latestBitacora.fecha || latestBitacora.lastDate || latestBitacora.date;
+    } else if (data.lastFollowUpSummary || data.lastFollowUpAction) {
+      lastBitacoraText = `${data.lastFollowUpAction ? data.lastFollowUpAction + ': ' : ''}${data.lastFollowUpSummary || ''}`;
+      const lfu = parseDate(data.lastFollowUpAt);
+      lastBitacoraDateStr = lfu ? lfu.toISOString().replace('T', ' ').slice(0, 16) : undefined;
+    }
 
     cards.push({
       id: d.id,
-      name: (data.name as string) || 'Cliente Sin Nombre',
-      phone: (data.phone as string) || '',
+      name: (data.name as string) || (data.clientName as string) || (data.fullName as string) || 'Cliente Sin Nombre',
+      phone: (data.phone as string) || (data.normalizedPhone as string) || '',
       email: (data.email as string) || '',
       project: projName,
       sector: (meta.smarthomeSector as string) || (meta.smarthomeEtapaOriginal as string) || '',
@@ -383,10 +568,17 @@ export async function fetchPipelineCards(
       createdAtText: dateInfo.dateStr,
       createdMonthYear: dateInfo.label,
       score: typeof data.leadScore === 'number' ? data.leadScore : (data.aiAnalysis?.temperature === 'hot' ? 200 : 0),
-      lastBitacora: latestBitacora ? `${latestBitacora.action ? latestBitacora.action + ': ' : ''}${latestBitacora.description || ''}` : undefined,
-      lastBitacoraDate: latestBitacora?.lastDate,
+      lastBitacora: lastBitacoraText,
+      lastBitacoraDate: lastBitacoraDateStr,
       rawLead: data,
     });
+  });
+
+  // Ordenar tarjetas por la fecha de seguimiento o creación más reciente primero
+  cards.sort((a, b) => {
+    const da = parseDate(a.lastBitacoraDate) || parseDate(a.rawLead?.lastFollowUpAt) || parseDate(a.rawLead?.createdAt) || new Date(0);
+    const db = parseDate(b.lastBitacoraDate) || parseDate(b.rawLead?.lastFollowUpAt) || parseDate(b.rawLead?.createdAt) || new Date(0);
+    return db.getTime() - da.getTime();
   });
 
   return { cards, advisors: advisorsList, stats };

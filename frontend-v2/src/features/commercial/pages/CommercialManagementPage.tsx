@@ -6,8 +6,10 @@ import { isAdminRole } from '@/features/auth/types';
 import {
   RefreshCw, Search, UserPlus, ClipboardList, AlertTriangle, AlertCircle, Clock,
   FileText, Calendar, CheckCircle2, UserCheck, Building2, Users,
-  FileSpreadsheet, Sparkles, Filter, ArrowUpDown, Loader2, X, Trophy, ArrowRightLeft, UserX
+  FileSpreadsheet, Sparkles, Filter, ArrowUpDown, Loader2, X, Trophy, ArrowRightLeft, UserX,
+  CalendarDays
 } from 'lucide-react';
+import { CommercialDateFilter, buildPresetRange, type DateRangeValue } from '../components/CommercialDateFilter';
 import { CommercialKPIsBar } from '../components/CommercialKPIsBar';
 import { SmartFollowUpSuggestions } from '../components/SmartFollowUpSuggestions';
 import { CommercialLeadsTable } from '../components/CommercialLeadsTable';
@@ -17,7 +19,8 @@ import { CommercialReportView } from '../components/CommercialReportView';
 import {
   fetchCommercialManagementData,
   searchCommercialLeads,
-  exportCommercialLeadsToCsv
+  exportCommercialLeadsToCsv,
+  leadBelongsToAdvisor
 } from '../services/commercial.service';
 import { PIPELINE_STAGES } from '@/features/pipeline/types/pipeline.types';
 import { FichaTecnicaModal } from '@/features/calendar/components/FichaTecnicaModal';
@@ -72,6 +75,9 @@ export function CommercialManagementPage() {
   const [suggestions, setSuggestions] = useState<CommercialSuggestion[]>([]);
   const [advisors, setAdvisors] = useState<{ id: string; name: string }[]>([]);
 
+  // Filtro de Fecha Interactivo (Por defecto: Semana comercial activa)
+  const [dateRange, setDateRange] = useState<DateRangeValue>(() => buildPresetRange('week'));
+
   // Filtros y Permisos
   // Si es admin: puede consultar 'all' o un asesor específico.
   // Si es rol asesor: queda estrictamente bloqueado en su propio user.uid
@@ -98,7 +104,7 @@ export function CommercialManagementPage() {
   const [searchResults, setSearchResults] = useState<CommercialLeadItem[] | null>(null);
   const [searchingServer, setSearchingServer] = useState(false);
 
-  // Paginación por lotes inteligentes (40 por página para ahorrar lecturas)
+  // Paginación por lotes inteligentes
   const [lastVisibleDoc, setLastVisibleDoc] = useState<any>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -146,10 +152,12 @@ export function CommercialManagementPage() {
       const data = await fetchCommercialManagementData(
         companyId,
         effectiveAdvId,
-        40, // Lote de 40 en lugar de 400 (ahorro del 90% en lecturas de Firestore)
+        80, // Lote inteligente para auditoría rápida
         null, // primera página
         isAdmin,
-        user?.uid
+        user?.uid,
+        dateRange.startDate,
+        dateRange.endDate
       );
       setLeads(data.leads);
       setKpis(data.kpis);
@@ -165,7 +173,7 @@ export function CommercialManagementPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [companyId, selectedAdvisorId, isAdmin, user?.uid]);
+  }, [companyId, selectedAdvisorId, isAdmin, user?.uid, dateRange.startDate, dateRange.endDate]);
 
   const handleLoadMore = async () => {
     if (!companyId || !lastVisibleDoc || loadingMore) return;
@@ -175,10 +183,12 @@ export function CommercialManagementPage() {
       const data = await fetchCommercialManagementData(
         companyId,
         effectiveAdvId,
-        40,
+        60,
         lastVisibleDoc,
         isAdmin,
-        user?.uid
+        user?.uid,
+        dateRange.startDate,
+        dateRange.endDate
       );
       setLeads((prev) => [...prev, ...data.leads]);
       setLastVisibleDoc(data.lastVisibleDoc);
@@ -270,7 +280,15 @@ export function CommercialManagementPage() {
   // Filtrado y ordenamiento reactivo en memoria
   const filteredLeads = useMemo(() => {
     const pool = searchResults !== null ? searchResults : leads;
+    const effectiveAdvName = selectedAdvisorId !== 'all' ? (advisors.find((a) => a.id === selectedAdvisorId)?.name || '') : '';
+
     const filtered = pool.filter((lead) => {
+      // 0. Filtro estricto por asesor seleccionado: solo trae lo de él
+      if (selectedAdvisorId !== 'all') {
+        const belongs = leadBelongsToAdvisor(lead, selectedAdvisorId, effectiveAdvName);
+        if (!belongs) return false;
+      }
+
       // 1. Filtro por categoría / KPI
       const isLost = lead.status === 'lost';
       const isClosed = lead.status === 'closed';
@@ -280,7 +298,7 @@ export function CommercialManagementPage() {
       } else if (activeCategory === 'closed') {
         if (!isClosed) return false;
       } else if (activeCategory === 'all') {
-        // En "Todos", mostrar toda la cartera (activos, cancelados y cerrados) para que todo lo que hagan sea visible
+        // En "Todos", mostrar toda la cartera activa o con actividad en el período
       } else {
         // En vistas activas operativas, excluir cancelados / no interesados y cerrados
         if (isLost || isClosed) return false;
@@ -289,7 +307,14 @@ export function CommercialManagementPage() {
         if (activeCategory === 'today' && !lead.isToday) return false;
         if (activeCategory === 'missing' && lead.hasFicha) return false;
         if (activeCategory === 'upcoming' && !lead.isUpcoming) return false;
-        if (activeCategory === 'completed' && !lead.hasFicha) return false;
+        if (activeCategory === 'completed') {
+          // Si hay rango de fechas activo, mostrar estrictamente los que recibieron seguimiento en esas fechas
+          if (dateRange.startDate && dateRange.endDate) {
+            if (!lead.hadPeriodFollowUp) return false;
+          } else {
+            if (!lead.hasFicha) return false;
+          }
+        }
       }
 
       // 2. Filtro por proyecto
@@ -306,7 +331,7 @@ export function CommercialManagementPage() {
         const matchName = lead.name.toLowerCase().includes(q);
         const matchPhone = lead.phone.includes(q) || (qDigits.length >= 3 && leadPhoneDigits.includes(qDigits));
         const matchProject = lead.project?.toLowerCase().includes(q);
-        const matchSummary = lead.lastFollowUpSummary?.toLowerCase().includes(q);
+        const matchSummary = (lead.periodFollowUpSummary || lead.lastFollowUpSummary)?.toLowerCase().includes(q);
         if (!matchName && !matchPhone && !matchProject && !matchSummary) return false;
       }
 
@@ -337,7 +362,7 @@ export function CommercialManagementPage() {
       }
       return 0;
     });
-  }, [leads, searchResults, activeCategory, selectedProject, selectedStage, search, sortBy]);
+  }, [leads, searchResults, activeCategory, selectedProject, selectedStage, search, sortBy, selectedAdvisorId, advisors, dateRange]);
 
   // Prospectos objetivo para la Sesión de Enfoque / Maratón de Llamadas
   const focusTargetLeads = useMemo(() => {
@@ -408,6 +433,9 @@ export function CommercialManagementPage() {
                 <span className="text-xs font-semibold max-w-[160px] truncate">{user?.displayName || 'Asesor'}</span>
               </div>
             )}
+
+            {/* Selector de Rango de Fechas / Calendario Interactivo */}
+            <CommercialDateFilter value={dateRange} onChange={setDateRange} />
 
             {/* Botón Solicitudes de Traslado (solo Admin) */}
             {isAdmin && companyId && (
@@ -599,6 +627,8 @@ export function CommercialManagementPage() {
               kpis={kpis}
               activeFilter={activeCategory}
               onSelectFilter={setActiveCategory}
+              datePreset={dateRange.preset}
+              dateLabel={dateRange.label}
             />
 
             {/* ── Sugerencias Inteligentes de Seguimiento ── */}
@@ -734,7 +764,7 @@ export function CommercialManagementPage() {
               }`}
             >
               <CheckCircle2 size={13} className={activeCategory === 'completed' ? 'text-zinc-950' : 'text-emerald-400'} />
-              <span>Con Ficha</span>
+              <span>{dateRange.startDate && dateRange.endDate ? 'Con Seguimiento' : 'Con Ficha'}</span>
               {kpis.completedThisMonthCount > 0 && (
                 <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
                   activeCategory === 'completed' ? 'bg-emerald-950/40 text-zinc-950' : 'bg-emerald-950 text-emerald-300'
@@ -785,9 +815,12 @@ export function CommercialManagementPage() {
             </button>
           </div>
 
-          {/* Segunda Fila: Filtro Proyecto, Filtro Etapa, Ordenamiento y Buscador */}
+          {/* Segunda Fila: Filtro Fecha (Calendario), Filtro Proyecto, Filtro Etapa, Ordenamiento y Buscador */}
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5">
             <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+              {/* Selector de Rango de Fechas / Calendario Interactivo */}
+              <CommercialDateFilter value={dateRange} onChange={setDateRange} />
+
               {/* Filtro Proyecto */}
               {projectOptions.length > 0 && (
                 <div className="flex-1 min-w-[130px] flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-xl px-2.5 py-1.5 shadow-sm">
@@ -898,6 +931,55 @@ export function CommercialManagementPage() {
             )}
           </div>
         </div>
+
+        {/* ── Barra Informativa de Filtros Activos (Asesor + Fechas + Vista) ── */}
+        {(selectedAdvisorId !== 'all' || (dateRange.preset !== 'all' && dateRange.startDate) || activeCategory !== 'all') && (
+          <div className="flex items-center gap-2 flex-wrap text-xs bg-zinc-900/80 border border-zinc-800 rounded-xl px-3 py-2 text-zinc-300 shadow-sm">
+            <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Filtros aplicados:</span>
+            {selectedAdvisorId !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-xs font-semibold">
+                <UserCheck size={12} />
+                <span>Asesor: {advisors.find((a) => a.id === selectedAdvisorId)?.name || 'Seleccionado'}</span>
+                {isAdmin && (
+                  <button type="button" onClick={() => setSelectedAdvisorId('all')} className="hover:text-white cursor-pointer ml-1" title="Quitar filtro de asesor">
+                    <X size={12} />
+                  </button>
+                )}
+              </span>
+            )}
+            {dateRange.preset !== 'all' && dateRange.startDate && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-xs font-semibold">
+                <CalendarDays size={12} />
+                <span>Período: {dateRange.label}</span>
+                <button type="button" onClick={() => setDateRange(buildPresetRange('all'))} className="hover:text-white cursor-pointer ml-1" title="Ver histórico completo">
+                  <X size={12} />
+                </button>
+              </span>
+            )}
+            {activeCategory !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-200 border border-zinc-700 text-xs font-medium">
+                <span>Pestaña: {activeCategory === 'completed' ? 'Con Seguimiento' : activeCategory}</span>
+                <button type="button" onClick={() => setActiveCategory('all')} className="hover:text-white cursor-pointer ml-1" title="Mostrar todos">
+                  <X size={12} />
+                </button>
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (isAdmin) setSelectedAdvisorId('all');
+                setDateRange(buildPresetRange('all'));
+                setActiveCategory('all');
+                setSelectedProject('all');
+                setSelectedStage('all');
+                setSearch('');
+              }}
+              className="text-xs text-zinc-400 hover:text-zinc-100 hover:underline cursor-pointer ml-auto font-medium"
+            >
+              Restablecer todo
+            </button>
+          </div>
+        )}
 
         {/* ── Tabla Interactiva de Prospectos ── */}
         <CommercialLeadsTable

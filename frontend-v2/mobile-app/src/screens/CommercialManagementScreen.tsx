@@ -58,6 +58,54 @@ import { TransferRequestsModal } from '../components/TransferRequestsModal';
 type CategoryFilter = 'all' | 'missing_followup' | 'overdue' | 'today' | 'missing_ficha' | 'upcoming' | 'with_ficha' | 'cancelled' | 'closed';
 type SortOption = 'urgency' | 'recent' | 'oldest' | 'name';
 type ActiveView = 'fichas' | 'metas';
+export type PeriodPreset = 'week' | 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'all';
+
+export const PERIOD_OPTIONS: SelectOption[] = [
+  { value: 'week', label: 'Esta semana' },
+  { value: 'today', label: 'Hoy' },
+  { value: 'yesterday', label: 'Ayer' },
+  { value: '7d', label: 'Últimos 7 días' },
+  { value: '30d', label: 'Últimos 30 días' },
+  { value: 'month', label: 'Este mes' },
+  { value: 'all', label: 'Histórico completo' },
+];
+
+export function getPeriodDates(preset: PeriodPreset): { startDate: Date | null; endDate: Date | null } {
+  const now = new Date();
+  if (preset === 'all') return { startDate: null, endDate: null };
+  if (preset === 'today') {
+    const s = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    return { startDate: s, endDate: e };
+  }
+  if (preset === 'yesterday') {
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    const s = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 0, 0, 0);
+    const e = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 23, 59, 59);
+    return { startDate: s, endDate: e };
+  }
+  if (preset === '7d') {
+    const s = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+    return { startDate: s, endDate: now };
+  }
+  if (preset === '30d') {
+    const s = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+    return { startDate: s, endDate: now };
+  }
+  if (preset === 'month') {
+    const s = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+    return { startDate: s, endDate: now };
+  }
+  // Preset 'week'
+  const currentDay = now.getDay();
+  const rawDiff = (currentDay + 2) % 7;
+  const daysSinceFriday = rawDiff === 0 ? 7 : rawDiff;
+  const lastFriday = new Date(now);
+  lastFriday.setDate(now.getDate() - daysSinceFriday);
+  lastFriday.setHours(9, 0, 0, 0);
+  return { startDate: lastFriday, endDate: now };
+}
 
 function parseToMillis(val: any): number {
   if (!val) return 0;
@@ -196,6 +244,7 @@ export function CommercialManagementScreen() {
 
   // ── Filters & Search State ─────────────────────────────────────────────────
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('week');
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<SortOption>('recent');
@@ -269,7 +318,17 @@ export function CommercialManagementScreen() {
       if (showFullLoader) setLoading(true);
       try {
         const targetAdv = isAdmin ? selectedAdvisor : currentUserId || selectedAdvisor;
-        const res = await fetchCommercialManagementData(companyId, targetAdv, 50, null, isAdmin, currentUserId);
+        const { startDate, endDate } = getPeriodDates(periodPreset);
+        const res = await fetchCommercialManagementData(
+          companyId,
+          targetAdv,
+          80,
+          null,
+          isAdmin,
+          currentUserId,
+          startDate,
+          endDate
+        );
         setLeads(res.leads);
         setKpis(res.kpis);
         setSuggestions(res.suggestions);
@@ -283,7 +342,7 @@ export function CommercialManagementScreen() {
         setRefreshing(false);
       }
     },
-    [companyId, selectedAdvisor, isAdmin, currentUserId]
+    [companyId, selectedAdvisor, isAdmin, currentUserId, periodPreset]
   );
 
   useEffect(() => {
@@ -300,7 +359,17 @@ export function CommercialManagementScreen() {
     setLoadingMore(true);
     try {
       const targetAdv = isAdmin ? selectedAdvisor : currentUserId || selectedAdvisor;
-      const res = await fetchCommercialManagementData(companyId, targetAdv, 40, lastDoc, isAdmin, currentUserId);
+      const { startDate, endDate } = getPeriodDates(periodPreset);
+      const res = await fetchCommercialManagementData(
+        companyId,
+        targetAdv,
+        80,
+        lastDoc,
+        isAdmin,
+        currentUserId,
+        startDate,
+        endDate
+      );
       setLeads((prev) => {
         const existing = new Set(prev.map((l) => l.id));
         const incoming = res.leads.filter((l) => !existing.has(l.id));
@@ -378,7 +447,7 @@ export function CommercialManagementScreen() {
     } finally {
       setLoadingMore(false);
     }
-  }, [companyId, hasMore, lastDoc, loadingMore, isAdmin, selectedAdvisor, currentUserId]);
+  }, [companyId, hasMore, lastDoc, loadingMore, isAdmin, selectedAdvisor, currentUserId, periodPreset]);
 
   // ── Debounced Server + Local Search ────────────────────────────────────────
   useEffect(() => {
@@ -504,6 +573,11 @@ export function CommercialManagementScreen() {
     }
 
     const list = base.filter((l) => {
+      // 0. Si se filtra por asesor específico, solo mostrar leads asignados a él
+      if (selectedAdvisor !== 'all' && l.advisorId && l.advisorId !== selectedAdvisor) {
+        return false;
+      }
+
       const isLost = l.status === 'lost';
       const isClosed = l.status === 'closed';
 
@@ -518,7 +592,13 @@ export function CommercialManagementScreen() {
         if (categoryFilter === 'today' && !l.isToday) return false;
         if (categoryFilter === 'missing_ficha' && l.hasFicha) return false;
         if (categoryFilter === 'upcoming' && !l.isUpcoming) return false;
-        if (categoryFilter === 'with_ficha' && !l.hasFicha) return false;
+        if (categoryFilter === 'with_ficha') {
+          if (periodPreset === 'all') {
+            if (!l.hasFicha) return false;
+          } else {
+            if (!l.hadPeriodFollowUp) return false;
+          }
+        }
       }
 
       if (projectFilter !== 'all' && l.project !== projectFilter) return false;
@@ -543,7 +623,7 @@ export function CommercialManagementScreen() {
       });
     }
     return sorted;
-  }, [leads, searchQuery, serverSearchResults, categoryFilter, projectFilter, stageFilter, sortBy]);
+  }, [leads, searchQuery, serverSearchResults, categoryFilter, projectFilter, stageFilter, sortBy, periodPreset, selectedAdvisor]);
 
   const focusTargetLeads = useMemo(() => {
     const urgent = filteredLeads.filter((l) => l.isOverdue || l.isToday || !l.hasFicha);
@@ -1393,8 +1473,34 @@ export function CommercialManagementScreen() {
     },
     {
       key: 'with_ficha',
-      label: 'Gestionados Este Mes',
-      sub: 'Mes en curso',
+      label:
+        periodPreset === 'all'
+          ? 'Total con Ficha'
+          : periodPreset === 'today'
+          ? 'Gestionados Hoy'
+          : periodPreset === 'yesterday'
+          ? 'Gestionados Ayer'
+          : periodPreset === 'month'
+          ? 'Gestionados Este Mes'
+          : periodPreset === '30d'
+          ? 'Gestionados (30 días)'
+          : periodPreset === '7d'
+          ? 'Gestionados (7 días)'
+          : 'Gestionados Esta Semana',
+      sub:
+        periodPreset === 'all'
+          ? 'Histórico completo'
+          : periodPreset === 'today'
+          ? 'Día de hoy'
+          : periodPreset === 'yesterday'
+          ? 'Día anterior'
+          : periodPreset === 'month'
+          ? 'Mes en curso'
+          : periodPreset === '30d'
+          ? 'Últimos 30 días'
+          : periodPreset === '7d'
+          ? 'Últimos 7 días'
+          : 'Semana comercial',
       value: kpis.completedThisMonthCount,
       icon: 'CheckCircle2',
       accent: palette.emeraldText,
@@ -1410,7 +1516,12 @@ export function CommercialManagementScreen() {
     { id: 'today', label: 'Para Hoy', count: kpis.todayCount, icon: 'Clock' },
     { id: 'missing_ficha', label: 'Falta Ficha', count: kpis.missingFichaCount, icon: 'FileText' },
     { id: 'upcoming', label: 'Próximos', count: kpis.upcomingCount, icon: 'Calendar' },
-    { id: 'with_ficha', label: 'Con Ficha', count: kpis.completedThisMonthCount, icon: 'CheckCircle2' },
+    {
+      id: 'with_ficha',
+      label: periodPreset === 'all' ? 'Con Ficha' : 'Con Gestión',
+      count: kpis.completedThisMonthCount,
+      icon: 'CheckCircle2',
+    },
     { id: 'cancelled', label: 'Cancelados', count: kpis.cancelledCount || 0, icon: 'UserX' },
     { id: 'closed', label: 'Ventas', count: kpis.closedCount || 0, icon: 'Handshake' },
   ];
@@ -1506,6 +1617,40 @@ export function CommercialManagementScreen() {
                 <Text style={styles.transferCountDotText}>{pendingTransfersCount}</Text>
               </View>
             )}
+          </Pressable>
+        )}
+      </View>
+
+      {/* Action Row 1.5: Period Selector */}
+      <View style={styles.webActionRow}>
+        <SelectModal
+          value={periodPreset}
+          options={PERIOD_OPTIONS}
+          onChange={(v) => setPeriodPreset(v as PeriodPreset)}
+          prefixLabel="Período:"
+          title="Filtrar por Período de Tiempo"
+          icon="Calendar"
+          compact
+          style={[
+            styles.webPeriodSelect,
+            {
+              backgroundColor:
+                periodPreset !== 'all' ? (isDark ? 'rgba(16, 185, 129, 0.12)' : '#ecfdf5') : palette.bgCard,
+              borderColor:
+                periodPreset !== 'all' ? (isDark ? 'rgba(16, 185, 129, 0.35)' : '#a7f3d0') : palette.border,
+            },
+          ]}
+        />
+        {periodPreset !== 'week' && (
+          <Pressable
+            onPress={() => setPeriodPreset('week')}
+            style={[
+              styles.clearPeriodBtn,
+              { backgroundColor: palette.bgCard, borderColor: palette.border },
+            ]}
+          >
+            <Icon name="RefreshCw" size={13} color={palette.textSecondary} />
+            <Text style={[styles.clearPeriodText, { color: palette.textSecondary }]}>Esta semana</Text>
           </Pressable>
         )}
       </View>
@@ -3491,6 +3636,24 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 38,
     borderRadius: 11,
+  },
+  webPeriodSelect: {
+    flex: 1,
+    height: 38,
+    borderRadius: 11,
+  },
+  clearPeriodBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    height: 38,
+    paddingHorizontal: 10,
+    borderRadius: 11,
+    borderWidth: 1,
+  },
+  clearPeriodText: {
+    fontSize: 12,
+    fontWeight: '500',
   },
   webTransferBtn: {
     flexDirection: 'row',

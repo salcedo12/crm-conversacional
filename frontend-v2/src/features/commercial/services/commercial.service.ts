@@ -7,7 +7,7 @@ import { db } from '@/config/firebase';
 import { normalizeProject } from '@/features/database/pages/DatabasePage';
 import { derivePipelineStage } from '@/features/pipeline/services/pipeline.service';
 import { formatFriendlyDate } from '@/shared/utils/date';
-import { isRealCommercialFollowUp, isAdvisorMatch } from './commercialReports.service';
+import { isRealCommercialFollowUp, isAdvisorMatch, MERAKI_OFFICIAL_ADVISORS } from './commercialReports.service';
 import type {
   CommercialLeadItem,
   CommercialKPIs,
@@ -47,12 +47,60 @@ export function getCommercialWeekStart(now: Date = new Date()): Date {
   return lastFriday;
 }
 
+/**
+ * Determina si un prospecto pertenece a la cartera del asesor consultado.
+ *
+ * REGLA DE NEGOCIO ESTRICTA:
+ * Si un prospecto se reasigna, el ÚNICO que puede verlo y gestionarlo es el asesor
+ * actualmente asignado (assignedTo / advisorId). Aunque se haya reasignado varias veces
+ * o tenga bitácoras de otros asesores en su historial, la pertenencia es exclusiva del
+ * asesor actual.
+ */
+export function leadBelongsToAdvisor(
+  lead: {
+    assignedTo?: string;
+    advisorId?: string;
+    assignedToName?: string;
+    advisorName?: string;
+    smartHomeAdvisorName?: string;
+    metadata?: Record<string, unknown>;
+  },
+  targetAdvisorId?: string,
+  targetAdvisorName?: string
+): boolean {
+  if (!targetAdvisorId || targetAdvisorId === 'all') return true;
+
+  // 1. REGLA ESTRICTA DE ASIGNACIÓN ACTUAL POR ID:
+  // Si el prospecto tiene asignación activa por ID (assignedTo / advisorId),
+  // esta es la ÚNICA fuente de verdad.
+  const currentAssignedId = lead.assignedTo || lead.advisorId || '';
+  if (currentAssignedId) {
+    return currentAssignedId === targetAdvisorId;
+  }
+
+  // 2. Si el prospecto NO tiene ID asignado (casos legacy de importación o sin UID):
+  // Solo se toma en cuenta el nombre del asesor actual (assignedToName o smartHomeAdvisorName).
+  // NUNCA smarthomeAsesorOriginal ni bitácoras anteriores (pues representan gestiones pasadas).
+  if (targetAdvisorName) {
+    const currentName = lead.assignedToName || lead.smartHomeAdvisorName || lead.advisorName || '';
+    if (currentName && isAdvisorMatch(currentName, targetAdvisorName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function mapDocToCommercialLeadItem(
   docId: string,
   data: DocumentData,
   advMap: Map<string, string>,
   now: Date = new Date(),
-  weekStart: Date = getCommercialWeekStart(now)
+  weekStart: Date = getCommercialWeekStart(now),
+  startDate?: Date | null,
+  endDate?: Date | null,
+  _targetAdvisorId?: string,
+  targetAdvisorName?: string
 ): {
   item: CommercialLeadItem;
   isOverdue: boolean;
@@ -64,6 +112,11 @@ export function mapDocToCommercialLeadItem(
 } {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+  // Determinar rango de evaluación efectivo
+  const isHistorical = startDate === null && endDate === null;
+  const activeStart = isHistorical ? null : (startDate || weekStart);
+  const activeEnd = isHistorical ? null : (endDate || now);
 
   // Etapa del pipeline
   const stageConfig = derivePipelineStage(data);
@@ -99,46 +152,75 @@ export function mapDocToCommercialLeadItem(
     if (parsedNext) {
       if (parsedNext < startOfToday) {
         isOverdue = true;
-      } else if (parsedNext >= startOfToday && parsedNext <= endOfToday) {
+      } else if (parsedNext <= endOfToday) {
         isToday = true;
-      } else if (parsedNext > endOfToday) {
+      } else {
         isUpcoming = true;
       }
     }
   }
 
-  // Comprobar si fue captado o asignado/trasladado en la semana comercial activa
+  // Comprobar si fue captado o asignado/trasladado en el rango activo
   const createdDate = parseDate(data.createdAt);
   const assignedDate = parseDate(data.advisorAssignedAt);
   const transferDate = parseDate(data.transferDate);
-  const isPeriodCreated =
-    (createdDate ? (createdDate >= weekStart && createdDate <= now) : false) ||
-    (assignedDate ? (assignedDate >= weekStart && assignedDate <= now) : false) ||
-    (transferDate ? (transferDate >= weekStart && transferDate <= now) : false) ||
-    !!data.isPeriodCreated ||
-    !!data.isPeriodAssigned;
 
-  // Comprobar si tiene seguimiento comercial real en la semana comercial
-  // Tolerancia de +6h para fichas históricas guardadas en UTC sin zona horaria
-  const nowWithUtcTolerance = new Date(now.getTime() + 6 * 3600 * 1000);
-  let hadPeriodFollowUp = false;
-  for (const b of rawBitacoras) {
-    const bDate = parseDate(b.fecha || b.lastDate || b.date);
-    if (bDate && bDate >= weekStart && bDate <= nowWithUtcTolerance) {
-      if (isRealCommercialFollowUp(b.action, b.description)) {
-        hadPeriodFollowUp = true;
-        break;
-      }
-    }
+  let isPeriodCreated = false;
+  if (isHistorical) {
+    isPeriodCreated = true;
+  } else if (activeStart && activeEnd) {
+    isPeriodCreated =
+      (createdDate ? (createdDate >= activeStart && createdDate <= activeEnd) : false) ||
+      (assignedDate ? (assignedDate >= activeStart && assignedDate <= activeEnd) : false) ||
+      (transferDate ? (transferDate >= activeStart && transferDate <= activeEnd) : false) ||
+      !!data.isPeriodCreated ||
+      !!data.isPeriodAssigned;
   }
 
-  if (!hadPeriodFollowUp && (data.lastFollowUpAt || data.smartHomeLastBitacoraAt)) {
-    const lfuDate = parseDate(data.lastFollowUpAt || data.smartHomeLastBitacoraAt);
-    if (lfuDate && lfuDate >= weekStart && lfuDate <= nowWithUtcTolerance) {
-      const action = data.lastFollowUpAction || data.smartHomeLastActionLabel || '';
-      const desc = (data.lastFollowUpSummary || data.smartHomeLastBitacoraText || data.lastFollowUpAction || '').trim();
-      if (isRealCommercialFollowUp(action, desc)) {
-        hadPeriodFollowUp = true;
+  // Comprobar si tiene seguimiento comercial REAL en el rango de fechas seleccionado
+  // Con tolerancia de +6h para fechas UTC
+  let hadPeriodFollowUp = false;
+  let periodFollowUpDate: Date | null = null;
+  let periodFollowUpAction: string | null = null;
+  let periodFollowUpAuthor: string | null = null;
+  let periodFollowUpSummary: string | null = null;
+
+  if (isHistorical) {
+    hadPeriodFollowUp = hasFicha;
+  } else if (activeStart && activeEnd) {
+    const startTolerance = new Date(activeStart.getTime() - 6 * 3600 * 1000);
+    const endTolerance = new Date(activeEnd.getTime() + 6 * 3600 * 1000);
+
+    for (const b of rawBitacoras) {
+      const bDate = parseDate(b.fecha || b.lastDate || b.date);
+      if (bDate && bDate >= startTolerance && bDate <= endTolerance) {
+        if (isRealCommercialFollowUp(b.action, b.description)) {
+          // Si se seleccionó un asesor, comprobar que la bitácora corresponda a él
+          if (targetAdvisorName && b.asesor && !isAdvisorMatch(b.asesor, targetAdvisorName)) {
+            continue;
+          }
+          hadPeriodFollowUp = true;
+          if (!periodFollowUpDate || bDate > periodFollowUpDate) {
+            periodFollowUpDate = bDate;
+            periodFollowUpAction = b.action || 'Gestión comercial';
+            periodFollowUpAuthor = b.asesor || null;
+            periodFollowUpSummary = b.description || b.action || null;
+          }
+        }
+      }
+    }
+
+    if (!hadPeriodFollowUp && (data.lastFollowUpAt || data.smartHomeLastBitacoraAt)) {
+      const lfuDate = parseDate(data.lastFollowUpAt || data.smartHomeLastBitacoraAt);
+      if (lfuDate && lfuDate >= startTolerance && lfuDate <= endTolerance) {
+        const action = data.lastFollowUpAction || data.smartHomeLastActionLabel || '';
+        const desc = (data.lastFollowUpSummary || data.smartHomeLastBitacoraText || data.lastFollowUpAction || '').trim();
+        if (isRealCommercialFollowUp(action, desc)) {
+          hadPeriodFollowUp = true;
+          periodFollowUpDate = lfuDate;
+          periodFollowUpAction = action || 'Gestión comercial';
+          periodFollowUpSummary = desc || null;
+        }
       }
     }
   }
@@ -156,19 +238,19 @@ export function mapDocToCommercialLeadItem(
   const isClosed = data.status === 'closed' || stageConfig.id === 'firma';
   const missingPeriodFollowUp = isPeriodCreated && !hadPeriodFollowUp && !isLost && !isClosed;
 
-  // Fecha del último seguimiento real
-  let completedThisMonth = false;
+  // Fecha del último seguimiento general
   const bitacoraDate = (hasBitacoras && rawBitacoras[0])
     ? parseDate(rawBitacoras[0].fecha || rawBitacoras[0].lastDate || rawBitacoras[0].date)
     : null;
   const lfuDate = parseDate(data.lastFollowUpAt);
-  // PREFERENCIA ESTRICTA: La fecha de la bitácora histórica siempre refleja la última gestión real.
   const lastDate = bitacoraDate || lfuDate;
-  if (lastDate && lastDate.getFullYear() === now.getFullYear() && lastDate.getMonth() === now.getMonth()) {
-    completedThisMonth = true;
-  }
 
-  // Último resumen de seguimiento
+  // Para el KPI de gestionados:
+  // Si hay un rango de fechas seleccionado, representa estrictamente los gestionados en ese período.
+  // Si es histórico, representa los que tienen ficha técnica.
+  const completedThisMonth = hadPeriodFollowUp;
+
+  // Último resumen de seguimiento general
   let lastSummary: string | null = null;
   let lastAction: string | null = data.lastFollowUpAction || null;
   let lastResult: string | null = null;
@@ -201,6 +283,10 @@ export function mapDocToCommercialLeadItem(
     lastFollowUpResult: lastResult,
     lastFollowUpAuthor: lastAuthor,
     lastFollowUpSummary: lastSummary,
+    periodFollowUpDate: periodFollowUpDate ? formatFriendlyDate(periodFollowUpDate) : null,
+    periodFollowUpAction,
+    periodFollowUpAuthor,
+    periodFollowUpSummary,
     nextFollowUpDate: nextDateStr,
     nextFollowUpAction: data.nextFollowUpAction || (data.metadata?.nextFollowUpAction as string) || null,
     isOverdue,
@@ -223,10 +309,12 @@ export function mapDocToCommercialLeadItem(
 export async function fetchCommercialManagementData(
   companyId: string,
   targetAdvisorId: string = 'all',
-  pageSize: number = 50,
+  pageSize: number = 80,
   startAfterDoc: QueryDocumentSnapshot<DocumentData> | null = null,
   isUserAdmin: boolean = false,
-  currentUserId?: string
+  currentUserId?: string,
+  startDate?: Date | null,
+  endDate?: Date | null
 ): Promise<{
   leads: CommercialLeadItem[];
   kpis: CommercialKPIs;
@@ -242,7 +330,7 @@ export async function fetchCommercialManagementData(
     ? targetAdvisorId
     : (currentUserId || targetAdvisorId || '');
 
-  // 1. Obtener catálogo de asesores y usuarios
+  // 1. Obtener catálogo de asesores y usuarios enriquecido con la nómina oficial
   const advMap = new Map<string, string>();
   const advisorsList: { id: string; name: string }[] = [];
   try {
@@ -257,76 +345,63 @@ export async function fetchCommercialManagementData(
     console.warn('[commercial.service] Error leyendo usuarios:', err);
   }
 
-  const effectiveAdvName = effectiveAdvisorId ? (advMap.get(effectiveAdvisorId) || '') : '';
+  // Complementar con asesores oficiales si no vinieron en la colección de usuarios
+  MERAKI_OFFICIAL_ADVISORS.forEach((offName) => {
+    const alreadyPresent = advisorsList.some((a) => isAdvisorMatch(a.name, offName));
+    if (!alreadyPresent) {
+      const fakeId = `advisor_${offName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      advMap.set(fakeId, offName);
+      advisorsList.push({ id: fakeId, name: offName });
+    }
+  });
+
+  const matchedAdv = advisorsList.find((a) => a.id === effectiveAdvisorId || (effectiveAdvisorId !== 'all' && isAdvisorMatch(a.id, effectiveAdvisorId)));
+  const effectiveAdvName = matchedAdv
+    ? matchedAdv.name
+    : (effectiveAdvisorId && effectiveAdvisorId !== 'all' ? (advMap.get(effectiveAdvisorId) || '') : '');
 
   const now = new Date();
   const weekStart = getCommercialWeekStart(now);
-  const weekStartTs = Timestamp.fromDate(weekStart);
+
+  const isHistorical = startDate === null && endDate === null;
+  const effectiveStart = isHistorical ? null : (startDate || weekStart);
+  const effectiveEnd = isHistorical ? null : (endDate || now);
 
   const leadCol = collection(db, 'companies', companyId, 'leads');
+  const allDocsMap = new Map<string, QueryDocumentSnapshot<DocumentData>>();
 
-  // 2. Consultar TODOS los leads creados en la semana comercial activa
-  // Esto asegura que NINGÚN lead nuevo captado (por ejemplo, desde pauta de Meta Ads,
-  // webhooks o WhatsApp) se pierda, garantizando que los prospectos con "Falta Seguimiento"
-  // coincidan exactamente con la auditoría del informe semanal.
-  const weekDocsMap = new Map<string, QueryDocumentSnapshot<DocumentData>>();
-  try {
-    const qWeek = query(
-      leadCol,
-      where('createdAt', '>=', weekStartTs)
-    );
-    const snapWeek = await getDocs(qWeek);
-    for (const d of snapWeek.docs) {
-      const lData = d.data();
-      if (effectiveAdvisorId && effectiveAdvisorId !== 'all') {
-        const assigned = lData.assignedTo || '';
-        const smartName = lData.smartHomeAdvisorName || lData.assignedToName || '';
-        const isMatch =
-          assigned === effectiveAdvisorId ||
-          (effectiveAdvName && (isAdvisorMatch(assigned, effectiveAdvName) || isAdvisorMatch(smartName, effectiveAdvName)));
-        if (!isMatch) continue;
+  // 2. Si hay un rango de fechas definido, consultar en paralelo:
+  // A. Leads creados en el período (Captaciones)
+  // B. Leads asignados o trasladados en el período
+  // C. Leads con último seguimiento (lastFollowUpAt) en el período
+  if (!isHistorical && effectiveStart && effectiveEnd) {
+    const startTs = Timestamp.fromDate(effectiveStart);
+    const endTs = Timestamp.fromDate(effectiveEnd);
+
+    const periodQueries = [
+      getDocs(query(leadCol, where('createdAt', '>=', startTs), where('createdAt', '<=', endTs))),
+      getDocs(query(leadCol, where('advisorAssignedAt', '>=', startTs), where('advisorAssignedAt', '<=', endTs))),
+      getDocs(query(leadCol, where('lastFollowUpAt', '>=', startTs), where('lastFollowUpAt', '<=', endTs))),
+    ];
+
+    const results = await Promise.allSettled(periodQueries);
+    results.forEach((res) => {
+      if (res.status === 'fulfilled') {
+        res.value.docs.forEach((d) => {
+          allDocsMap.set(d.id, d);
+        });
       }
-      weekDocsMap.set(d.id, d);
-    }
-  } catch (err) {
-    console.warn('[commercial.service] Fallback consultando leads de la semana:', err);
+    });
   }
 
-  // 2.1 Consultar también leads asignados o trasladados en la semana comercial activa
-  try {
-    const qAssignedWeek = query(
-      leadCol,
-      where('advisorAssignedAt', '>=', weekStartTs)
-    );
-    const snapAssignedWeek = await getDocs(qAssignedWeek);
-    for (const d of snapAssignedWeek.docs) {
-      const lData = d.data();
-      if (effectiveAdvisorId && effectiveAdvisorId !== 'all') {
-        const assigned = lData.assignedTo || '';
-        const smartName = lData.smartHomeAdvisorName || lData.assignedToName || '';
-        const isMatch =
-          assigned === effectiveAdvisorId ||
-          (effectiveAdvName && (isAdvisorMatch(assigned, effectiveAdvName) || isAdvisorMatch(smartName, effectiveAdvName)));
-        if (!isMatch) continue;
-      }
-      weekDocsMap.set(d.id, d);
-    }
-  } catch {
-    // Continuar si faltara índice en alguna instancia
-  }
-
-  // 3. Consulta de leads paginada por lotes (50 por defecto en lugar de 400)
-  let docs: QueryDocumentSnapshot<DocumentData>[] = [];
-
+  // 3. Consulta de leads activos / recientes (para cubrir prospectos agendados, vencidos y cartera general)
+  let generalDocs: QueryDocumentSnapshot<DocumentData>[] = [];
   try {
     const baseConstraints: any[] = [];
-
-    // Si hay un asesor objetivo o el usuario es asesor individual, filtrar estrictamente
     if (effectiveAdvisorId && effectiveAdvisorId !== 'all') {
       baseConstraints.push(where('assignedTo', '==', effectiveAdvisorId));
     }
 
-    // Ordenar para que los prospectos MÁS RECIENTES (pauta Meta Ads, mensajes y nuevas llegadas) aparezcan de primero
     try {
       const qOrdered = query(
         leadCol,
@@ -336,9 +411,9 @@ export async function fetchCommercialManagementData(
         limit(pageSize)
       );
       const snap = await getDocs(qOrdered);
-      docs = snap.docs;
+      generalDocs = snap.docs;
     } catch {
-      // Fallback sin orderBy si faltara índice en algún filtro específico
+      // Fallback sin orderBy si faltara índice compuesto
       const qFallback = query(
         leadCol,
         ...baseConstraints,
@@ -346,30 +421,30 @@ export async function fetchCommercialManagementData(
         limit(pageSize)
       );
       const snapFallback = await getDocs(qFallback);
-      docs = snapFallback.docs;
+      generalDocs = snapFallback.docs;
     }
   } catch (err) {
-    console.error('[commercial.service] Error consultando leads:', err);
+    console.error('[commercial.service] Error consultando leads generales:', err);
   }
 
-  const lastVisibleDoc = docs.length > 0 ? docs[docs.length - 1] : null;
-  const hasMore = docs.length === pageSize;
-
-  // Combinar los leads de la semana en la primera página para garantizar
-  // que aparezcan inmediatamente disponibles en la vista
-  const allDocsMap = new Map<string, QueryDocumentSnapshot<DocumentData>>();
-  if (!startAfterDoc) {
-    for (const [id, d] of weekDocsMap.entries()) {
-      allDocsMap.set(id, d);
-    }
-  }
-  for (const d of docs) {
+  // Incorporar los prospectos generales paginados
+  for (const d of generalDocs) {
     if (!allDocsMap.has(d.id)) {
       allDocsMap.set(d.id, d);
     }
   }
 
-  const finalDocs = Array.from(allDocsMap.values());
+  const lastVisibleDoc = generalDocs.length > 0 ? generalDocs[generalDocs.length - 1] : null;
+  const hasMore = generalDocs.length === pageSize;
+
+  // 4. Filtrar estrictamente por asesor si se especificó uno
+  const rawDocs = Array.from(allDocsMap.values());
+  const finalDocs = rawDocs.filter((docSnap) => {
+    if (effectiveAdvisorId && effectiveAdvisorId !== 'all') {
+      return leadBelongsToAdvisor(docSnap.data(), effectiveAdvisorId, effectiveAdvName);
+    }
+    return true;
+  });
 
   const leads: CommercialLeadItem[] = [];
   let missingFollowUpCount = 0;
@@ -383,7 +458,17 @@ export async function fetchCommercialManagementData(
 
   for (const docSnap of finalDocs) {
     const { item, isOverdue, isToday, isUpcoming, hasFicha, completedThisMonth, missingPeriodFollowUp } =
-      mapDocToCommercialLeadItem(docSnap.id, docSnap.data(), advMap, now, weekStart);
+      mapDocToCommercialLeadItem(
+        docSnap.id,
+        docSnap.data(),
+        advMap,
+        now,
+        weekStart,
+        effectiveStart,
+        effectiveEnd,
+        effectiveAdvisorId,
+        effectiveAdvName
+      );
 
     const isLost = item.status === 'lost';
     const isClosed = item.status === 'closed';
@@ -406,19 +491,19 @@ export async function fetchCommercialManagementData(
   }
 
   // Ordenar leads con prioridad operativa activa:
-  // 1. Cancelados y cerrados van al fondo en la vista global
-  // 2. Prospectos captados en la semana sin seguimiento comercial (FALTA SEGUIMIENTO) de primeros
-  // 3. Vencidos primero
-  // 4. Programados para hoy
-  // 5. Sin ficha técnica
-  // 6. Resto por fecha más reciente
+  // 1. Prospectos gestionados en el período primero si el filtro activo es fechas
+  // 2. Cancelados y cerrados van al fondo en la vista global
+  // 3. Prospectos con Falta Seguimiento de primeros
+  // 4. Vencidos
+  // 5. Para hoy
+  // 6. Sin ficha técnica
   leads.sort((a, b) => {
     const aInactive = a.status === 'lost' || a.status === 'closed';
     const bInactive = b.status === 'lost' || b.status === 'closed';
     if (aInactive && !bInactive) return 1;
     if (!aInactive && bInactive) return -1;
 
-    // Prioridad 1: Prospectos de la semana sin seguimiento comercial
+    // Prioridad 1: Prospectos de la semana o período sin seguimiento
     if (a.missingPeriodFollowUp && !b.missingPeriodFollowUp) return -1;
     if (!a.missingPeriodFollowUp && b.missingPeriodFollowUp) return 1;
 
@@ -449,7 +534,7 @@ export async function fetchCommercialManagementData(
     totalLeads: leads.length,
   };
 
-  // Generar sugerencias inteligentes para el asesor
+  // Generar sugerencias inteligentes para el asesor según el contexto
   const suggestions: CommercialSuggestion[] = [];
 
   if (missingFollowUpCount > 0) {
@@ -457,8 +542,8 @@ export async function fetchCommercialManagementData(
       id: 'sug-missing-followup',
       type: 'missing_followup',
       icon: '',
-      title: `${missingFollowUpCount} prospecto${missingFollowUpCount > 1 ? 's' : ''} de la semana sin seguimiento`,
-      description: 'Prospectos captados en la semana comercial activa que aún no registran llamadas ni bitácoras de gestión.',
+      title: `${missingFollowUpCount} prospecto${missingFollowUpCount > 1 ? 's' : ''} sin seguimiento en el período`,
+      description: 'Prospectos captados o asignados en el rango de fechas que aún no registran llamadas ni bitácoras de gestión.',
       count: missingFollowUpCount,
       actionFilter: 'missing_followup',
       badgeColor: 'border-rose-500/40 bg-rose-500/10 text-rose-300',

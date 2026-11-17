@@ -40,13 +40,16 @@ export function buildAiFailureAlert(input: {
   );
 }
 
-/** El número de alertas no debe ser de un cliente real (sí puede ser un número de prueba de la IA). */
-async function phoneIsRealClient(phone: string): Promise<boolean> {
+/**
+ * El número de alertas no debe ser de un cliente real (sí puede ser un número de prueba
+ * de la IA). Se busca dentro de la empresa: una consulta collectionGroup necesitaría un
+ * índice que no existe y fallaría siempre.
+ */
+async function phoneIsRealClient(companyId: string, phone: string): Promise<boolean> {
+  const leads = db.collection('companies').doc(companyId).collection('leads');
   const snaps = await Promise.all([
-    db.collectionGroup('leads').where('normalizedPhone', '==', toNormalizedPhone(phone)).limit(5).get(),
-    phoneTail(phone)
-      ? db.collectionGroup('leads').where('phoneTail', '==', phoneTail(phone)).limit(5).get()
-      : Promise.resolve(null),
+    leads.where('normalizedPhone', '==', toNormalizedPhone(phone)).limit(5).get(),
+    phoneTail(phone) ? leads.where('phoneTail', '==', phoneTail(phone)).limit(5).get() : Promise.resolve(null),
   ]);
   return snaps.some((snap) => snap?.docs.some((doc) => {
     const tags = doc.data().tags;
@@ -81,7 +84,7 @@ export async function sendAiFailureAlert(
     });
     if (otherFailures === null) return;
 
-    if (await phoneIsRealClient(phone)) {
+    if (await phoneIsRealClient(companyId, phone)) {
       logger.warn('[AI] Aviso de falla no enviado: ERROR_ALERT_PHONE es de un cliente', { phoneTail: phoneTail(phone) });
       return;
     }

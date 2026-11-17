@@ -82,17 +82,15 @@ export function SmartHomeSalesPanel({ sales, inventoryOnly, inventoryCheckedAt, 
   const counted = visible.filter((sale) => !sale.ignored);
   const allFiles = counted.flatMap((sale) => sale.files);
   const copiedFiles = allFiles.filter((file) => file.copied).length;
-  const totalValue = counted.reduce((sum, sale) => sum + sale.value, 0);
   const ignoredCount = sales.filter((sale) => sale.ignored).length;
   const selected = sales.find((sale) => sale.id === selectedId) ?? null;
 
   return (
     <div className="space-y-4">
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Stat icon={MapPin} label="Lotes vendidos" value={String(counted.length)} />
         <Stat icon={Paperclip} label="Archivos en el CRM" value={`${copiedFiles} / ${allFiles.length}`} />
-        <Stat icon={BadgeDollarSign} label="Valor vendido" value={money(totalValue)} />
-        <Stat icon={RefreshCw} label="Actualizado" value={syncLabel(lastSyncAt)} small />
+        <div className="col-span-2 lg:col-span-1"><Stat icon={RefreshCw} label="Actualizado" value={syncLabel(lastSyncAt)} small /></div>
       </section>
 
       {inventoryCheckedAt && discrepancies > 0 && (

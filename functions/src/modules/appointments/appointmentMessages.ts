@@ -1,3 +1,4 @@
+import { personFirstName } from '../ai/personName';
 import { env } from '../../config/env';
 import type { AppointmentModality } from './appointments.types';
 
@@ -11,8 +12,7 @@ const TZ = () => env.calendarTimeZone();
 
 /** Primer nombre amigable; vacío si es un placeholder tipo "Lead +57...". */
 export function friendlyFirstName(name?: string): string {
-  if (!name || name.startsWith('Lead ')) return '';
-  return name.trim().split(/\s+/)[0] ?? '';
+  return personFirstName(name);
 }
 
 /** Hora local, ej "12:00 p. m." */
@@ -45,8 +45,8 @@ export function modalityLabel(modality?: AppointmentModality): string {
 /** Qué pasa a la hora de la cita, según la modalidad. */
 function howItWorks(modality?: AppointmentModality): string {
   return modality === 'videollamada'
-    ? 'Es una videollamada por Google Meet: te enviaremos el enlace unos minutos antes de la cita.'
-    : 'Es una llamada telefónica: tu asesor te llamará a este mismo número. Si prefieres videollamada por Google Meet, solo dímelo.';
+    ? 'Es una videollamada por Google Meet: le enviaremos el enlace unos minutos antes de la cita.'
+    : 'Es una llamada telefónica: su asesor le llamará a este mismo número. Si prefiere videollamada por Google Meet, solo dígamelo.';
 }
 
 // ── Confirmación (cuando la IA acaba de agendar) ────────────────────────────
@@ -56,9 +56,9 @@ export function buildConfirmation(businessName: string, name: string | undefined
   const first = friendlyFirstName(name);
   const hi    = first ? `¡Listo, ${first}!` : '¡Listo!';
   return (
-    `✅ ${hi} Tu cita con ${businessName} quedó agendada para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
+    `✅ ${hi} Su cita con ${businessName} quedó agendada para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
     `${howItWorks(modality)}\n\n` +
-    `¡Te esperamos! 😊`
+    `¡Le esperamos! 😊`
   );
 }
 
@@ -68,9 +68,9 @@ export function buildReschedule(businessName: string, name: string | undefined, 
   const first = friendlyFirstName(name);
   const hi    = first ? `¡Listo, ${first}!` : '¡Listo!';
   return (
-    `✅ ${hi} Reprogramé tu cita con ${businessName} para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
+    `✅ ${hi} Reprogramé su cita con ${businessName} para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
     `${howItWorks(modality)}\n\n` +
-    `¡Te esperamos! 😊`
+    `¡Le esperamos! 😊`
   );
 }
 
@@ -79,8 +79,8 @@ export function buildCancellation(businessName: string, name?: string): string {
   const first = friendlyFirstName(name);
   const hi    = first ? `Listo, ${first}.` : 'Listo.';
   return (
-    `${hi} Cancelé tu cita con ${businessName}. 🗓️\n\n` +
-    `Cuando quieras agendar de nuevo, aquí estoy para ayudarte. 😊`
+    `${hi} Cancelé su cita con ${businessName}. 🗓️\n\n` +
+    `Cuando quiera agendar de nuevo, aquí estoy para ayudarle. 😊`
   );
 }
 
@@ -90,8 +90,8 @@ export function buildReminder24h(businessName: string, name: string | undefined,
   const hi    = first ? `¡Hola, ${first}! 👋` : '¡Hola! 👋';
   return (
     `${hi}\n\n` +
-    `Te recordamos tu cita con ${businessName} para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
-    `¡Te esperamos!`
+    `Le recordamos su cita con ${businessName} para ${whenLabel(start)} a las ${formatTime(start)}. 🌳\n\n` +
+    `¡Le esperamos!`
   );
 }
 
@@ -100,45 +100,69 @@ export function buildReminder2h(businessName: string, name: string | undefined, 
   const hi    = first ? `¡Hola, ${first}! 👋` : '¡Hola! 👋';
   return (
     `${hi}\n\n` +
-    `Tu cita con ${businessName} es hoy a las ${formatTime(start)}. ⏰\n\n` +
+    `Su cita con ${businessName} es hoy a las ${formatTime(start)}. ⏰\n\n` +
     (modality === 'videollamada'
-      ? `Unos minutos antes te enviaremos el enlace de Google Meet para la videollamada. 😊`
-      : `Tu asesor te llamará a este número. ¡Ten tu teléfono a la mano! 📞`)
+      ? `Unos minutos antes le enviaremos el enlace de Google Meet para la videollamada. 😊`
+      : `Su asesor le llamará a este número. ¡Tenga su teléfono a la mano! 📞`)
   );
 }
 
 export function buildReminder30m(name: string | undefined, meetLink?: string, modality?: AppointmentModality): string {
   const first = friendlyFirstName(name);
-  const who   = first ? `${first}, tu` : 'Tu';
+  const who   = first ? `${first}, su` : 'Su';
   if (modality !== 'videollamada') {
     return (
       `📞 ¡${who} cita es en unos minutos!\n\n` +
-      `Tu asesor te llamará a este número. ¡Ten tu teléfono a la mano! 😊`
+      `Su asesor le llamará a este número. ¡Tenga su teléfono a la mano! 😊`
     );
   }
   if (meetLink) {
     return (
       `🎥 ¡${who} cita es en unos minutos!\n\n` +
-      `Conéctate a la videollamada de Google Meet aquí:\n${meetLink}\n\n` +
-      `¡Te esperamos! 😊`
+      `Conéctese a la videollamada de Google Meet aquí:\n${meetLink}\n\n` +
+      `¡Le esperamos! 😊`
     );
   }
   return (
     `⏰ ¡${who} cita es en unos minutos!\n\n` +
-    `En seguida tu asesor se comunicará contigo para conectarse. ¡Te esperamos! 😊`
+    `En seguida su asesor se comunicará con usted para conectarse. ¡Le esperamos! 😊`
   );
 }
 
 // ── Evento de Google Calendar (lo ve el cliente al unirse al Meet) ──────────
-export function buildEventTitle(name?: string): string {
-  return name && !name.startsWith('Lead ') ? `Cita con ${name}` : 'Cita';
+/** Sufijo que dice al asesor, a simple vista, si debe llamar o conectarse a Meet. */
+export function modalityTitleSuffix(modality?: AppointmentModality): string {
+  return modality === 'videollamada' ? 'Videollamada Meet' : 'Llamada';
 }
 
-export function buildEventDescription(businessName: string, name: string | undefined, fromAi: boolean): string {
+/** "Cita con Ana · Llamada": la modalidad queda visible en la web, la app y Google Calendar. */
+export function buildEventTitle(name?: string, modality?: AppointmentModality): string {
+  const base = name && !name.startsWith('Lead ') ? `Cita con ${name}` : 'Cita';
+  return modality ? `${base} · ${modalityTitleSuffix(modality)}` : base;
+}
+
+/** Cambia (o agrega) el sufijo de modalidad de un título de cita ya creado. */
+export function retitleForModality(title: string, modality: AppointmentModality): string {
+  const base = title.replace(/\s·\s(Llamada|Videollamada Meet)$/, '');
+  return `${base} · ${modalityTitleSuffix(modality)}`;
+}
+
+export function buildEventDescription(
+  businessName: string,
+  name: string | undefined,
+  fromAi: boolean,
+  extra: { phone?: string; modality?: AppointmentModality } = {},
+): string {
   const who = name && !name.startsWith('Lead ') ? name : 'el cliente';
   const lines = [
     `Cita agendada para ${who} con ${businessName}.`,
   ];
+  if (extra.modality) {
+    lines.push(extra.modality === 'videollamada'
+      ? 'Modalidad: videollamada por Google Meet (el cliente recibe el enlace 30 minutos antes).'
+      : `Modalidad: llamada telefónica. El asesor llama al cliente${extra.phone ? ` al ${extra.phone}` : ''}.`);
+  }
+  if (extra.phone) lines.push(`Teléfono del cliente: ${extra.phone}`);
   if (fromAi) lines.push('', '— Agendada automáticamente por nuestro asistente virtual. 🤖');
   return lines.join('\n');
 }

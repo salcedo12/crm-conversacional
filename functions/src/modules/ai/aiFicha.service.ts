@@ -29,13 +29,16 @@ export type AiFichaKind =
   | 'comprador'
   | 'objecion_presupuesto'
   | 'pidio_asesor'
-  | 'desistimiento';
+  | 'desistimiento'
+  | 'proveedor';
 
 export interface AiFichaInput {
   kind:        AiFichaKind;
   result:      string;
   nextAction:  string;
   notes?:      string;
+  /** Etapa del embudo a usar en lugar de la del tipo de ficha (p. ej. no_interesado_ubicacion). */
+  pipelineStage?: string;
   /** Si se repite la clave, la ficha no se vuelve a registrar. */
   dedupeKey?:  string;
 }
@@ -69,6 +72,8 @@ export function fichaPlan(kind: AiFichaKind, lead: Pick<Lead, 'tags'>): FichaPla
       return { actionType: 'seguimiento_general', actionTitle: 'Objeción de presupuesto', tag: 'objecion_presupuesto', smartHome: true };
     case 'pidio_asesor':
       return { actionType: 'seguimiento_general', actionTitle: 'Pidió hablar con un asesor', smartHome: true };
+    case 'proveedor':
+      return { actionType: 'seguimiento_general', actionTitle: 'No es cliente (proveedor ofreciendo servicios)', pipelineStage: 'no_interesado_otra', status: 'lost', tag: 'proveedor', smartHome: false };
     case 'desistimiento': {
       const budget = (lead.tags ?? []).includes('objecion_presupuesto');
       return {
@@ -99,7 +104,7 @@ export function nextStageAndStatus(
 /** Detecta en el mensaje del lead que el precio o su presupuesto es la objeción. */
 export function detectsBudgetObjection(text: string): boolean {
   const t = text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  return /\bno me alcanza\b|\b(muy|demasiado|super) caro\b|\bes (mucha|demasiada) plata\b|\bno tengo (tanto|esa plata|ese dinero|para eso)\b|\b(solo|apenas|a penas) tengo\b|\btengo (apenas |a penas |solo )?\d+ ?(millones|m)\b|\bmi presupuesto (es|son|no)\b|\bfuera de mi presupuesto\b/.test(t);
+  return /\bno me alcanza\b|\b(muy|demasiado|super) caro\b|\bes (mucha|demasiada) plata\b|\bno tengo (tanto|esa plata|ese dinero|para eso)\b|\b(solo|apenas|a penas) tengo\b|\btengo (apenas |a penas |solo )?\d+ ?(millones|m)\b|\bmi presupuesto (es|son|no)\b|\bfuera de mi presupuesto\b|\bse (me )?sale (de|del) (mi )?presupuesto\b|\bpresupuesto (maximo|limite)\b|\bno me alca(n)?za\b|\bfuera de (mi )?alcance\b|\bno (tengo|cuento con) (el|ese|tanto) (dinero|presupuesto|capital)\b/.test(t);
 }
 
 /** Texto de la próxima cita del lead para la ficha ("10 nov, 3:00 p. m."). */
@@ -125,6 +130,7 @@ export async function recordAiFicha(companyId: string, leadId: string, input: Ai
     if (input.dedupeKey && (lead.aiFichaKeys ?? []).includes(input.dedupeKey)) return false;
 
     const plan = fichaPlan(input.kind, lead);
+    if (input.pipelineStage) plan.pipelineStage = input.pipelineStage;
     const now = Timestamp.now();
     const text =
       `📋 FICHA TÉCNICA (IA) · ${plan.actionTitle}\n• Resultado: ${input.result}\n• Próximo paso: ${input.nextAction}` +

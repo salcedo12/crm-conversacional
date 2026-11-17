@@ -175,7 +175,7 @@ export function availableLotsFromSummary(lots: Record<string, Partial<SummaryEnt
       id,
       sector: String(l.sec || 'GENERAL'),
       number: String(l.n ?? ''),
-      code: String(l.c ?? ''),
+      code: String(l.c || (l as any).code || (l as any).codigo || (l as any).cod || ''),
       areaM2: parseArea(l.a),
       corner: !!l.e,
     }))
@@ -189,7 +189,7 @@ export function toDealLot(id: string, lot: InventoryLotDoc, reservedUntil: strin
     projectId: lot.proyecto,
     sector: lot.sector || 'GENERAL',
     lotNumber: lotNumber(lot),
-    lotCode: lot.code || lot.codigo || '',
+    lotCode: lot.code || lot.codigo || (lot as any).c || '',
     inventoryLotId: id,
     areaM2: parseArea(lot.area ?? lot.areaM2),
     corner: !!lot.esquinero,

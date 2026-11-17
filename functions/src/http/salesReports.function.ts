@@ -2,7 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { Timestamp } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { db } from '../lib/admin';
-import { requireAuth, requireRole, assertCompany, ADMIN_ROLES } from '../lib/authContext';
+import { requireAuth, requireRole, assertCompany, ADMIN_ROLES, WRITE_ROLES } from '../lib/authContext';
 import {
   getSmartHomeSales,
   getSmartHomeProjects,
@@ -444,6 +444,32 @@ export const getSalesCommissionReport = onCall({ region: 'us-central1' }, async 
   }
 });
 
+// ── Seguridad (R04) ──────────────────────────────────────────────────────────
+// Admin/manager gestionan cualquier reporte de venta de su empresa (pantalla de
+// Reportes). Un asesor solo el de SU propio negocio (saleId = id del deal).
+function isAdminCtx(auth: ReturnType<typeof requireAuth>): boolean {
+  return auth.platformAdmin || ADMIN_ROLES.includes(auth.role);
+}
+
+async function assertCanAccessSalesReport(
+  auth: ReturnType<typeof requireAuth>,
+  companyId: string,
+  saleId: string
+): Promise<void> {
+  if (isAdminCtx(auth)) return;
+  if (saleId.includes('/')) {
+    throw new HttpsError('invalid-argument', 'Identificador de venta inválido.');
+  }
+  const dealSnap = await db.doc(`companies/${companyId}/deals/${saleId}`).get();
+  if (dealSnap.exists && dealSnap.data()?.advisorId === auth.uid) return;
+  logger.warn('[salesReports][SECURITY] Acceso denegado a reporte de venta ajeno', {
+    uid: auth.uid, companyId, saleId,
+  });
+  throw new HttpsError('permission-denied', 'No tienes permiso sobre este reporte de venta.');
+}
+
+const money = z.number().finite().nonnegative();
+
 const SaveDocumentSchema = z.object({
   companyId: z.string().min(1),
   saleId: z.string().min(1),
@@ -451,7 +477,7 @@ const SaveDocumentSchema = z.object({
   module: z.string().optional(),
   clientName: z.string().optional(),
   documentNumber: z.string().optional(),
-  deposit: z.number().optional(),
+  deposit: money.optional(),
   paymentTerms: z.union([z.string(), z.number()]).optional(),
   source: z.string().optional(),
   agentCr: z.string().optional(),
@@ -462,13 +488,21 @@ const SaveDocumentSchema = z.object({
   referralName: z.string().optional(),
   createdByName: z.string().optional(),
   documentUrl: z.string().optional().nullable(),
+  landValue: money.optional(),
+  lotNumber: z.string().optional(),
+  sectorStage: z.string().optional(),
+  projectName: z.string().optional(),
+  area: z.union([z.string(), z.number()]).optional(),
+  discount: money.optional(),
+  commissions: z.any().optional(),
 });
 
 export const saveSalesReportDocument = onCall({ region: 'us-central1' }, async (request) => {
   const auth = requireAuth(request);
   const input = SaveDocumentSchema.parse(request.data);
   assertCompany(auth, input.companyId);
-  requireRole(auth, ADMIN_ROLES);
+  requireRole(auth, WRITE_ROLES);
+  await assertCanAccessSalesReport(auth, input.companyId, input.saleId);
 
   try {
     const docRef = db.doc(`companies/${input.companyId}/sales_reports/${input.saleId}`);
@@ -477,8 +511,12 @@ export const saveSalesReportDocument = onCall({ region: 'us-central1' }, async (
     const existingDoc = existingSnap.exists ? existingSnap.data() || {} : {};
     const existingHistory: SalesReportDocumentVersion[] = Array.isArray(existingDoc.history) ? existingDoc.history : [];
 
+    // La autoría del historial no la decide un asesor: se toma de su sesión.
+    const profileName = isAdminCtx(auth)
+      ? input.createdByName
+      : String((await db.doc(`companies/${input.companyId}/users/${auth.uid}`).get()).data()?.displayName || '');
     const createdByName = String(
-      input.createdByName ||
+      profileName ||
       (request.auth?.token?.name as string) ||
       (request.auth?.token?.email as string) ||
       'Claudia Patricia Bolaños Vega'
@@ -512,6 +550,13 @@ export const saveSalesReportDocument = onCall({ region: 'us-central1' }, async (
       createdDateStr,
       createdByUid: auth.uid,
       createdByName,
+      ...(input.landValue !== undefined ? { landValue: input.landValue } : {}),
+      ...(input.lotNumber !== undefined ? { lotNumber: input.lotNumber } : {}),
+      ...(input.sectorStage !== undefined ? { sectorStage: input.sectorStage } : {}),
+      ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+      ...(input.area !== undefined ? { area: input.area } : {}),
+      ...(input.discount !== undefined ? { discount: input.discount } : {}),
+      ...(input.commissions !== undefined ? { commissions: input.commissions } : {}),
     };
 
     const updatedHistory = [newVersion, ...existingHistory];
@@ -537,9 +582,35 @@ export const saveSalesReportDocument = onCall({ region: 'us-central1' }, async (
       history: updatedHistory,
       updatedAt: now,
       updatedBy: auth.uid,
+      ...(input.landValue !== undefined ? { landValue: input.landValue } : {}),
+      ...(input.lotNumber !== undefined ? { lotNumber: input.lotNumber } : {}),
+      ...(input.sectorStage !== undefined ? { sectorStage: input.sectorStage } : {}),
+      ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+      ...(input.area !== undefined ? { area: input.area } : {}),
+      ...(input.discount !== undefined ? { discount: input.discount } : {}),
+      ...(input.commissions !== undefined ? { commissions: input.commissions } : {}),
     };
 
     await docRef.set(dataToSave, { merge: true });
+
+    // También sincronizar metadatos en companies/{companyId}/deals/{saleId} si existe
+    try {
+      const dealRef = db.doc(`companies/${input.companyId}/deals/${input.saleId}`);
+      const dealSnap = await dealRef.get();
+      if (dealSnap.exists) {
+        await dealRef.set(
+          {
+            salesReportGeneratedAt: now.toMillis(),
+            salesReportGeneratedDateStr: createdDateStr,
+            salesReportVersionCount: updatedHistory.length,
+            salesReportLastCreatedBy: createdByName,
+          },
+          { merge: true }
+        );
+      }
+    } catch (dealErr) {
+      // Ignorar si no es un deal o falla silenciosamente
+    }
 
     return {
       ok: true,
@@ -552,6 +623,29 @@ export const saveSalesReportDocument = onCall({ region: 'us-central1' }, async (
   } catch (err) {
     logger.error('[saveSalesReportDocument] error:', { error: err instanceof Error ? err.message : String(err) });
     throw new HttpsError('internal', 'Error guardando el documento del reporte de venta.');
+  }
+});
+
+const GetDocumentSchema = z.object({
+  companyId: z.string().min(1),
+  saleId: z.string().min(1),
+});
+
+export const getSalesReportDocument = onCall({ region: 'us-central1' }, async (request) => {
+  const auth = requireAuth(request);
+  const input = GetDocumentSchema.parse(request.data);
+  assertCompany(auth, input.companyId);
+  requireRole(auth, WRITE_ROLES);
+  await assertCanAccessSalesReport(auth, input.companyId, input.saleId);
+
+  try {
+    const docRef = db.doc(`companies/${input.companyId}/sales_reports/${input.saleId}`);
+    const snap = await docRef.get();
+    if (!snap.exists) return { exists: false, data: null };
+    return { exists: true, data: snap.data() };
+  } catch (err) {
+    logger.error('[getSalesReportDocument] error:', { error: err instanceof Error ? err.message : String(err) });
+    throw new HttpsError('internal', 'Error consultando el reporte de venta.');
   }
 });
 

@@ -175,6 +175,26 @@ export async function listEvents(
   });
 }
 
+/** Cambia el título y la descripción de un evento existente (p. ej. al cambiar la modalidad). */
+export async function patchEventDetails(
+  refreshToken: string,
+  eventId:      string,
+  details:      { title?: string; description?: string },
+): Promise<void> {
+  const client = buildOAuthClient();
+  client.setCredentials({ refresh_token: refreshToken });
+  const calendar = gapi().calendar({ version: 'v3', auth: client });
+  await calendar.events.patch({
+    calendarId:  'primary',
+    eventId,
+    sendUpdates: 'none',
+    requestBody: {
+      ...(details.title ? { summary: details.title } : {}),
+      ...(details.description !== undefined ? { description: details.description } : {}),
+    },
+  });
+}
+
 /** Elimina un evento del calendario primario. */
 export async function deleteEvent(refreshToken: string, eventId: string): Promise<void> {
   const client = buildOAuthClient();

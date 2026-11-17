@@ -377,7 +377,8 @@ export const getReport317 = onCall(
         }
         if (l.advisorFirstContactAt) acc.attendedLeads++;   // hizo primer contacto humano
         if (l.advisorFirstContactAt && l.advisorAssignedAt) {
-          const delay = msOf(l.advisorFirstContactAt) - msOf(l.advisorAssignedAt);
+          // Desde el traspaso al asesor (si la IA atendió primero), no desde la asignación.
+          const delay = msOf(l.advisorFirstContactAt) - Math.max(msOf(l.advisorAssignedAt), msOf(l.firstContactClockAt));
           if (delay > 0) acc.firstContactDelays.push(delay);
         } else if (l.pendingFirstContact === true || (s && s.advisorMsgCount === 0)) {
           acc.neverContacted++;

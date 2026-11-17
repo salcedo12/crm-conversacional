@@ -751,6 +751,16 @@ function isRealCommercialFollowUp(action?: string | null, text?: string | null):
   const rawText = String(text ?? '').trim();
   if (!rawAction && !rawText) return false;
 
+  // El traslado aprobado ("Traslado Aprobado / Gestión Comercial", "traslado_comercial",
+  // "Traslado comercial: <motivo>") no cuenta como seguimiento del asesor que recibe el prospecto.
+  const stripAccents = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  if (
+    /^traslado[\s_]+(aprobado|comercial)\b/.test(stripAccents(rawAction)) ||
+    /^traslado[\s_]+comercial\b/.test(stripAccents(rawText))
+  ) {
+    return false;
+  }
+
   const aNorm = cleanText(rawAction);
   const dNorm = cleanText(rawText);
 

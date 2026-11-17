@@ -24,6 +24,10 @@ export interface CommercialLeadItem {
   isPeriodCreated?: boolean;
   hadPeriodFollowUp?: boolean;
   missingPeriodFollowUp?: boolean;
+  periodFollowUpDate?: string | null;
+  periodFollowUpAction?: string | null;
+  periodFollowUpAuthor?: string | null;
+  periodFollowUpSummary?: string | null;
   createdAt?: any;
   lastMessageAt?: any;
   updatedAt?: any;

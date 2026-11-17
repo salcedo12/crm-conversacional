@@ -8,6 +8,7 @@ import { clientsCol, loadDeal, parseInput, userDisplayName } from '../modules/de
 import { getProjectLegalProfile, SELLERS } from '../modules/deals/legalProfiles';
 import { bogotaNow, buildContractData, dataHash, type ContractData } from '../modules/contracts/contractData';
 import { fechaCorta, fechaEnLetras, formatDMY } from '../modules/deals/civilDate';
+import { formatoPesos, pesosEnLetras } from '../modules/deals/numeroALetras';
 import { renderContract } from '../modules/contracts/contractRenderer';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind } from '../modules/deals/deals.types';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
@@ -38,10 +39,19 @@ async function buyersOf(companyId: string, deal: Deal): Promise<ClientProfile[]>
   return snaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() } as ClientProfile));
 }
 
-/** Cambia solo las fechas de emisión de unos datos ya guardados. */
-function withIssueDate(data: ContractData, issuedAt: { date: string; time: string }): ContractData {
+const pesos = (n: number) => formatoPesos(n).replace('$ ', '$\u00a0');
+
+function extractNumber(val: unknown): number {
+  if (!val) return 0;
+  const clean = String(val).replace(/[^0-9]/g, '');
+  const num = Number(clean);
+  return Number.isFinite(num) ? num : 0;
+}
+
+/** Cambia solo las fechas de emisión de unos datos ya guardados y asegura campos calculados de la promesa. */
+export function withIssueDate(data: ContractData, issuedAt: { date: string; time: string }): ContractData {
   const f = fechaEnLetras(issuedAt.date);
-  return {
+  const updated: ContractData = {
     ...data,
     'fecha.corta': fechaCorta(issuedAt.date),
     'fecha.texto': f.texto,
@@ -50,6 +60,18 @@ function withIssueDate(data: ContractData, issuedAt: { date: string; time: strin
     'fecha.anio': f.anio,
     'fecha.diligenciamiento': `${formatDMY(issuedAt.date)} ${issuedAt.time}`,
   };
+  // Hidratar bono si viene de plan.beneficio o plan.bono (para promesas generadas desde preventas viejas)
+  const bonoNum = extractNumber(updated['plan.bono']) || extractNumber(updated['plan.beneficio']);
+  if (bonoNum > 0) {
+    updated['plan.tieneBono'] = true;
+    updated['plan.bono'] = pesos(bonoNum);
+    updated['plan.bonoLetras'] = pesosEnLetras(bonoNum);
+  } else {
+    updated['plan.tieneBono'] = false;
+    updated['plan.bono'] = '$ 0';
+    updated['plan.bonoLetras'] = '';
+  }
+  return updated;
 }
 
 export function fileName(deal: Deal, kind: DealDocumentKind, version: number): string {
@@ -111,6 +133,11 @@ export async function generateDocument(
   const version = documents.filter((d) => d.kind === data.kind).length + 1;
   const docxStoragePath = `${basePath(data.companyId, deal.id)}/${data.kind}-v${version}.docx`;
   const dataStoragePath = `${basePath(data.companyId, deal.id)}/${data.kind}-v${version}.json`;
+  const pdfStoragePath = docxStoragePath.replace(/\.docx$/, '.pdf');
+
+  // Elimina cualquier PDF previo de esta versión en Storage para evitar servir archivos obsoletos en caché
+  await bucket.file(pdfStoragePath).delete({ ignoreNotFound: true }).catch(() => {});
+
   await Promise.all([
     bucket.file(docxStoragePath).save(docx, { contentType: DOCX_MIME, resumable: false }),
     bucket.file(dataStoragePath).save(JSON.stringify(contractData), { contentType: 'application/json', resumable: false }),
@@ -190,10 +217,28 @@ async function convertToPdf(docx: Buffer, name: string): Promise<Buffer> {
 /** PDF del documento (se convierte la primera vez y queda en Storage junto al Word). */
 export async function documentPdf(deal: Deal, doc: DealDocument): Promise<Buffer> {
   const bucket = storage.bucket();
+  const docxFile = bucket.file(doc.docxStoragePath);
   const pdfFile = bucket.file(doc.docxStoragePath.replace(/\.docx$/, '.pdf'));
   const [cached] = await pdfFile.exists();
-  if (cached) return (await pdfFile.download())[0];
-  const [docx] = await bucket.file(doc.docxStoragePath).download();
+  if (cached) {
+    try {
+      const [[pdfMeta], [docxMeta]] = await Promise.all([pdfFile.getMetadata(), docxFile.getMetadata()]);
+      const pdfTime = new Date(String(pdfMeta.updated || pdfMeta.timeCreated || 0)).getTime();
+      const docxTime = new Date(String(docxMeta.updated || docxMeta.timeCreated || 0)).getTime();
+      if (pdfTime >= docxTime) {
+        return (await pdfFile.download())[0];
+      }
+      logger.info('[DealDocuments] PDF en caché obsoleto respecto al docx; regenerando PDF...', {
+        dealId: deal.id,
+        version: doc.version,
+        pdfTime,
+        docxTime,
+      });
+    } catch (err) {
+      logger.warn('[DealDocuments] Error verificando frescura del PDF cacheado', { error: String(err) });
+    }
+  }
+  const [docx] = await docxFile.download();
   const pdf = await convertToPdf(docx, fileName(deal, doc.kind, doc.version));
   await pdfFile.save(pdf, { contentType: 'application/pdf', resumable: false });
   return pdf;
@@ -229,4 +274,75 @@ export const downloadDealDocument = onCall({ region: 'us-central1', timeoutSecon
 
   const [buffer] = await bucket.file(doc.docxStoragePath).download();
   return { fileName: name, mimeType: DOCX_MIME, base64: buffer.toString('base64') };
+});
+
+const DeleteDocumentSchema = z.object({
+  companyId: z.string().min(1),
+  dealId:    z.string().min(1),
+  kind:      z.enum(['preventa', 'promesa']),
+  version:   z.number().int().min(1),
+});
+
+/**
+ * Permite a un administrador eliminar una versión de preventa o promesa de un negocio.
+ * Borra los archivos asociados en Storage (Word, JSON, PDF) y actualiza el array de documentos.
+ */
+export const deleteDealDocument = onCall({ region: 'us-central1', timeoutSeconds: 60, memory: '512MiB' }, async (request) => {
+  const ctx = requireAuth(request);
+  requireRole(ctx, ADMIN_ROLES);
+  const data = parseInput(DeleteDocumentSchema, request.data, 'eliminar el documento');
+  assertCompany(ctx, data.companyId);
+
+  const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
+  const documents = deal.documents ?? [];
+  const target = documents.find((d) => d.kind === data.kind && d.version === data.version);
+  if (!target) throw new HttpsError('not-found', 'Documento no encontrado.');
+
+  if (target.signatureStatus === 'firmado') {
+    throw new HttpsError('failed-precondition', 'No se puede eliminar un documento que ya fue firmado legalmente.');
+  }
+
+  // Borrar archivos asociados en Storage
+  const bucket = storage.bucket();
+  const pathsToDelete = [
+    target.docxStoragePath,
+    target.dataStoragePath,
+    target.pdfStoragePath,
+    target.signedPdfStoragePath,
+    target.docxStoragePath ? target.docxStoragePath.replace(/\.docx$/, '.pdf') : null,
+  ].filter((p): p is string => Boolean(p));
+
+  await Promise.all(
+    pathsToDelete.map(async (filePath) => {
+      try {
+        const file = bucket.file(filePath);
+        const [exists] = await file.exists();
+        if (exists) await file.delete();
+      } catch (err) {
+        logger.warn('[DealDocuments] Error eliminando archivo de Storage', { filePath, error: String(err) });
+      }
+    }),
+  );
+
+  const remaining = documents.filter((d) => !(d.kind === data.kind && d.version === data.version));
+  const now = Timestamp.now();
+  const actor = await userDisplayName(data.companyId, ctx.uid);
+
+  const batch = db.batch();
+  batch.update(ref, { documents: remaining, updatedAt: now });
+  batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'document_deleted',
+    title: data.kind === 'preventa' ? 'Contrato de preventa eliminado' : 'Promesa de compraventa eliminada',
+    lines: [`Versión ${data.version} eliminada por el administrador`],
+    createdAt: now,
+  }));
+  await batch.commit();
+
+  logger.info('[DealDocuments] Documento eliminado', { dealId: deal.id, kind: data.kind, version: data.version });
+  return { ok: true, remainingCount: remaining.length };
 });

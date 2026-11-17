@@ -20,6 +20,12 @@ const ConnectionSchema = z.object({
   advisorId: z.string().min(1).nullish(),
 });
 
+// Con `pairingPhone` se pide un código de vinculación (8 caracteres) en lugar
+// del QR: WhatsApp → Dispositivos vinculados → Vincular con el número de teléfono.
+const RequestConnectionSchema = ConnectionSchema.extend({
+  pairingPhone: z.string().max(30).nullish(),
+});
+
 const MessageWebhookSchema = z.object({
   eventType: z.literal('message').optional(),
   companyId: z.string().min(1),
@@ -268,11 +274,15 @@ export const requestAdvisorWhatsappQr = onCall(
   { region: 'us-central1', timeoutSeconds: 60 },
   async (request) => {
     const ctx = requireAuth(request);
-    const { companyId, advisorId } = ConnectionSchema.parse(request.data);
+    const { companyId, advisorId, pairingPhone: rawPairingPhone } = RequestConnectionSchema.parse(request.data);
     const resolvedAdvisorId = advisorId ?? ctx.uid;
     assertCompany(ctx, companyId);
     if (!canManageAdvisor(ctx, resolvedAdvisorId)) {
       throw new HttpsError('permission-denied', 'Solo puedes conectar tu propio WhatsApp.');
+    }
+    const pairingPhone = rawPairingPhone ? rawPairingPhone.replace(/\D/g, '') : '';
+    if (rawPairingPhone && (pairingPhone.length < 10 || pairingPhone.length > 15)) {
+      throw new HttpsError('invalid-argument', 'Escribe el numero con indicativo de pais, por ejemplo 57 300 123 4567.');
     }
     await assertAdvisorBelongsToCompany(companyId, resolvedAdvisorId);
 
@@ -294,7 +304,9 @@ export const requestAdvisorWhatsappQr = onCall(
     }
 
     try {
-      const session = await advisorWhatsappBridgeClient.requestQr({ companyId, advisorId: resolvedAdvisorId });
+      const session = pairingPhone
+        ? await advisorWhatsappBridgeClient.requestPairingCode({ companyId, advisorId: resolvedAdvisorId, phone: pairingPhone })
+        : await advisorWhatsappBridgeClient.requestQr({ companyId, advisorId: resolvedAdvisorId });
       await ref.set({
         companyId,
         advisorId: resolvedAdvisorId,
@@ -309,6 +321,11 @@ export const requestAdvisorWhatsappQr = onCall(
       return { ...session, configured: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'No se pudo pedir el QR.';
+      if (pairingPhone) {
+        // Un código que no salió no cambia el estado real de la conexión.
+        logger.warn('[AdvisorWhatsapp] Error pidiendo codigo de vinculacion', { companyId, advisorId: resolvedAdvisorId, error: message });
+        throw new HttpsError('failed-precondition', message.replace(/^Puente WhatsApp HTTP \d+:\s*/, ''));
+      }
       await ref.set({
         companyId,
         advisorId: resolvedAdvisorId,

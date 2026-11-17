@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BadgeDollarSign, Building2, CheckCircle2, Download, FileCheck2, FileText, Filter,
   Handshake, Loader2, MapPin, Paperclip, Phone, RefreshCw, Search, Trash2,
@@ -9,6 +10,7 @@ import { isAdminRole } from '@/features/auth/types';
 import {
   DEAL_STATUS_LABELS,
   deleteDealAttachment,
+  deleteDealDocument,
   downloadDealAttachment,
   downloadDealDocument,
   fetchDealDocumentPdf,
@@ -61,14 +63,14 @@ const LAGUNA_SECTORS = [
   { key: 'MAR CANARIAS', name: 'Mar Canarias', subtitle: 'Laguna Mar', logo: '/project-logos/mar-canarias.png', accent: 'from-cyan-950/80 to-emerald-950/30' },
 ];
 
-const CATEGORY_LABELS: Record<DealAttachmentCategory, string> = {
+export const CATEGORY_LABELS: Record<DealAttachmentCategory, string> = {
   buyer_identification: 'Cédula / documento del comprador',
   benefit_authorization: 'Autorización de bono o descuento',
   referral_evidence: 'Pantallazo o evidencia del referido',
   separation_payment: 'Soporte de pago de separación',
 };
 
-const STATUS_STYLE: Record<DealStatus, string> = {
+export const STATUS_STYLE: Record<DealStatus, string> = {
   borrador: 'border-zinc-700 bg-zinc-800 text-zinc-300',
   plan_listo: 'border-sky-500/30 bg-sky-500/10 text-sky-300',
   preventa_en_firma: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
@@ -78,20 +80,20 @@ const STATUS_STYLE: Record<DealStatus, string> = {
   anulado: 'border-red-500/30 bg-red-500/10 text-red-300',
 };
 
-function money(value = 0) {
+export function money(value = 0) {
   return `$ ${Math.round(value).toLocaleString('es-CO')}`;
 }
 
-function dateTime(value: number | null | undefined) {
+export function dateTime(value: number | null | undefined) {
   return value ? new Date(value).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 }
 
-function projectName(projectId: string | undefined) {
+export function projectName(projectId: string | undefined) {
   if (!projectId) return 'Proyecto sin definir';
   return PROJECT_NAMES[projectId] || projectId.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function supportStats(deal: DealSummary) {
+export function supportStats(deal: DealSummary) {
   const attachments = deal.attachments ?? [];
   const buyerDocs = new Set(attachments.filter((a) => a.category === 'buyer_identification').map((a) => a.buyerClientId)).size;
   const paymentProofs = attachments.filter((a) => a.category === 'separation_payment').length;
@@ -104,6 +106,7 @@ function supportStats(deal: DealSummary) {
 }
 
 export function DealsPage() {
+  const navigate = useNavigate();
   const { companyId, role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
   const [deals, setDeals] = useState<DealSummary[]>([]);
@@ -323,7 +326,7 @@ export function DealsPage() {
             {filtered.map((deal) => {
               const stats = supportStats(deal);
               return (
-                <button key={deal.id} onClick={() => setSelectedId(deal.id)} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-emerald-500/30 hover:bg-zinc-900">
+                <button key={deal.id} onClick={() => navigate(`/dashboard/deals/${deal.id}`)} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-emerald-500/30 hover:bg-zinc-900">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-zinc-100">{deal.buyerNames?.join(', ') || deal.leadName || 'Sin compradores'}</p>
@@ -335,7 +338,7 @@ export function DealsPage() {
                     <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3">
                       <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-emerald-400"><MapPin size={11} /> Proyecto y lote</p>
                       <p className="mt-1 text-base font-extrabold text-zinc-100">{projectName(deal.lot?.projectId)}</p>
-                      <p className="mt-0.5 text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Sin lote seleccionado'}</p>
+                      <p className="mt-0.5 text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</p>
                       {deal.lot && <p className="mt-1 text-[10px] text-zinc-500">{deal.lot.areaM2.toLocaleString('es-CO', { maximumFractionDigits: 2 })} m²{deal.lot.corner ? ' · Esquinero' : ''}</p>}
                     </div>
                     <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-zinc-400"><BadgeDollarSign size={14} className="mb-2 text-amber-400" /><p className="text-[9px] font-bold uppercase tracking-wide text-zinc-500">Valor</p><p className="mt-1 text-sm font-bold text-zinc-200">{deal.plan ? money(deal.plan.landValue) : 'Sin plan'}</p></div>
@@ -554,6 +557,23 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
     finally { setDownloadingDocument(null); }
   };
 
+  const handleDeleteDocument = async (kind: DealDocumentKind, version: number) => {
+    const label = `${kind === 'preventa' ? 'el Contrato de preventa' : 'la Promesa de compraventa'} v${version}`;
+    if (!window.confirm(`¿Seguro que deseas eliminar ${label}? Esta acción no se puede deshacer.`)) return;
+    const key = `del-${kind}-${version}`;
+    setDownloadingDocument(key); setError(null);
+    try {
+      await deleteDealDocument(companyId, deal.id, kind, version);
+      const remainingDocs = (deal.documents ?? []).filter((d) => !(d.kind === kind && d.version === version));
+      onChanged({ ...deal, documents: remainingDocs, updatedAt: Date.now() });
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo eliminar el documento.');
+    } finally {
+      setDownloadingDocument(null);
+    }
+  };
+
   return (
     <div className="deal-touch fixed inset-0 z-50 flex items-stretch justify-center bg-black/75 sm:items-center sm:p-3" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       {preview && <DealDocumentPreview title={preview.title} pdf={preview.pdf} onDownloadWord={isAdmin ? () => downloadDealDocument(companyId, deal.id, preview.kind, preview.version) : undefined} onClose={() => setPreview(null)} />}
@@ -561,7 +581,7 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
         <header className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-zinc-800 bg-zinc-950/95 px-4 pb-3 pt-[max(0.75rem,var(--safe-top))] backdrop-blur sm:p-4">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">{projectName(deal.lot?.projectId)}</p>
-            <h2 className="mt-0.5 text-lg font-extrabold text-zinc-100 sm:text-xl">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Sin lote seleccionado'}</h2>
+            <h2 className="mt-0.5 text-lg font-extrabold text-zinc-100 sm:text-xl">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</h2>
             <p className="mt-1 truncate text-xs text-zinc-500">{deal.buyerNames?.join(', ') || deal.leadName} · {deal.advisorName}</p>
           </div>
           <button onClick={onClose} aria-label="Cerrar" className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 sm:mr-0 sm:h-9 sm:w-9"><X size={18} /></button>
@@ -628,7 +648,7 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-zinc-100">{document.kind === 'preventa' ? 'Contrato de preventa' : 'Promesa de compraventa'} · v{document.version}</p>
                       <p className="mt-1 text-[10px] text-zinc-500">Generado: {dateTime(document.generatedAt)} · Estado: {document.signatureStatus || 'generado'}</p>
-                      <p className="mt-1 truncate text-[10px] font-medium text-emerald-400">{projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}</p>
+                      <p className="mt-1 truncate text-[10px] font-medium text-emerald-400">{projectName(deal.lot?.projectId)} · {deal.lot?.sector} · Lote {deal.lot?.lotNumber}{deal.lot?.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}</p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1.5 sm:justify-end">
                       {document.signatureStatus === 'firmado' && document.signedPdfStoragePath && (
@@ -648,6 +668,17 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
                           className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
                         >
                           {downloadingDocument === `${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Word
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteDocument(document.kind, document.version)}
+                          disabled={downloadingDocument === `del-${document.kind}-${document.version}`}
+                          title="Eliminar este contrato"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-400 hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+                        >
+                          {downloadingDocument === `del-${document.kind}-${document.version}` ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Borrar
                         </button>
                       )}
                     </div>
@@ -679,6 +710,6 @@ function DealDetailModal({ deal, companyId, currentUserId, isAdmin, onClose, onC
   );
 }
 
-function Checklist({ ok, text }: { ok: boolean; text: string }) {
+export function Checklist({ ok, text }: { ok: boolean; text: string }) {
   return <div className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-xs ${ok ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : 'border-amber-500/20 bg-amber-500/5 text-amber-300'}`}>{ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />} {text}</div>;
 }

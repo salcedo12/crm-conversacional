@@ -129,6 +129,14 @@ export type DealDocumentKind = 'preventa' | 'promesa';
 
 export type SignatureStatus = 'generado' | 'en_firma' | 'firmado_parcial' | 'firmado' | 'rechazado' | 'vencido' | 'anulado';
 
+export interface DocumentLot {
+  projectId?: string;
+  sector: string;
+  lotNumber: string;
+  lotCode?: string;
+  inventoryLotId?: string;
+}
+
 export interface DealDocument {
   kind:               DealDocumentKind;
   version:            number;
@@ -148,6 +156,8 @@ export interface DealDocument {
   lastStatusCheckAt?: Timestamp;
   /** Envío a DocuBlock: plantilla, directorio y firmantes con su avance. */
   signature?:         DealSignature;
+  lot?:               DocumentLot | null;
+  superseded?:        { at: Timestamp; reason: string } | null;
 }
 
 export interface DealSignatureSigner {
@@ -198,9 +208,22 @@ export interface DealAttachment {
   paymentAmount?: number;
   paymentDate?:   string;
   note?:          string;
+  lot?:           DocumentLot | null;
   uploadedAt:     Timestamp;
   uploadedBy:     string;
   uploadedByName: string;
+}
+
+export interface DealPlanApproval {
+  id:              string;
+  token?:          string;
+  status:          'pending' | 'approved' | 'rejected';
+  approverPhone:   string;
+  approverName?:   string;
+  requestedAt:     Timestamp;
+  resolvedAt?:     Timestamp | null;
+  resolvedBy?:     string | null;
+  responseNotes?:  string | null;
 }
 
 export interface Deal {
@@ -213,9 +236,11 @@ export interface Deal {
   buyerNames?: string[];   // denormalizado para listados
   lot:         DealLot | null;
   plan:        PaymentPlan | null;
+  planApproval?: DealPlanApproval | null;
   documents:   DealDocument[];
   attachments?: DealAttachment[];
   cancelReason?: string;
+  lotsBackfilled?: boolean;
   /** true mientras algún documento esté en firma (lo consulta la tarea periódica). */
   signaturePending?: boolean;
   createdAt:   Timestamp;

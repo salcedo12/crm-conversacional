@@ -98,6 +98,25 @@ export function formatDateBogotaTime(date: Date): string {
 }
 
 /**
+ * Bitácora o nota que deja el sistema al aprobar o registrar un traslado de prospecto
+ * ("Traslado Aprobado", "traslado_comercial", "Traslado comercial: <motivo>", "Reasignación").
+ * No representa una llamada, contacto ni gestión comercial del nuevo asesor.
+ */
+export function isTransferBitacora(action?: string | null, text?: string | null): boolean {
+  const clean = (s: unknown) =>
+    String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const a = clean(action);
+  const t = clean(text);
+  return (
+    a.includes('traslado') ||
+    a.includes('reasignacion') ||
+    t.includes('traslado') ||
+    t.includes('reasignacion') ||
+    t.includes('solicitud de traslado')
+  );
+}
+
+/**
  * Determina si una bitácora, ficha técnica o registro corresponde a una gestión
  * comercial REAL realizada por un asesor (llamada, WhatsApp, ficha técnica, cita, etc.)
  * y descarta eventos de creación, registros API, actualizaciones automáticas de sistema y bots.
@@ -107,6 +126,11 @@ export function isRealCommercialFollowUp(action?: string | null, text?: string |
   const rawText = String(text ?? '').trim();
 
   if (!rawAction && !rawText) return false;
+
+  // Un traslado aprobado o solicitud de traslado es un evento administrativo, no una gestión del asesor
+  if (isTransferBitacora(rawAction, rawText)) {
+    return false;
+  }
 
   const aNorm = normalizeStr(rawAction);
   const dNorm = normalizeStr(rawText);
@@ -436,10 +460,9 @@ export function isConfirmedRealizedVisit(
 ): { isConfirmed: boolean; visitType: 'terreno' | 'sala'; cleanNote: string } {
   const act = (actionRaw || '').trim();
   const desc = (descRaw || '').trim();
-  const { mainNote, nextStep } = extractMainGestionNote(desc);
+  const { mainNote, nextStep: _nextStep } = extractMainGestionNote(desc);
 
   const actLower = act.toLowerCase();
-  const descLower = desc.toLowerCase();
   const mainLower = mainNote.toLowerCase();
 
   // 1. Excluir si la fecha es futura (no se ha realizado aún)

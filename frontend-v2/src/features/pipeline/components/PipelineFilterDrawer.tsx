@@ -49,6 +49,8 @@ export function PipelineFilterDrawer({
       sourceFilter: 'all',
       followUpStatus: 'all',
       dateRange: 'all',
+      startDate: null,
+      endDate: null,
       limitCount: 500,
     };
     setLocalFilters(defaultFilters);
@@ -59,9 +61,15 @@ export function PipelineFilterDrawer({
   // Presets rápidos
   const applyPreset = (preset: 'recent' | 'pauta' | 'smarthome' | 'overdue') => {
     if (preset === 'recent') {
+      const now = new Date();
+      const s = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      s.setHours(0, 0, 0, 0);
+      const e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
       setLocalFilters({
         ...localFilters,
         dateRange: 'last_30_days',
+        startDate: s,
+        endDate: e,
         sourceFilter: 'all',
         followUpStatus: 'all',
       });
@@ -70,12 +78,16 @@ export function PipelineFilterDrawer({
         ...localFilters,
         sourceFilter: 'meta_ads',
         dateRange: 'all',
+        startDate: null,
+        endDate: null,
       });
     } else if (preset === 'smarthome') {
       setLocalFilters({
         ...localFilters,
         sourceFilter: 'smarthome',
         dateRange: 'all',
+        startDate: null,
+        endDate: null,
       });
     } else if (preset === 'overdue') {
       setLocalFilters({
@@ -334,7 +346,30 @@ export function PipelineFilterDrawer({
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => setLocalFilters({ ...localFilters, dateRange: p.id as any })}
+                  onClick={() => {
+                    const now = new Date();
+                    let s: Date | null = null;
+                    let e: Date | null = null;
+                    if (p.id === 'last_30_days') {
+                      s = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                      s.setHours(0, 0, 0, 0);
+                      e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                    } else if (p.id === 'last_60_days') {
+                      s = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+                      s.setHours(0, 0, 0, 0);
+                      e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                    } else if (p.id === 'year_2026') {
+                      s = new Date(2026, 0, 1, 0, 0, 0, 0);
+                      e = new Date(2026, 11, 31, 23, 59, 59, 999);
+                    } else if (p.id === 'year_2025') {
+                      s = new Date(2025, 0, 1, 0, 0, 0, 0);
+                      e = new Date(2025, 11, 31, 23, 59, 59, 999);
+                    } else if (p.id === 'year_2024') {
+                      s = new Date(2024, 0, 1, 0, 0, 0, 0);
+                      e = new Date(2024, 11, 31, 23, 59, 59, 999);
+                    }
+                    setLocalFilters({ ...localFilters, dateRange: p.id as any, startDate: s, endDate: e });
+                  }}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer border ${
                     (localFilters.dateRange || 'all') === p.id
                       ? 'bg-cyan-600/20 text-cyan-300 border-cyan-500/40 font-bold'

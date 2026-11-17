@@ -28,6 +28,7 @@ import {
 import { moveLotToTramite } from '../inventory/lotReservation.service';
 import { clientsCol } from './dealAccess';
 import { dealActivityDoc, dealActivityRef } from './dealAudit';
+import { isCurrentDocument, latestCurrentDocument, lotLabel } from './dealDocumentLot';
 import { signatureDealStatus, isPendingSignature, signatureDocOf } from './dealSignature.logic';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind, DealSignature, DealSignatureSigner } from './deals.types';
 
@@ -98,7 +99,6 @@ export async function signatureOptions() {
   };
 }
 
-const latestOf = (deal: Deal, kind: DealDocumentKind) => [...(deal.documents ?? [])].reverse().find((d) => d.kind === kind);
 
 /** Nombre del documento en DocuBlock: "PREVENTA - SAN ANTONIO 19 - PEREZ GOMEZ". */
 function docublockName(deal: Deal, kind: DealDocumentKind, buyers: ClientProfile[]): string {
@@ -212,6 +212,16 @@ export async function sendToSignature(opts: {
     if (!template) throw new HttpsError('invalid-argument', `La plantilla escogida para la ${kind} no existe en DocuBlock.`);
     const directory = directories.find((d) => d._id === choice.directoryId);
     if (!directory) throw new HttpsError('invalid-argument', `El directorio escogido para la ${kind} no existe en DocuBlock.`);
+    // Solo documentos del lote actual: uno de un lote anterior no se puede firmar.
+    if (choice.version) {
+      const chosenDoc = (deal.documents ?? []).find((d) => d.kind === kind && d.version === choice.version);
+      if (chosenDoc && !isCurrentDocument(chosenDoc, deal)) {
+        throw new HttpsError('failed-precondition', `La ${kind} v${choice.version} es de otro lote (${chosenDoc.lot ? lotLabel(chosenDoc.lot) : 'lote anterior'}). Genera una nueva para ${lotLabel(deal.lot)}.`);
+      }
+    }
+    if (kind === 'promesa' && !choice.version && !latestCurrentDocument(deal, 'promesa') && !latestCurrentDocument(deal, 'preventa')) {
+      throw new HttpsError('failed-precondition', `No hay preventa vigente para ${lotLabel(deal.lot)}: genérala primero.`);
+    }
     const built = await buildSigners(input.companyId, kind, input.signers, template, input.requirePhoto);
     plans.push({ kind, template, directory, ...built });
   }
@@ -228,7 +238,7 @@ export async function sendToSignature(opts: {
       const chosen = input.documents.find((d) => d.kind === plan.kind)?.version;
       let doc = chosen
         ? (deal.documents ?? []).find((d) => d.kind === plan.kind && d.version === chosen)
-        : latestOf(deal, plan.kind) ?? await opts.ensureDocument(plan.kind);
+        : latestCurrentDocument(deal, plan.kind) ?? await opts.ensureDocument(plan.kind);
       if (!doc) throw new HttpsError('not-found', `No existe la ${plan.kind} v${chosen}.`);
       const inSigning = signatureDocOf(deal, plan.kind);
       if (inSigning && inSigning.version !== doc.version && inSigning.docublockDocumentId && isPendingSignature(inSigning.signatureStatus)) {

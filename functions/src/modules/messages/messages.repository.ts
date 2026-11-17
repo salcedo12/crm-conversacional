@@ -148,6 +148,25 @@ export const messagesRepository = {
   },
 
   /**
+   * Reserva el mensaje entrante para procesarlo UNA sola vez. Firestore puede entregar
+   * el mismo evento dos veces (p. ej. durante un despliegue, a la versión vieja y a la
+   * nueva) y antes las dos respondían. Devuelve false si ya lo tomó otra ejecución en los
+   * últimos 10 minutos o si la IA ya lo respondió.
+   */
+  async claimInbound(companyId: string, leadId: string, messageId: string): Promise<boolean> {
+    const ref = col(companyId, leadId).doc(messageId);
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.data() as (Message & { triggerClaimedAt?: Timestamp }) | undefined;
+      if (!data || data.aiProcessed === true) return false;
+      const claimedMs = data.triggerClaimedAt?.toMillis?.() ?? 0;
+      if (claimedMs && Date.now() - claimedMs < 10 * 60 * 1000) return false;
+      tx.update(ref, { triggerClaimedAt: Timestamp.now() });
+      return true;
+    });
+  },
+
+  /**
    * Marca el mensaje como ya procesado por la IA (idempotencia del trigger).
    */
   async markAiProcessed(

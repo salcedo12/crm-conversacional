@@ -49,9 +49,27 @@ export function isLeadInAiRollout(config: Pick<AiConfig, 'rollout'>, lead: Rollo
 /**
  * Reinicia el reloj de primer contacto cuando un lead pasa de la IA a un asesor. Sin
  * esto, el lead se reasignaría de inmediato porque el reloj siguió corriendo.
+ *
+ * NO toca `advisorAssignedAt`: esa fecha marca desde cuándo el asesor tiene el lead y
+ * el muro de privacidad del chat oculta lo anterior a ella. Moverla al pausar la IA
+ * le escondía al asesor toda la conversación que tuvo la IA con el cliente.
  */
 export function humanHandoffPatch(lead: Pick<Lead, 'pendingFirstContact'>): Partial<Lead> {
-  return lead.pendingFirstContact ? { advisorAssignedAt: Timestamp.now() } : {};
+  return lead.pendingFirstContact ? { firstContactClockAt: Timestamp.now() } : {};
+}
+
+/**
+ * Inicio del reloj de primer contacto: el más reciente entre la asignación y el último
+ * reinicio (traspaso desde la IA o espera sin asesor alterno).
+ */
+export function firstContactClockMs(
+  lead: Pick<Lead, 'advisorAssignedAt' | 'firstContactClockAt'>
+): number | undefined {
+  const assigned = lead.advisorAssignedAt?.toMillis?.();
+  const clock = lead.firstContactClockAt?.toMillis?.();
+  if (assigned === undefined) return clock;
+  if (clock === undefined) return assigned;
+  return Math.max(assigned, clock);
 }
 
 /**
@@ -134,6 +152,22 @@ export async function isExistingBuyer(
       companyId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return false;
+  }
+}
+
+/**
+ * ¿Es uno de los teléfonos de prueba del piloto de la IA (rollout.testPhones)? Esos
+ * números pueden ser del equipo (p. ej. el celular personal de un usuario del CRM) y
+ * aun así deben entrar como lead para probar la IA.
+ */
+export async function isAiTestPhone(companyId: string, phone: string): Promise<boolean> {
+  const key = phoneKey(phone);
+  if (!key) return false;
+  try {
+    const config = await getAiConfig(companyId);
+    return (config.rollout?.testPhones ?? []).some((p) => phoneKey(p) === key);
+  } catch {
     return false;
   }
 }

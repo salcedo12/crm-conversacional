@@ -12,6 +12,9 @@ export interface AdvisorWhatsappBridgeSession {
   status: AdvisorWhatsappBridgeStatus;
   qrCode?: string;
   qrCodeDataUrl?: string;
+  /** Código de 8 caracteres para "Vincular con el número de teléfono". */
+  pairingCode?: string;
+  pairingPhone?: string;
   phone?: string;
   displayName?: string;
   lastSeenAt?: string;
@@ -62,6 +65,10 @@ export const advisorWhatsappBridgeClient = {
 
   async requestQr(input: BridgeRequest): Promise<AdvisorWhatsappBridgeSession> {
     return requestBridge<AdvisorWhatsappBridgeSession>('/advisor-whatsapp/session/qr', input);
+  },
+
+  async requestPairingCode(input: BridgeRequest & { phone: string }): Promise<AdvisorWhatsappBridgeSession> {
+    return requestBridge<AdvisorWhatsappBridgeSession>('/advisor-whatsapp/session/pairing-code', input);
   },
 
   async status(input: BridgeRequest): Promise<AdvisorWhatsappBridgeSession> {

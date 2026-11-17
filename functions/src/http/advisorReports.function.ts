@@ -13,6 +13,7 @@ import {
 } from '../modules/leads/leadStats.service';
 import type { Lead, LeadStatus } from '../modules/leads/leads.types';
 import { countsAs317LineLead } from '../modules/leads/leadClassification';
+import { firstContactClockMs } from '../modules/ai/aiRollout';
 import type { Appointment } from '../modules/appointments/appointments.types';
 
 const LEAD_STATUSES: LeadStatus[] = ['new', 'active', 'qualified', 'scheduled', 'lost', 'closed'];
@@ -270,7 +271,7 @@ export const getAdvisorReports = onCall(
 
         if (neverContacted) {
           reason = 'no_first_contact';
-          const startMs = lead.advisorAssignedAt?.toMillis?.() ?? createdMs ?? now;
+          const startMs = firstContactClockMs(lead) ?? createdMs ?? now;
           severity = now - startMs;
           waitingMin = Math.max(0, Math.round(severity / 60_000));
         } else if (s.waitingReply) {

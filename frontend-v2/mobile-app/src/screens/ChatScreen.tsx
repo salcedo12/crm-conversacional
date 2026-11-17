@@ -791,10 +791,20 @@ export function ChatScreen({ route, navigation }: Props) {
   }, []);
 
   // Muro de Privacidad post-reasignación (advisorAssignedAt) para asesores no administradores
+  // El muro protege la gestión de OTRO asesor. Si antes del corte solo hubo cliente, IA
+  // y avisos del sistema, no se oculta nada: el asesor debe ver lo que la IA habló con
+  // el cliente para saber en qué va la conversación.
   const assignedCutoffMs = useMemo(() => {
     if (!liveLead || isAdmin || !liveLead.advisorAssignedAt) return 0;
-    return toMillisSafe(liveLead.advisorAssignedAt);
-  }, [liveLead, isAdmin]);
+    const cutoff = toMillisSafe(liveLead.advisorAssignedAt);
+    if (!cutoff) return 0;
+    const priorHumanAdvisor = messages.some((msg) => {
+      if (msg.senderType !== 'advisor') return false;
+      const ms = toMillisSafe(msg.createdAt) || toMillisSafe(msg.timestamp);
+      return ms > 0 && ms < cutoff;
+    });
+    return priorHumanAdvisor ? cutoff : 0;
+  }, [liveLead, isAdmin, messages]);
 
   const { priorMessages, recentMessages } = useMemo(() => {
     if (!assignedCutoffMs) {

@@ -2,7 +2,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { db } from '../lib/admin';
 import { getAiConfig } from '../modules/ai/aiConfig.repository';
-import { isLeadInAiRollout } from '../modules/ai/aiRollout';
+import { firstContactClockMs, isLeadInAiRollout } from '../modules/ai/aiRollout';
 import { appointmentsRepository } from '../modules/appointments/appointments.repository';
 import { transferFutureAppointmentsToAdvisor } from '../modules/appointments/appointments.service';
 import { getSchedulingConfigCached } from '../modules/appointments/schedulingConfig';
@@ -97,7 +97,10 @@ export const processFirstContactReassignments = onSchedule(
           continue;
         }
 
-        if (now.toMillis() - lead.advisorAssignedAt.toMillis() < timeoutMs) continue;
+        // El reloj puede haberse reiniciado después de la asignación (firstContactClockAt);
+        // la query solo filtra por advisorAssignedAt, que nunca es posterior al reloj.
+        const clockMs = firstContactClockMs(lead) ?? lead.advisorAssignedAt.toMillis();
+        if (now.toMillis() - clockMs < timeoutMs) continue;
 
         const futureAppointment = await hasFutureAppointment(companyId, lead.id);
         const newAdvisorId = await pickAdvisorForFirstContactReassignment(companyId, lead.id, lead.assignedTo, {
@@ -106,7 +109,9 @@ export const processFirstContactReassignments = onSchedule(
 
         if (!newAdvisorId) {
           // Reinicia la espera para no consultar y registrar el mismo caso cada minuto.
-          await leadDoc.ref.update({ advisorAssignedAt: now });
+          // Sin cambiar advisorAssignedAt: el asesor es el mismo y el muro de privacidad
+          // del chat le ocultaría su propia conversación.
+          await leadDoc.ref.update({ firstContactClockAt: now });
           logger.warn('[FirstContactReassignment] Sin asesor alterno disponible', {
             companyId,
             leadId: lead.id,
@@ -126,7 +131,7 @@ export const processFirstContactReassignments = onSchedule(
             || current.advisorFirstContactAt
             || current.lastAdvisorMessageAt
             || current.assignedTo !== lead.assignedTo
-            || current.advisorAssignedAt?.toMillis() !== lead.advisorAssignedAt?.toMillis()
+            || firstContactClockMs(current) !== clockMs
           ) {
             return false;
           }
@@ -134,6 +139,7 @@ export const processFirstContactReassignments = onSchedule(
           transaction.update(leadDoc.ref, {
             assignedTo: newAdvisorId,
             advisorAssignedAt: now,
+            firstContactClockAt: FieldValue.delete(),
             lastAutoReassignedAt: now,
             advisorReassignmentCount: FieldValue.increment(1),
             updatedAt: now,
