@@ -149,11 +149,14 @@ function convertPreventa(xml) {
   // Iniciar el bloque económico en página limpia para que todas las tablas quepan unidas
   xml = addPageBreakBefore(xml, 'Realizadas las precisiones anteriores');
 
-  // Compactar párrafo entre Table 10 y Table 11
-  xml = xml.replace(/(<\/w:tbl>)(<w:p\b[^>]*><w:pPr>[\s\S]*?<\/w:pPr><\/w:p>)(<w:tbl[\s\S]*?CUOTAS)/, (_m, tbl1, _p, tbl2) => {
-    const compactP = '<w:p><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="40" w:line="80" w:lineRule="exact"/><w:rPr><w:sz w:val="8"/></w:rPr></w:pPr></w:p>';
-    return `${tbl1}${compactP}${tbl2}`;
-  });
+  // Compactar únicamente el párrafo vacío entre Table 10 (CIERRE DEL NEGOCIO) y Table 11 (CUOTAS).
+  xml = xml.replace(
+    /(\{plan\.numeroCuotas\}(?:(?!<\/w:tbl>)[\s\S])*?<\/w:tbl>)(<w:p\b(?:(?!<\/w:p>)[\s\S])*?<\/w:p>)(<w:tbl\b(?:(?!<\/w:tbl>)[\s\S])*?CUOTAS)/,
+    (_m, tbl1, _p, tbl2) => {
+      const compactP = '<w:p><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="40" w:line="80" w:lineRule="exact"/><w:rPr><w:sz w:val="8"/></w:rPr></w:pPr></w:p>';
+      return `${tbl1}${compactP}${tbl2}`;
+    },
+  );
 
   // Evitar títulos huérfanos y cortes indebidos
   xml = addKeepNextToParagraphs(xml, '1.4 CONTRATO DE PREVENTA DE BIEN INMUEBLE SOBRE PLANOS');

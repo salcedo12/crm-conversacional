@@ -119,6 +119,7 @@ test('preventa de Laguna Mar: dos compradores, ZOMAC y plan completo', () => {
   expect(text).toContain('Se obsequian planos arquitectónicos tipo 2');
   expect(text).toContain('TOTAL ORDINARIAS');
   expect(text).toContain('Convenio Banco Davivienda 1171362');
+  expect(text).toContain('Mayor(es) de edad, identificado(s) como anteriormente se detalla');
 });
 
 test('preventa oculta las filas vacías de cada grupo de cuotas', () => {
@@ -259,6 +260,7 @@ test('preventa de Sobre Montañas: común y proindiviso, ZOMAC NIT 901110049-0 y
   expect(text).toContain('TERRENO No. 16 – ETAPA/SECTOR ALDEA CONDOR SOBRE MONTAÑAS');
   expect(text).toContain('Convenio Banco Davivienda 1171362');
   expect(text).toContain('TOTAL ORDINARIAS');
+  expect(text).toContain('Mayor(es) de edad, identificado(s) como anteriormente se detalla');
   expect(text).not.toContain('901110049-1');
   expect(text).not.toContain('propiedad horizontal');
   expect(text).not.toContain('BATMAN');
