@@ -7,7 +7,7 @@ import { db } from '@/config/firebase';
 import { normalizeProject } from '@/features/database/pages/DatabasePage';
 import { derivePipelineStage } from '@/features/pipeline/services/pipeline.service';
 import { formatFriendlyDate } from '@/shared/utils/date';
-import { isRealCommercialFollowUp, isAdvisorMatch, MERAKI_OFFICIAL_ADVISORS } from './commercialReports.service';
+import { isRealCommercialFollowUp, isTransferBitacora, isAdvisorMatch, MERAKI_OFFICIAL_ADVISORS } from './commercialReports.service';
 import type {
   CommercialLeadItem,
   CommercialKPIs,
@@ -138,8 +138,13 @@ export function mapDocToCommercialLeadItem(
     }
   }
   const hasBitacoras = rawBitacoras.length > 0;
-  const hasExplicitFollowUp = !!data.lastFollowUpAt || !!data.lastFollowUpAction || !!data.smartHomeLastBitacoraAt;
-  const hasFicha = hasBitacoras || hasExplicitFollowUp || !!data.metadata?.hasFicha;
+  // Las auditorías del administrador (cambio de asesor/fuente) no cuentan como ficha técnica:
+  // un lead recién reasignado debe seguir apareciendo como pendiente de primera ficha.
+  const hasAdvisorBitacoras = rawBitacoras.some((b) => !isTransferBitacora(b.action, b.description));
+  const auditOnlyAction = ['cambio_asesor', 'cambio_fuente'].includes(String(data.lastFollowUpAction || ''));
+  const hasExplicitFollowUp =
+    !!data.lastFollowUpAt || (!!data.lastFollowUpAction && !auditOnlyAction) || !!data.smartHomeLastBitacoraAt;
+  const hasFicha = hasAdvisorBitacoras || hasExplicitFollowUp || !!data.metadata?.hasFicha;
 
   // Próximo paso agendado
   const nextDateStr: string | null = data.nextFollowUpDate || (data.metadata?.nextFollowUpDate as string) || null;

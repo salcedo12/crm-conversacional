@@ -100,14 +100,12 @@ export async function recordLeadAudit({
 
   const updatedBitacoras = [bitacoraEntry, ...existingBitacoras];
 
-  // 2. Guardar en el documento del lead (para ficha y resumen en tiempo real)
+  // 2. Guardar en el documento del lead (para ficha y resumen en tiempo real).
+  // No se marca hasFicha ni lastFollowUp*: una auditoría del administrador no es un
+  // seguimiento del asesor, y el lead reasignado debe aparecer como "Falta seguimiento".
   await updateDoc(leadRef, {
     'metadata.smarthomeBitacoras': updatedBitacoras,
     bitacoras: updatedBitacoras,
-    lastFollowUpAction: isAdvisor ? 'cambio_asesor' : 'cambio_fuente',
-    lastFollowUpDate: dateFormatted,
-    lastFollowUpAuthor: cleanAdmin,
-    hasFicha: true,
     updatedAt: serverTimestamp(),
   });
 

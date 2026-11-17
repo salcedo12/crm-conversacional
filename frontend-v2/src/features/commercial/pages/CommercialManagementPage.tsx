@@ -234,7 +234,10 @@ export function CommercialManagementPage() {
         const qDigits = q.replace(/\D/g, '');
         const localMatches = leads.filter((l) => {
           const lDigits = l.phone.replace(/\D/g, '');
-          const matchPhone = l.phone.includes(q) || (qDigits.length >= 3 && lDigits.includes(qDigits));
+          const matchPhone =
+            l.phone.includes(q) ||
+            (qDigits.length >= 3 && lDigits.includes(qDigits)) ||
+            (qDigits.length >= 10 && lDigits.endsWith(qDigits.slice(-10)));
           const matchName = l.name.toLowerCase().includes(q.toLowerCase());
           return matchPhone || matchName;
         });
@@ -329,7 +332,11 @@ export function CommercialManagementPage() {
         const qDigits = q.replace(/\D/g, '');
         const leadPhoneDigits = lead.phone.replace(/\D/g, '');
         const matchName = lead.name.toLowerCase().includes(q);
-        const matchPhone = lead.phone.includes(q) || (qDigits.length >= 3 && leadPhoneDigits.includes(qDigits));
+        // Por los últimos 10 dígitos también: "+1 312…" y "+57 312…" se guardan distinto
+        const matchPhone =
+          lead.phone.includes(q) ||
+          (qDigits.length >= 3 && leadPhoneDigits.includes(qDigits)) ||
+          (qDigits.length >= 10 && leadPhoneDigits.endsWith(qDigits.slice(-10)));
         const matchProject = lead.project?.toLowerCase().includes(q);
         const matchSummary = (lead.periodFollowUpSummary || lead.lastFollowUpSummary)?.toLowerCase().includes(q);
         if (!matchName && !matchPhone && !matchProject && !matchSummary) return false;

@@ -47,6 +47,8 @@ export function useLeadsPage(leads: Lead[]) {
           l.name?.toLowerCase().includes(q) ||
           l.phone.includes(q) ||
           (qDigits.length >= 3 && l.phone.replace(/\D/g, '').includes(qDigits)) ||
+          // "+1 312…" escrito vs "+57 312…" guardado: comparar los últimos 10 dígitos
+          (qDigits.length >= 10 && l.phone.replace(/\D/g, '').endsWith(qDigits.slice(-10))) ||
           l.lastMessageText?.toLowerCase().includes(q) ||
           l.tags?.some((t) => t.toLowerCase().includes(q))
       );

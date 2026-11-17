@@ -263,7 +263,14 @@ export function isTransferBitacora(action?: string | null, text?: string | null)
     a.includes('reasignacion') ||
     t.includes('traslado') ||
     t.includes('reasignacion') ||
-    t.includes('solicitud de traslado')
+    t.includes('solicitud de traslado') ||
+    // Auditorías de administrador (cambio de asesor o de fuente): no son gestión del asesor
+    a.includes('cambio de asesor') ||
+    a.includes('cambio_asesor') ||
+    a.includes('actualizacion de fuente') ||
+    a.includes('cambio_fuente') ||
+    t.includes('asesor reasignado por el administrador') ||
+    t.includes('actualizado por el administrador')
   );
 }
 

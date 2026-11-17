@@ -313,10 +313,9 @@ export function CommercialLeadsTable({
                                 advisorName: newAdvName,
                                 bitacoras: auditRes.updatedBitacoras as any,
                                 bitacorasCount: auditRes.updatedBitacoras.length,
-                                hasFicha: true,
-                                lastFollowUpAction: 'cambio_asesor',
-                                lastFollowUpDate: auditRes.bitacoraEntry.lastDate,
-                                lastFollowUpAuthor: effectiveAuthor,
+                                // Reasignado = pendiente de seguimiento del nuevo asesor
+                                hadPeriodFollowUp: false,
+                                missingPeriodFollowUp: lead.status !== 'lost' && lead.status !== 'closed',
                               });
                             }
                           } catch (err) {

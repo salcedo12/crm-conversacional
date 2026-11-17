@@ -484,10 +484,19 @@ export function DatabasePage() {
 
         if (cleanDigits.length >= 7) {
           const tail = cleanDigits.slice(-10);
+          // Todas las formas en que puede estar guardado el teléfono: con o sin +, con indicativo
+          // propio (+1, +34…) o asumido Colombia (+57), y los últimos 10 dígitos.
+          const variants = Array.from(new Set([
+            term,
+            cleanDigits,
+            `+${cleanDigits}`,
+            tail,
+            `+57${tail}`,
+            `57${tail}`,
+          ].filter(Boolean)));
           queries.push(getDocs(query(leadsCol, where('phoneTail', '==', tail), limit(15))));
-          queries.push(getDocs(query(leadsCol, where('phone', '==', `+57${tail}`), limit(15))));
-          queries.push(getDocs(query(leadsCol, where('phone', '==', tail), limit(15))));
-          queries.push(getDocs(query(leadsCol, where('normalizedPhone', '==', `+57${tail}`), limit(15))));
+          queries.push(getDocs(query(leadsCol, where('phone', 'in', variants), limit(15))));
+          queries.push(getDocs(query(leadsCol, where('normalizedPhone', 'in', variants), limit(15))));
         } else if (cleanDigits.length >= 3) {
           queries.push(getDocs(query(leadsCol, where('phone', '==', term), limit(15))));
         }
@@ -611,7 +620,12 @@ export function DatabasePage() {
         const qDigits = queryTerm.replace(/\D/g, '');
         const cPhoneDigits = (c.phone || '').replace(/\D/g, '');
         const matchesName = c.name.toLowerCase().includes(queryTerm);
-        const matchesPhone = c.phone.includes(queryTerm) || (qDigits.length >= 3 && cPhoneDigits.includes(qDigits));
+        // Compara también por los últimos 10 dígitos: "+1 312…" y "+57 312…" se guardan distinto
+        const qTail = qDigits.length >= 10 ? qDigits.slice(-10) : '';
+        const matchesPhone =
+          c.phone.includes(queryTerm) ||
+          (qDigits.length >= 3 && cPhoneDigits.includes(qDigits)) ||
+          (qTail !== '' && cPhoneDigits.endsWith(qTail));
         const matchesId = c.idNumber?.toLowerCase().includes(queryTerm);
         const matchesCity = c.city?.toLowerCase().includes(queryTerm);
         const matchesEx = c.metadata?.smarthomeAsesorOriginal?.toLowerCase().includes(queryTerm);
