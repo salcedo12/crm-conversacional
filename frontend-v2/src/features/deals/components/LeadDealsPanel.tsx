@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Ban, Calculator, ExternalLink, Loader2, Plus, Users } from 'lucide-react';
+import { AlertTriangle, Ban, Calculator, ExternalLink, Loader2, Plus, UserRound, Users } from 'lucide-react';
 import type { Lead } from '@/features/inbox/types';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
+import { listAdvisors, type Advisor } from '@/features/leads/services/advisors.service';
 import { DealBuyersModal } from './DealBuyersModal';
 import { DealLotSection } from './DealLotSection';
 import { DealPlanModal } from './DealPlanModal';
@@ -16,6 +17,7 @@ import {
   createDeal,
   DEAL_STATUS_LABELS,
   listLeadDeals,
+  reassignDealAdvisor,
   type DealStatus,
   type DealSummary,
 } from '../services/deals.service';
@@ -33,7 +35,7 @@ const STATUS_STYLES: Record<DealStatus, string> = {
 /** Negocios del lead (sección del LeadDrawer): crear negocio y registrar sus compradores. */
 export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: Lead }) {
   const navigate = useNavigate();
-  const { role, platformAdmin } = useAuth();
+  const { role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
   // "Solo lectura": ve los negocios, pero no crea, edita ni anula.
   const readOnly = !platformAdmin && isViewerRole(role);
@@ -46,6 +48,11 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
   const [cancelReason, setCancelReason] = useState('');
   const [cancelBusy, setCancelBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [advisorsList, setAdvisorsList] = useState<Advisor[]>([]);
+  const [selectedAdvisorId, setSelectedAdvisorId] = useState<string>(lead.assignedTo || user?.uid || '');
+  const [reassigningId, setReassigningId] = useState<string | null>(null);
+  const [reassignTargetId, setReassignTargetId] = useState('');
+  const [reassignBusy, setReassignBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -63,11 +70,33 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
 
   useEffect(() => { setLoading(true); void load(); }, [load]);
 
+  useEffect(() => {
+    if (!isAdmin || readOnly) return;
+    let alive = true;
+    listAdvisors(companyId)
+      .then((list) => {
+        if (!alive) return;
+        const eligible = list.filter((a) => a.active && a.role !== 'viewer');
+        setAdvisorsList(eligible);
+        setSelectedAdvisorId((prev) =>
+          prev && eligible.some((a) => a.id === prev)
+            ? prev
+            : lead.assignedTo && eligible.some((a) => a.id === lead.assignedTo)
+              ? lead.assignedTo
+              : user?.uid && eligible.some((a) => a.id === user.uid)
+                ? user.uid
+                : eligible[0]?.id || '',
+        );
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [companyId, isAdmin, readOnly, lead.assignedTo, user?.uid]);
+
   const handleCreate = async () => {
     setCreating(true);
     setError(null);
     try {
-      const dealId = await createDeal(companyId, lead.id);
+      const dealId = await createDeal(companyId, lead.id, isAdmin && selectedAdvisorId ? selectedAdvisorId : undefined);
       const list = await load();
       const created = list.find((d) => d.id === dealId);
       if (created) setEditing(created);
@@ -75,6 +104,21 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
       setError(err instanceof Error ? err.message : 'No se pudo crear el negocio.');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleConfirmReassign = async (dealId: string) => {
+    if (!reassignTargetId) return;
+    setReassignBusy(true);
+    setError(null);
+    try {
+      await reassignDealAdvisor(companyId, dealId, reassignTargetId);
+      setReassigningId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo cambiar el broker/asesor.');
+    } finally {
+      setReassignBusy(false);
     }
   };
 
@@ -132,6 +176,50 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
               <p className="mt-2 text-sm text-zinc-200 sm:text-xs sm:text-zinc-300">
                 {names.length ? names.join(' · ') : <span className="text-amber-300/90">Faltan los compradores</span>}
               </p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400">
+                <UserRound size={11} className="text-zinc-500" />
+                <span>Broker / Asesor:</span>
+                <strong className="text-zinc-200">{deal.advisorName || 'Asesor'}</strong>
+                {isAdmin && !readOnly && deal.status !== 'anulado' && reassigningId !== deal.id && (
+                  <button
+                    type="button"
+                    onClick={() => { setReassigningId(deal.id); setReassignTargetId(deal.advisorId); }}
+                    className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 hover:border-emerald-500/40 hover:bg-emerald-500/10"
+                  >
+                    Cambiar
+                  </button>
+                )}
+              </div>
+              {isAdmin && reassigningId === deal.id && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <select
+                    value={reassignTargetId}
+                    onChange={(e) => setReassignTargetId(e.target.value)}
+                    disabled={reassignBusy}
+                    className="h-7 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[11px] text-zinc-200"
+                  >
+                    {advisorsList.map((a) => (
+                      <option key={a.id} value={a.id}>{a.displayName || a.email}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={reassignBusy || !reassignTargetId}
+                    onClick={() => void handleConfirmReassign(deal.id)}
+                    className="rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    {reassignBusy ? 'Guardando…' : 'Guardar'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={reassignBusy}
+                    onClick={() => setReassigningId(null)}
+                    className="px-1.5 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
               {deal.status === 'anulado' && deal.cancelReason && (
                 <p className="mt-1 text-[11px] text-zinc-500">Motivo: {deal.cancelReason}</p>
               )}
@@ -206,14 +294,34 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
       )}
 
       {!readOnly && !loading && !hasOpenDeal && (
-        <button
-          type="button"
-          onClick={handleCreate}
-          disabled={creating}
-          className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 sm:inline-flex sm:min-h-0 sm:w-auto sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-[11px]"
-        >
-          {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Crear negocio
-        </button>
+        <div className="space-y-2">
+          {isAdmin && advisorsList.length > 0 && (
+            <label className="block space-y-1">
+              <span className="text-[11px] font-semibold text-zinc-400">
+                Broker / Asesor asignado (sale en preventa)
+              </span>
+              <select
+                value={selectedAdvisorId}
+                onChange={(e) => setSelectedAdvisorId(e.target.value)}
+                className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-200 outline-none focus:border-emerald-500"
+              >
+                {advisorsList.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.displayName || a.email}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={creating}
+            className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 sm:inline-flex sm:min-h-0 sm:w-auto sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-[11px]"
+          >
+            {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Crear negocio
+          </button>
+        </div>
       )}
 
       {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}

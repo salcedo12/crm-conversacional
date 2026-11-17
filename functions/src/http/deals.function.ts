@@ -65,6 +65,7 @@ async function loadBuyerProfiles(companyId: string, deal: Deal) {
 // ─── Negocios del lead ───────────────────────────────────────────────────────
 
 const LeadDealsSchema = z.object({ companyId: z.string().min(1), leadId: z.string().min(1) });
+const CreateDealSchema = LeadDealsSchema.extend({ advisorId: z.string().min(1).optional() });
 
 export const listLeadDeals = onCall({ region: 'us-central1', timeoutSeconds: 30 }, async (request) => {
   const ctx = requireAuth(request);
@@ -78,8 +79,14 @@ export const listLeadDeals = onCall({ region: 'us-central1', timeoutSeconds: 30 
     .filter((d) => isAdmin(ctx) || d.advisorId === ctx.uid)
     .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
 
+  const advisorIds = Array.from(new Set(deals.map((d) => d.advisorId).filter(Boolean)));
+  const userRefs = advisorIds.map((id) => db.collection('companies').doc(data.companyId).collection('users').doc(id));
+  const userSnaps = userRefs.length ? await db.getAll(...userRefs) : [];
+  const advisorNames = new Map(userSnaps.map((s) => [s.id, String(s.get('displayName') || s.get('email') || 'Asesor')]));
+
   const result = await Promise.all(deals.map(async (deal) => ({
     ...serializeDeal(deal),
+    advisorName: advisorNames.get(deal.advisorId) || 'Asesor',
     buyerProfiles: await loadBuyerProfiles(data.companyId, deal),
   })));
   return { deals: result };
@@ -122,13 +129,26 @@ export const listCompanyDeals = onCall({ region: 'us-central1', timeoutSeconds: 
 export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, async (request) => {
   const ctx = requireAuth(request);
   requireRole(ctx, WRITE_ROLES);
-  const data = parseInput(LeadDealsSchema, request.data, 'crear el negocio');
+  const data = parseInput(CreateDealSchema, request.data, 'crear el negocio');
   assertCompany(ctx, data.companyId);
 
   const lead = await leadsRepository.findById(data.companyId, data.leadId);
   if (!lead) throw new HttpsError('not-found', 'Lead no encontrado.');
   if (!isAdmin(ctx) && lead.assignedTo !== ctx.uid) {
     throw new HttpsError('permission-denied', 'Solo puedes crear negocios para tus leads asignados.');
+  }
+
+  let advisorId = lead.assignedTo || ctx.uid;
+  if (data.advisorId) {
+    if (!isAdmin(ctx) && data.advisorId !== ctx.uid) {
+      throw new HttpsError('permission-denied', 'Solo administración puede asignar el negocio a otro asesor.');
+    }
+    const targetSnap = await db.collection('companies').doc(data.companyId).collection('users').doc(data.advisorId).get();
+    const target = targetSnap.data();
+    if (!targetSnap.exists || !target || target.active === false || target.role === 'viewer') {
+      throw new HttpsError('failed-precondition', 'El asesor seleccionado no es válido.');
+    }
+    advisorId = data.advisorId;
   }
 
   const now = Timestamp.now();
@@ -162,7 +182,7 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
   const deal: Omit<Deal, 'id'> = {
     companyId: data.companyId,
     leadId: data.leadId,
-    advisorId: lead.assignedTo || ctx.uid,
+    advisorId,
     status: 'borrador',
     buyers: inheritedBuyers,
     ...(inheritedBuyerNames.length ? { buyerNames: inheritedBuyerNames } : {}),
@@ -173,7 +193,10 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     createdAt: now,
     updatedAt: now,
   };
-  const actor = await userDisplayName(data.companyId, ctx.uid);
+  const [actor, assigned] = await Promise.all([
+    userDisplayName(data.companyId, ctx.uid),
+    advisorId === ctx.uid ? Promise.resolve(null) : userDisplayName(data.companyId, advisorId),
+  ]);
   const ref = dealsCol(data.companyId).doc();
   const batch = db.batch();
   batch.set(ref, { ...deal, createdBy: ctx.uid });
@@ -185,6 +208,7 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     actorName: actor.name,
     event: 'created',
     title: inheritedBuyers.length ? 'Nuevo negocio creado (compradores vinculados)' : 'Negocio creado',
+    ...(assigned ? { lines: [`Broker / asesor asignado: ${assigned.name}`] } : {}),
   }));
   await batch.commit();
   logger.info('[Deals] Negocio creado', { companyId: data.companyId, leadId: data.leadId, dealId: ref.id });

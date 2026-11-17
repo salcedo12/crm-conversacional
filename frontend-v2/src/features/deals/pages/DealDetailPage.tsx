@@ -1148,7 +1148,8 @@ export function DealDetailPage() {
                       )}
                     </div>
                     <p className="text-[11px] text-zinc-400">
-                      Genera la versión oficial del documento en Word y PDF con base en el plan acordado y los compradores registrados.
+                      Genera la versión oficial del documento en Word y PDF con base en el plan acordado, los compradores registrados y el broker asignado (<strong className="text-zinc-200">{deal.advisorName || 'Asesor'}</strong>).
+                      {hasPreventa && ' Si cambias el asesor en el encabezado, genera de nuevo la preventa para que aparezca su nombre en el contrato.'}
                     </p>
                   </div>
                 ) : deal.status !== 'anulado' ? (

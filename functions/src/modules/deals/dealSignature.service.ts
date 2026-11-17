@@ -32,7 +32,7 @@ import {
 import { webhookEventExpireAt } from '../../utils/webhookTtl';
 import { getLotStatus, moveLotToTramite, releaseLot, reserveLot } from '../inventory/lotReservation.service';
 import { sendAdvisorPush } from '../messages/pushNotifications.service';
-import { clientsCol, dealsCol } from './dealAccess';
+import { clientsCol, dealsCol, userDisplayName } from './dealAccess';
 import { dealActivityDoc, dealActivityRef, leadRef } from './dealAudit';
 import { randomUUID } from 'crypto';
 import { isCurrentDocument, latestCurrentDocument, lotLabel, lotSnapshot } from './dealDocumentLot';
@@ -273,9 +273,10 @@ export async function sendToSignature(opts: {
     plans.push({ kind, template, directory, ...built });
   }
 
+  const broker = deal.advisorId === actor.uid ? actor : await userDisplayName(input.companyId, deal.advisorId);
   const prevLotStatus = await getLotStatus(deal.lot.inventoryLotId).catch(() => null);
   // El lote pasa a TRAMITE antes de enviar (si otro lo tomó, no se envía nada).
-  await moveLotToTramite(deal.lot.inventoryLotId, { dealId: deal.id, companyId: input.companyId, advisorName: actor.name }, actor);
+  await moveLotToTramite(deal.lot.inventoryLotId, { dealId: deal.id, companyId: input.companyId, advisorName: broker.name }, actor);
 
   const users = input.responsibleId ? await listUsers() : [];
   const responsible = users.find((u) => u._id === input.responsibleId);
@@ -330,7 +331,7 @@ export async function sendToSignature(opts: {
         if (prevLotStatus?.status === 'DISPONIBLE') {
           await releaseLot(deal.lot.inventoryLotId, deal.id, actor);
         } else if (prevLotStatus?.status === 'NEGOCIACION' && prevLotStatus.dealId === deal.id) {
-          const restored = await reserveLot(deal.lot.inventoryLotId, { dealId: deal.id, companyId: input.companyId, advisorName: actor.name }, actor);
+          const restored = await reserveLot(deal.lot.inventoryLotId, { dealId: deal.id, companyId: input.companyId, advisorName: broker.name }, actor);
           await ref.update({ 'lot.reservedUntil': restored.reservedUntil ?? '', updatedAt: Timestamp.now() });
         }
       } catch (rollbackErr) {
