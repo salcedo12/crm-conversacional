@@ -127,32 +127,33 @@ export async function resendEndorsement(idDocument: string, idSigner: string): P
 const PLACES_TTL_MS = 6 * 60 * 60 * 1000;
 let placesCache: { at: number; cities: DocuBlockCity[]; countries: DocuBlockCountry[] } | null = null;
 
+async function fetchAllPages<T>(path: string, pickList: (res: Record<string, unknown>) => T[], maxPages = 50): Promise<T[]> {
+  const first = await call<Record<string, unknown>>('POST', path, { page: 1 });
+  const items = [...pickList(first)];
+  const totalPages = Math.min(Number(first?.totalPages ?? 1) || 1, maxPages);
+  if (totalPages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) => call<Record<string, unknown>>('POST', path, { page: i + 2 })),
+    );
+    for (const r of rest) items.push(...pickList(r));
+  }
+  return items;
+}
+
 export async function listPlaces(): Promise<{ cities: DocuBlockCity[]; countries: DocuBlockCountry[] }> {
   if (placesCache && placesCache.cities.length > 0 && Date.now() - placesCache.at < PLACES_TTL_MS) return placesCache;
-  const [citiesRaw, countriesRaw] = await Promise.all([
-    call<Record<string, unknown>>('POST', '/api/cities/get-all'),
-    call<Record<string, unknown>>('POST', '/api/countries/get-all'),
+  const pickCities = (res: Record<string, unknown>) => (Array.isArray(res) ? res : (res?.cities ?? res?.data ?? [])) as DocuBlockCity[];
+  const pickCountries = (res: Record<string, unknown>) => (Array.isArray(res) ? res : (res?.countrydto ?? res?.countries ?? res?.data ?? [])) as DocuBlockCountry[];
+  const [rawCities, rawCountries] = await Promise.all([
+    fetchAllPages('/api/cities/get-all', pickCities),
+    fetchAllPages('/api/countries/get-all', pickCountries),
   ]);
-  const rawCities = (
-    Array.isArray(citiesRaw) ? citiesRaw : (citiesRaw.cities ?? citiesRaw.data ?? [])
-  ) as DocuBlockCity[];
-  const rawCountries = (
-    Array.isArray(countriesRaw) ? countriesRaw : (countriesRaw.countrydto ?? countriesRaw.countries ?? countriesRaw.data ?? [])
-  ) as DocuBlockCountry[];
-  logger.info('[DocuBlock] listPlaces', {
-    cityKeys: Array.isArray(citiesRaw) ? ['array'] : Object.keys(citiesRaw ?? {}),
-    cityTotal: (citiesRaw as Record<string, unknown>)?.total ?? null,
-    cityTotalPages: (citiesRaw as Record<string, unknown>)?.totalPages ?? null,
-    cityCount: rawCities.length,
-    sampleCity: rawCities[0] ? { name: rawCities[0].name, countryType: typeof rawCities[0].country } : null,
-    countryKeys: Array.isArray(countriesRaw) ? ['array'] : Object.keys(countriesRaw ?? {}),
-    countryCount: rawCountries.length,
-  });
   const parsed = {
     at: Date.now(),
     cities: rawCities.map((c) => ({ _id: c._id, name: c.name, country: typeof c.country === 'string' ? c.country : c.country?._id ?? '' })),
     countries: rawCountries.map((c) => ({ _id: c._id, name: c.name, abbreviation: c.abbreviation })),
   };
+  logger.info('[DocuBlock] listPlaces cargado', { cities: parsed.cities.length, countries: parsed.countries.length });
   if (parsed.cities.length > 0) placesCache = parsed;
   return parsed;
 }
