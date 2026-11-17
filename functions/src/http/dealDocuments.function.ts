@@ -127,7 +127,7 @@ export async function generateDocument(
 
   let docx: Buffer;
   try {
-    docx = renderContract(data.kind, contractData);
+    docx = renderContract(data.kind, contractData, profile.templateVariant);
   } catch (err) {
     logger.error('[DealDocuments] Error llenando la plantilla', { dealId: deal.id, kind: data.kind, error: String(err) });
     throw new HttpsError('internal', `No se pudo generar el documento: ${err instanceof Error ? err.message : String(err)}`);

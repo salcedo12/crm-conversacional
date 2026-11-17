@@ -137,6 +137,7 @@ export function buildContractData(input: ContractInputs): ContractData {
     'proyecto.esRioClaro': profile.textBlock === 'rio_claro',
     'proyecto.esLagunaMar': profile.textBlock === 'laguna_mar',
     'proyecto.esLlanoGrande': profile.textBlock === 'llano_grande',
+    'proyecto.esSobreMontanas': profile.textBlock === 'sobre_montanas',
 
     'lote.numero': lot.lotNumber,
     'lote.sector': lot.sector,

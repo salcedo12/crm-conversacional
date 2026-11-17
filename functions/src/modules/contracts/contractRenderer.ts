@@ -10,9 +10,17 @@ import type { DealDocumentKind } from '../deals/deals.types';
  * generadas con scripts/contracts/build-templates.cjs) y devuelve el .docx.
  */
 
-const TEMPLATE_FILES: Record<DealDocumentKind, string> = {
-  preventa: 'preventa-2026.docx',
-  promesa: 'promesa-2026.docx',
+type TemplateVariant = 'standard' | 'sobre_montanas';
+
+const TEMPLATE_FILES: Record<TemplateVariant, Record<DealDocumentKind, string>> = {
+  standard: {
+    preventa: 'preventa-2026.docx',
+    promesa: 'promesa-2026.docx',
+  },
+  sobre_montanas: {
+    preventa: 'preventa-sobre-montanas-2026.docx',
+    promesa: 'promesa-sobre-montanas-2026.docx',
+  },
 };
 
 // lib/modules/contracts → functions/templates (y src/… en las pruebas).
@@ -149,8 +157,13 @@ function mergeSeparationCells(xml: string, paymentCount: number): string {
   return xml;
 }
 
-export function renderContract(kind: DealDocumentKind, data: ContractData): Buffer {
-  const zip = new PizZip(readFileSync(join(TEMPLATES_DIR, TEMPLATE_FILES[kind])));
+export function renderContract(
+  kind: DealDocumentKind,
+  data: ContractData,
+  templateVariant: TemplateVariant = 'standard',
+): Buffer {
+  const templateFile = TEMPLATE_FILES[templateVariant][kind];
+  const zip = new PizZip(readFileSync(join(TEMPLATES_DIR, templateFile)));
   const missing = new Set<string>();
   const doc = new Docxtemplater(zip, {
     paragraphLoop: true,
@@ -163,7 +176,7 @@ export function renderContract(kind: DealDocumentKind, data: ContractData): Buff
   });
   doc.render(data);
   if (missing.size) {
-    throw new Error(`La plantilla ${TEMPLATE_FILES[kind]} pide campos sin dato: ${[...missing].join(', ')}`);
+    throw new Error(`La plantilla ${templateFile} pide campos sin dato: ${[...missing].join(', ')}`);
   }
   // Al repetir el recuadro de firma por comprador se duplican los id de las figuras:
   // Word exige que sean únicos, así que se renumeran.

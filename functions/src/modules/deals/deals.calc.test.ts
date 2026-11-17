@@ -178,7 +178,7 @@ test('vendedor por proyecto: Cañón = S+M, el resto = ZOMAC', async () => {
   for (const id of ['laguna-mar', 'rio-claro', 'llano-grande', 'sobre-montañas']) {
     expect(getSellerForProject(id)?.nit).toBe('901110049-0');
   }
-  expect(getProjectLegalProfile('sobre-montañas')?.missingTexts.length).toBeGreaterThan(0);
+  expect(getProjectLegalProfile('sobre-montañas')?.missingTexts).toEqual([]);
   expect(getProjectLegalProfile('arizona-1')).toBeNull();
 });
 

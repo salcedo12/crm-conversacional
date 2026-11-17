@@ -35,6 +35,8 @@ const PROJECT_DIRECTORY_NAMES: Record<string, string> = {
   'gran-arizona': 'GRAND ARIZONA',
   'laguna-mar': 'LAGUNA MAR',
   'llano-grande': 'LLANO GRANDE',
+  'sobre-montanas': 'SOBRE MONTANAS',
+  'sobre-montañas': 'SOBRE MONTANAS',
 };
 
 /** Directorio de promesas del proyecto ("PROMESAS LAGUNA MAR - MELGAR"); si no, el de la plantilla. */

@@ -215,3 +215,106 @@ test('separación: cada cuota con su fecha en la promesa', () => {
   expect(d['plan.separacionCuotas']).toBe('$\u00a03.000.000\n$\u00a03.000.000');
   expect(d['plan.separacionFechas']).toBe('27/10/2026\n27/11/2026');
 });
+
+test('Sobre Montañas tiene perfil legal completo sin textos faltantes', () => {
+  const profile = getProjectLegalProfile('sobre-montañas')!;
+  expect(profile).toBeTruthy();
+  expect(profile.projectId).toBe('sobre-montanas');
+  expect(profile.templateVariant).toBe('sobre_montanas');
+  expect(profile.seller).toBe('zomac');
+  expect(profile.municipality).toBe('ALVARADO');
+  expect(profile.earnestPercent).toBe(30);
+  expect(profile.missingTexts).toEqual([]);
+});
+
+test('preventa de Sobre Montañas: común y proindiviso, ZOMAC NIT 901110049-0 y variables reales', () => {
+  const smLot = {
+    ...lot,
+    projectId: 'sobre-montanas',
+    projectName: 'SOBRE MONTAÑAS',
+    sector: 'ALDEA CONDOR',
+    lotNumber: '16',
+    lotCode: '701016',
+    areaM2: 1258,
+  };
+  const profile = getProjectLegalProfile('sobre-montanas')!;
+  const contractData = buildContractData({
+    buyers: [buyer(1), buyer(2)],
+    lot: smLot,
+    plan,
+    profile,
+    seller: SELLERS[profile.seller],
+    advisorName: 'Asesor Pruebas',
+    issuedAt: { date: '2026-10-27', time: '09:15:00 AM' },
+  });
+  const text = docxText(renderContract('preventa', contractData, profile.templateVariant));
+
+  expect(text).not.toMatch(/[{}]/);
+  expect(text).toContain('COMPRAVENTA DE BIEN INMUEBLE COMÚN Y PROINDIVISO');
+  expect(text).toContain('CONTRATO DE PREVENTA DE BIEN INMUEBLE COMÚN Y PROINDIVISO');
+  expect(text).toContain('finca denominada NAPOLES');
+  expect(text).toContain('pozo séptico, energía solar y acueducto veredal');
+  expect(text).toContain('GRUPO CONSTRUCTOR MERAKI S.A.S ZOMAC');
+  expect(text).toContain('901110049-0');
+  expect(text).toContain('TERRENO No. 16 – ETAPA/SECTOR ALDEA CONDOR SOBRE MONTAÑAS');
+  expect(text).toContain('Convenio Banco Davivienda 1171362');
+  expect(text).toContain('TOTAL ORDINARIAS');
+  expect(text).not.toContain('901110049-1');
+  expect(text).not.toContain('propiedad horizontal');
+  expect(text).not.toContain('BATMAN');
+  expect(text).not.toContain('PEPITO');
+  expect(text).not.toContain('JUANA MARÍA');
+  expect(text).not.toContain('Mar Santorini');
+  expect(text).not.toContain('30.000 m2');
+});
+
+test('promesa de Sobre Montañas: participación en derecho de dominio, Finca Nápoles y arras/cuotas dinámicas', () => {
+  const smLot = {
+    ...lot,
+    projectId: 'sobre-montanas',
+    projectName: 'SOBRE MONTAÑAS',
+    sector: 'ALDEA CONDOR',
+    lotNumber: '16',
+    lotCode: '701016',
+    areaM2: 1258,
+  };
+  const profile = getProjectLegalProfile('sobre-montanas')!;
+  const contractData = buildContractData({
+    buyers: [buyer(1), buyer(2)],
+    lot: smLot,
+    plan,
+    profile,
+    seller: SELLERS[profile.seller],
+    advisorName: 'Asesor Pruebas',
+    issuedAt: { date: '2026-10-27', time: '09:15:00 AM' },
+  });
+  const buffer = renderContract('promesa', contractData, profile.templateVariant);
+  const xml = new PizZip(buffer).file('word/document.xml')!.asText();
+  const text = docxText(buffer);
+
+  expect(text).not.toMatch(/[{}]/);
+  expect(text).toContain('CONTRATO DE COMPRAVENTA DE PARTICIPACIÓN EN DERECHO DE DOMINIO SOBRE PREDIO RURAL');
+  expect(text).toContain('predio rural de mayor extensión denominado "NAPOLES"');
+  expect(text).toContain('vereda DOYARE');
+  expect(text).toContain('350-75661');
+  expect(text).toContain('0001-0048-000');
+  expect(text).toContain('participación que corresponde a un área aproximada de 1.258 m2');
+  expect(text).toContain('NÚMERO DE REFERENCIA: 701016');
+  expect(text).toContain('168770042765');
+  expect(text).toContain('CARLOS ANDRÉS PRUEBA UNO');
+  expect(text).toContain('ANA MARÍA PRUEBA DOS');
+  expect(text).toContain('CUARENTA Y SEIS MILLONES CIENTO DOCE MIL NOVECIENTOS QUINCE PESOS');
+  expect(text).toContain('a los 27 días del mes de octubre del año 2026');
+  // Merge vertical de separación funciona sobre T2 igual que en la promesa estándar
+  expect(text.match(/VALOR DE LA SEPARACIÓN/g)).toHaveLength(1);
+  expect((xml.match(/<w:vMerge w:val="restart"\/>/g) ?? []).length).toBeGreaterThanOrEqual(1);
+  // Sin texto de PH ni de otros proyectos ni datos de muestra
+  expect(text).not.toContain('MONTECRISTO');
+  expect(text).not.toContain('EL BALSO');
+  expect(text).not.toContain('Goteras');
+  expect(text).not.toContain('S+M SAS');
+  expect(text).not.toContain('BATMAN');
+  expect(text).not.toContain('PEPITO');
+  expect(text).not.toContain('Mar Santorini');
+  expect(text).not.toContain('30,000 metros cuadrados');
+});

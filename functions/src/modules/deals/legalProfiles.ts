@@ -63,6 +63,8 @@ export type ProjectTextBlock = 'canon' | 'laguna_mar' | 'rio_claro' | 'llano_gra
 export interface ProjectLegalProfile {
   projectId:     string;            // id del inventario (tour-meraki)
   textBlock:     ProjectTextBlock;  // sección condicional de la plantilla Word
+  /** Variante de plantilla Word cuando el proyecto usa estructura jurídica propia (ej. proindiviso). */
+  templateVariant?: 'standard' | 'sobre_montanas';
   seller:        SellerEntity['key'];
   contractName:  string;            // PROYECTO en "DATOS GENERALES DEL NEGOCIO"
   /** Cómo nombran los contratos al proyecto ("CLUB DE CAMPO CONDOMINIO ECO HOTEL …"). Revisar con jurídica. */
@@ -128,14 +130,15 @@ const PROFILES: ProjectLegalProfile[] = [
   {
     projectId: 'sobre-montanas',
     textBlock: 'sobre_montanas',
+    templateVariant: 'sobre_montanas',
     seller: 'zomac',
     contractName: 'SOBRE MONTAÑAS',
     denomination: 'SOBRE MONTAÑAS',
-    locationDetail: '',
-    municipality: '',
-    location: '',
+    locationDetail: 'Alvarado Tolima',
+    municipality: 'ALVARADO',
+    location: 'ALVARADO – TOLIMA (FINCA NÁPOLES, VEREDA DOYARE)',
     earnestPercent: 30,
-    missingTexts: ['ubicación', 'municipio', 'licencia de parcelación', 'linderos', 'amenidades'],
+    missingTexts: [],
   },
 ];
 
