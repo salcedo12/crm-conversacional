@@ -1,0 +1,305 @@
+rules_version = '2';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ETAPA R05 — NO DESPLEGAR TODAVÍA. Reemplaza a firestore.rules cuando la web y
+// la app móvil con consultas por asesor (assignedTo == uid) estén publicadas y
+// los asesores hayan actualizado la app. Diferencia: un asesor solo lee/edita
+// los leads que tiene asignados (y sus mensajes, notas, llamadas, evidencias).
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reglas de producción — aislamiento por empresa (multi-tenant) vía custom claims.
+//
+// Fuente de verdad: los custom claims `companyId` y `role` del ID token, que el
+// backend (trigger onUserProfileWritten) sincroniza desde
+// companies/{companyId}/users/{uid}.
+//
+// El cliente solo lee directo: su propio perfil, los leads y los mensajes de SU
+// empresa. Todo lo demás (plantillas, config IA, citas, conexiones con tokens,
+// follow-ups) pasa por Cloud Functions con Admin SDK, que ignora estas reglas;
+// por eso aquí se deniega el acceso directo del cliente a esas colecciones.
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    // Empresa donde se permite el bootstrap automático del perfil al primer login.
+    // Las empresas adicionales se aprovisionan server-side: un admin crea el doc del
+    // usuario y el trigger setea sus claims.
+    function bootstrapCompany() {
+      return 'grupo_meraki_real';
+    }
+
+    // El usuario pertenece a la empresa (según su claim companyId)
+    function isPlatformAdmin() {
+      return signedIn() && request.auth.token.get('platformAdmin', false) == true;
+    }
+
+    function inCompany(companyId) {
+      return signedIn() && (request.auth.token.companyId == companyId || isPlatformAdmin());
+    }
+
+    // Rol administrativo dentro de la empresa
+    function isAdmin(companyId) {
+      return isPlatformAdmin()
+             || (inCompany(companyId)
+                 && request.auth.token.role in ['admin', 'manager']);
+    }
+
+    // Miembro de la empresa con permiso de escritura: todos menos "Solo lectura"
+    // (viewer). Sin claim de rol se asume asesor, igual que el backend.
+    function canWrite(companyId) {
+      return inCompany(companyId)
+             && (isPlatformAdmin() || request.auth.token.get('role', 'advisor') != 'viewer');
+    }
+
+    // Rol "Solo lectura": ve todo (como admin) pero no modifica.
+    function isViewer(companyId) {
+      return inCompany(companyId) && request.auth.token.get('role', 'advisor') == 'viewer';
+    }
+
+    // Ve todos los leads de la empresa: admin/manager, platformAdmin y "Solo lectura".
+    function seesAllLeads(companyId) {
+      return isAdmin(companyId) || isViewer(companyId);
+    }
+
+    // Seguridad (R05): las subcolecciones de un lead (mensajes, notas, llamadas,
+    // evidencias…) solo las ve quien puede ver el lead: su asesor asignado o
+    // quien ve todo. Cuesta una lectura extra (get del lead) por consulta.
+    function canReadLead(companyId, leadId) {
+      return seesAllLeads(companyId)
+             || (inCompany(companyId)
+                 && get(/databases/$(database)/documents/companies/$(companyId)/leads/$(leadId))
+                      .data.get('assignedTo', null) == request.auth.uid);
+    }
+
+    match /companies/{companyId} {
+
+      // ── Perfiles de usuario ────────────────────────────────────────────────
+      // Cada usuario de la empresa puede consultar el directorio de compañeros (asesores/admins)
+      // para ver asignaciones y nombres en el CRM.
+      // Los admins/managers gestionan a todos los usuarios de su empresa.
+      // Seguridad (R01): `platformAdmin` y el rol 'platformAdmin' se convierten en
+      // privilegios globales vía el trigger de claims, así que desde el cliente
+      // solo un platformAdmin puede tocarlos. El propio usuario solo puede
+      // refrescar campos personales (no roles, bloqueos SLA ni reparto de leads).
+      match /users/{userId} {
+        // Cualquier valor (true, 'true', etc.) cuenta: el trigger acepta varios.
+        function noPlatformPrivilegeOnCreate() {
+          return isPlatformAdmin()
+                 || (!request.resource.data.keys().hasAny(['platformAdmin'])
+                     && request.resource.data.get('role', 'advisor') != 'platformAdmin');
+        }
+        function noPlatformPrivilegeOnUpdate() {
+          return isPlatformAdmin()
+                 || (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['platformAdmin'])
+                     && request.resource.data.get('role', 'advisor') != 'platformAdmin');
+        }
+
+        allow read:   if inCompany(companyId);
+        allow create: if noPlatformPrivilegeOnCreate()
+                      && (isAdmin(companyId)
+                          || (isSelf(userId)
+                              && companyId == bootstrapCompany()
+                              && request.resource.data.keys().hasOnly(
+                                   ['companyId', 'email', 'displayName', 'role', 'active', 'createdAt', 'updatedAt'])
+                              && request.resource.data.role == 'advisor'
+                              && request.resource.data.active == true));
+        allow update: if noPlatformPrivilegeOnUpdate()
+                      && (isAdmin(companyId)
+                          || (isSelf(userId)
+                              && request.resource.data.diff(resource.data).affectedKeys()
+                                   .hasOnly(['updatedAt', 'displayName'])));
+        allow delete: if isAdmin(companyId);
+      }
+
+      // ── Leads y mensajes ───────────────────────────────────────────────────
+      // Seguridad (R05): un asesor solo lee y edita SUS leads (assignedTo == uid).
+      // Las consultas de un asesor deben llevar where('assignedTo','==',uid) o
+      // Firestore las rechaza completas. Admin/manager y "Solo lectura" ven todo.
+      // Un asesor no puede reasignar (cambiar assignedTo); eso lo hace un admin.
+      match /leads/{leadId} {
+        function ownsLead() {
+          return resource.data.get('assignedTo', null) == request.auth.uid;
+        }
+
+        allow read:   if seesAllLeads(companyId) || (inCompany(companyId) && ownsLead());
+        allow update: if canWrite(companyId)
+                      && (isAdmin(companyId)
+                          || (ownsLead()
+                              && request.resource.data.get('assignedTo', null) == resource.data.get('assignedTo', null)));
+        allow create, delete: if false;
+
+        match /messages/{messageId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Historial de llamadas con IA (Dapta). Solo lectura desde el cliente;
+        // las escrituras las hace el webhook/callable vía Admin SDK.
+        match /calls/{callId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Notas internas y recordatorios del lead. Lectura y registro desde el cliente
+        match /notes/{noteId} {
+          allow read:   if canReadLead(companyId, leadId);
+          // Autoría: un asesor no puede firmar como otro usuario ni como la IA ('ai').
+          allow create: if canWrite(companyId) && canReadLead(companyId, leadId)
+                        && (isAdmin(companyId)
+                            || request.resource.data.get('authorId', request.auth.uid) == request.auth.uid);
+          allow update, delete: if isAdmin(companyId);
+        }
+
+        // Evidencia fotográfica del lead (soporta ambos alias: evidence y photo_evidence)
+        match /photo_evidence/{evidenceId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+        match /evidence/{evidenceId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Subcolección de Touchpoints (historial de atribución y entradas)
+        match /touchpoints/{touchpointId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Subcolección de Oportunidades comerciales
+        match /opportunities/{opportunityId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+
+        // Subcolección de Historial y auditoría de eventos
+        match /history/{historyId} {
+          allow read:  if canReadLead(companyId, leadId);
+          allow write: if false;
+        }
+      }
+
+      // ── Evidencia fotográfica a nivel de empresa ───────────────────────────
+      match /photo_evidence/{evidenceId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+      match /evidence/{evidenceId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Biblioteca de portafolios y planos ──────────────────────────────────
+      match /library/{itemId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Fuentes de Ubicación / Captación Comercial ─────────────────────────
+      // -- Configuraciones de la empresa (Ficha T�cnica, campos, etc.) --------
+      match /configs/{configId} {
+        allow read:  if inCompany(companyId);
+        allow write: if isAdmin(companyId);
+      }
+
+      match /leadSources/{sourceId} {
+        allow read:  if inCompany(companyId);
+        allow write: if isAdmin(companyId);
+      }
+
+      // ── Inventario Inmobiliario In-House (Proyectos y Lotes) ────────────────
+      match /projects/{projectId} {
+        allow read:  if inCompany(companyId);
+        allow write: if isAdmin(companyId);
+
+        match /lots/{lotId} {
+          allow read:  if inCompany(companyId);
+          allow write: if isAdmin(companyId);
+        }
+      }
+
+      // -- Fichas de compradores (cedulas y datos personales, Ley 1581) -------
+      // Solo via callables del modulo Negocios (http/deals.function.ts).
+      match /clients/{clientId} {
+        allow read, write: if false;
+      }
+
+      // ── Negociaciones, Separaciones y Contratos ────────────────────────────
+      match /deals/{dealId} {
+        allow read:  if isAdmin(companyId) || (inCompany(companyId) && resource.data.advisorId == request.auth.uid);
+        allow write: if false;
+      }
+
+      // ── Ventas de SmartHome (copia sincronizada para reportes e informes) ──
+      match /smarthomeSales/{saleId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Métricas y Contadores Agregados O(1) ──────────────────────────────
+      match /daily_metrics/{metricId} {
+        allow read:  if isAdmin(companyId);
+        allow write: if false;
+      }
+
+      // ── Caché de Reportes Agregados ─────────────────────────────────────────
+      match /reportCache/{cacheId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Caché de Creativos de Meta Ads (videos, miniaturas, títulos) ──────
+      match /metaAdCreatives/{adId} {
+        allow read:  if inCompany(companyId);
+        allow write: if false;
+      }
+
+      // ── Solicitudes de Traslado y Reasignación de Leads ────────────────────
+      match /leadTransferRequests/{requestId} {
+        allow read:  if isAdmin(companyId) || (inCompany(companyId) && resource.data.requesterId == request.auth.uid);
+        allow write: if false;
+      }
+
+      // ── Resto de subcolecciones de la empresa ──────────────────────────────
+      // aiConfigs, templates, appointments, googleConnections, etc. → solo backend.
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // ── Llamadas — regla de collection group ───────────────────────────────
+    // La regla anidada de arriba (companies/{cid}/leads/{lid}/calls/{id}) solo
+    // aplica a consultas directas a esa subcolección. El banner global de
+    // llamada de WhatsApp entrante usa collectionGroup('calls'), que necesita
+    // su propia regla explícita. Se evalúa solo con campos propios del doc
+    // (companyId/assignedTo, ya denormalizados) para no depender de un get()
+    // al lead padre.
+    match /{path=**}/calls/{callId} {
+      allow read: if signedIn()
+                  && (request.auth.token.companyId == resource.data.companyId
+                      || isPlatformAdmin())
+                  && (
+                    request.auth.token.role in ['admin', 'manager']
+                    || isPlatformAdmin()
+                    || !('assignedTo' in resource.data)
+                    || resource.data.assignedTo == request.auth.uid
+                  );
+      allow write: if false;
+    }
+
+    // ── Todo lo que esté fuera de /companies ─────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -378,10 +378,13 @@ export async function fetchCommercialManagementData(
     const startTs = Timestamp.fromDate(effectiveStart);
     const endTs = Timestamp.fromDate(effectiveEnd);
 
+    // Seguridad (R05): un asesor solo consulta sus leads asignados (las reglas
+    // rechazan una consulta que pueda devolver leads ajenos).
+    const scope = !isUserAdmin && effectiveAdvisorId ? [where('assignedTo', '==', effectiveAdvisorId)] : [];
     const periodQueries = [
-      getDocs(query(leadCol, where('createdAt', '>=', startTs), where('createdAt', '<=', endTs))),
-      getDocs(query(leadCol, where('advisorAssignedAt', '>=', startTs), where('advisorAssignedAt', '<=', endTs))),
-      getDocs(query(leadCol, where('lastFollowUpAt', '>=', startTs), where('lastFollowUpAt', '<=', endTs))),
+      getDocs(query(leadCol, ...scope, where('createdAt', '>=', startTs), where('createdAt', '<=', endTs))),
+      getDocs(query(leadCol, ...scope, where('advisorAssignedAt', '>=', startTs), where('advisorAssignedAt', '<=', endTs))),
+      getDocs(query(leadCol, ...scope, where('lastFollowUpAt', '>=', startTs), where('lastFollowUpAt', '<=', endTs))),
     ];
 
     const results = await Promise.allSettled(periodQueries);
@@ -792,6 +795,11 @@ export async function searchCommercialLeads(
 
   const leadCol = collection(db, 'companies', companyId, 'leads');
   const docsMap = new Map<string, DocumentData & { id: string }>();
+  // Seguridad (R05): un asesor busca solo dentro de sus leads asignados (antes se
+  // buscaba en toda la empresa y se filtraba después en el navegador).
+  const scope = !isUserAdmin && effectiveAdvisorId && effectiveAdvisorId !== 'all'
+    ? [where('assignedTo', '==', effectiveAdvisorId)]
+    : [];
 
   // 1. Si contiene dígitos numéricos (búsqueda de teléfono)
   const cleanDigits = term.replace(/\D/g, '');
@@ -801,17 +809,17 @@ export async function searchCommercialLeads(
     const promises: Promise<any>[] = [];
     if (cleanDigits.length >= 7) {
       const tail = cleanDigits.slice(-10);
-      promises.push(getDocs(query(leadCol, where('phoneTail', '==', tail), limit(25))));
-      promises.push(getDocs(query(leadCol, where('normalizedPhone', '==', `+57${tail}`), limit(25))));
-      promises.push(getDocs(query(leadCol, where('normalizedPhone', '==', `+${cleanDigits}`), limit(25))));
-      promises.push(getDocs(query(leadCol, where('phone', '==', `+57${tail}`), limit(25))));
-      promises.push(getDocs(query(leadCol, where('phone', '==', tail), limit(25))));
-      promises.push(getDocs(query(leadCol, where('phone', '==', `+${cleanDigits}`), limit(25))));
-      promises.push(getDocs(query(leadCol, where('phone', '==', term), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('phoneTail', '==', tail), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('normalizedPhone', '==', `+57${tail}`), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('normalizedPhone', '==', `+${cleanDigits}`), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('phone', '==', `+57${tail}`), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('phone', '==', tail), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('phone', '==', `+${cleanDigits}`), limit(25))));
+      promises.push(getDocs(query(leadCol, ...scope, where('phone', '==', term), limit(25))));
     } else {
       promises.push(
         getDocs(query(
-          leadCol,
+          leadCol, ...scope,
           where('normalizedPhone', '>=', `+57${cleanDigits}`),
           where('normalizedPhone', '<=', `+57${cleanDigits}\uf8ff`),
           limit(25)
@@ -819,7 +827,7 @@ export async function searchCommercialLeads(
       );
       promises.push(
         getDocs(query(
-          leadCol,
+          leadCol, ...scope,
           where('phone', '>=', `+57${cleanDigits}`),
           where('phone', '<=', `+57${cleanDigits}\uf8ff`),
           limit(25)
@@ -842,7 +850,7 @@ export async function searchCommercialLeads(
     for (const v of variations) {
       promises.push(
         getDocs(query(
-          leadCol,
+          leadCol, ...scope,
           where('name', '>=', v),
           where('name', '<=', v + '\uf8ff'),
           limit(25)

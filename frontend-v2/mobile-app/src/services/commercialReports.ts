@@ -530,32 +530,31 @@ export async function compileMobileCommercialReport(
   };
 
   // 2. Consultas a Firestore: Leads creados en el período, en el mes y con seguimiento en el período
-  // NOTA CRÍTICA: Se consulta ÚNICAMENTE con filtros de desigualdad sobre un solo campo
-  // para que Firestore NO requiera un índice compuesto (assignedTo + createdAt) que bloquearía a los asesores.
+  // Para asesores van con assignedTo == uid (índices compuestos assignedTo + createdAt /
+  // lastFollowUpAt en firestore.indexes.json).
   let periodDocs: FirebaseFirestoreTypes.QueryDocumentSnapshot[] = [];
   let monthDocs: FirebaseFirestoreTypes.QueryDocumentSnapshot[] = [];
   let followUpDocs: FirebaseFirestoreTypes.QueryDocumentSnapshot[] = [];
 
+  // Seguridad (R05): un asesor solo consulta sus leads asignados; las reglas
+  // rechazan cualquier consulta que pueda devolver leads de otros asesores.
+  // (Requiere los índices assignedTo + createdAt / lastFollowUpAt.)
+  const leadsQuery = (): FirebaseFirestoreTypes.Query => {
+    const col = firestore().collection('companies').doc(companyId).collection('leads');
+    return !isUserAdmin && currentUserId ? col.where('assignedTo', '==', currentUserId) : col;
+  };
+
   try {
     const [periodSnap, monthSnap, followUpSnap] = await Promise.all([
-      firestore()
-        .collection('companies')
-        .doc(companyId)
-        .collection('leads')
+      leadsQuery()
         .where('createdAt', '>=', startTs)
         .where('createdAt', '<=', endTs)
         .get(),
-      firestore()
-        .collection('companies')
-        .doc(companyId)
-        .collection('leads')
+      leadsQuery()
         .where('createdAt', '>=', startMonthTs)
         .where('createdAt', '<=', endTs)
         .get(),
-      firestore()
-        .collection('companies')
-        .doc(companyId)
-        .collection('leads')
+      leadsQuery()
         .where('lastFollowUpAt', '>=', startTs)
         .where('lastFollowUpAt', '<=', endTs)
         .get()
@@ -569,10 +568,7 @@ export async function compileMobileCommercialReport(
     console.warn('[CommercialReports] Fallback consultando leads por rango:', err);
     // Fallback: cargar los últimos 300 leads y filtrar en memoria
     try {
-      const fallbackSnap = await firestore()
-        .collection('companies')
-        .doc(companyId)
-        .collection('leads')
+      const fallbackSnap = await leadsQuery()
         .orderBy('createdAt', 'desc')
         .limit(300)
         .get();

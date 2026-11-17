@@ -677,6 +677,8 @@ export function CommercialReportView({
           forRecipient,
           advisorId: effectiveAdvisorId,
           advisorName: currentUserName,
+          // Seguridad (R05): un asesor solo consulta sus leads asignados.
+          ...(!isAdmin && currentUserId ? { scopeAssignedTo: currentUserId } : {}),
         });
 
         if (withAi) {

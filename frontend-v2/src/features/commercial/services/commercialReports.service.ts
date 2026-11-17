@@ -588,6 +588,11 @@ export interface CompileReportOptions {
   targetMonthlyVentas?: number;
   advisorId?: string;
   advisorName?: string;
+  /**
+   * Seguridad (R05): uid del asesor que consulta su propio informe. Si viene,
+   * cada consulta de leads se restringe a assignedTo == uid. Solo para asesores.
+   */
+  scopeAssignedTo?: string;
 }
 
 export async function compileCommercialReportData(
@@ -604,6 +609,7 @@ export async function compileCommercialReportData(
     targetMonthlyCaptaciones = 100,
     targetMonthlyVentas = 3,
   } = options;
+  const leadScope = options.scopeAssignedTo ? [where('assignedTo', '==', options.scopeAssignedTo)] : [];
 
   const startPeriod = new Date(startDate);
   const endPeriod = new Date(endDate);
@@ -769,7 +775,7 @@ export async function compileCommercialReportData(
   // 3. Consultar Leads creados en el período (Captaciones del periodo)
   const leadsPeriodSnap = await getDocs(
     query(
-      collection(db, 'companies', companyId, 'leads'),
+      collection(db, 'companies', companyId, 'leads'), ...leadScope,
       where('createdAt', '>=', startTs),
       where('createdAt', '<=', endTs)
     )
@@ -778,7 +784,7 @@ export async function compileCommercialReportData(
   // 4. Consultar Leads creados en el mes completo (Captaciones acumuladas del mes)
   const leadsMonthSnap = await getDocs(
     query(
-      collection(db, 'companies', companyId, 'leads'),
+      collection(db, 'companies', companyId, 'leads'), ...leadScope,
       where('createdAt', '>=', startMonthTs),
       where('createdAt', '<=', endTs)
     )
@@ -789,7 +795,7 @@ export async function compileCommercialReportData(
   try {
     leadsAssignedPeriodSnap = await getDocs(
       query(
-        collection(db, 'companies', companyId, 'leads'),
+        collection(db, 'companies', companyId, 'leads'), ...leadScope,
         where('advisorAssignedAt', '>=', startTs),
         where('advisorAssignedAt', '<=', endTs)
       )
@@ -803,7 +809,7 @@ export async function compileCommercialReportData(
   try {
     leadsAssignedMonthSnap = await getDocs(
       query(
-        collection(db, 'companies', companyId, 'leads'),
+        collection(db, 'companies', companyId, 'leads'), ...leadScope,
         where('advisorAssignedAt', '>=', startMonthTs),
         where('advisorAssignedAt', '<=', endTs)
       )
@@ -817,7 +823,7 @@ export async function compileCommercialReportData(
   try {
     leadsFollowUpSnap = await getDocs(
       query(
-        collection(db, 'companies', companyId, 'leads'),
+        collection(db, 'companies', companyId, 'leads'), ...leadScope,
         where('lastFollowUpAt', '>=', startTs),
         where('lastFollowUpAt', '<=', endTs)
       )
@@ -1620,7 +1626,7 @@ export async function compileCommercialReportData(
     try {
       const closedLeadsSnap = await getDocs(
         query(
-          collection(db, 'companies', companyId, 'leads'),
+          collection(db, 'companies', companyId, 'leads'), ...leadScope,
           where('pipelineStage', 'in', ['cerrado_ganado', 'vendido'])
         )
       );

@@ -79,7 +79,7 @@ export function PipelinePage() {
     if (!companyId) return;
     setLoading(true);
     try {
-      const effectiveOpts = isAdmin ? opts : { ...opts, advisorId: user?.uid || '' };
+      const effectiveOpts = isAdmin ? opts : { ...opts, advisorId: user?.uid || '', scopeAssignedTo: user?.uid || '' };
       const res = await fetchPipelineCards(companyId, effectiveOpts);
       setCards(res.cards);
       setAdvisors(res.advisors);
@@ -452,7 +452,7 @@ export function PipelinePage() {
         onClose={() => setShowFilterDrawer(false)}
         filters={filterOptions}
         onApplyFilters={(newOpts) => {
-          const safeOpts = isAdmin ? newOpts : { ...newOpts, advisorId: user?.uid || '' };
+          const safeOpts = isAdmin ? newOpts : { ...newOpts, advisorId: user?.uid || '', scopeAssignedTo: user?.uid || '' };
           setFilterOptions(safeOpts);
           if (safeOpts.startDate && safeOpts.endDate) {
             setDateRange({

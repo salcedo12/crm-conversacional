@@ -173,6 +173,12 @@ export interface PipelineFilterOptions {
   startDate?: Date | null;
   endDate?: Date | null;
   limitCount?: number; // 100, 250, 500, 1000
+  /**
+   * Seguridad (R05): uid del asesor que consulta. Si viene, TODAS las consultas a
+   * Firestore se restringen a assignedTo == uid (las reglas solo dejan leer lo propio).
+   * Solo se pasa para asesores; un admin filtrando por asesor usa advisorId.
+   */
+  scopeAssignedTo?: string;
 }
 
 export interface PipelineFilterStats {
@@ -230,6 +236,7 @@ export async function fetchPipelineCards(
         startDate: filterOrAdvisorId.startDate,
         endDate: filterOrAdvisorId.endDate,
         limitCount: filterOrAdvisorId.limitCount || 500,
+        scopeAssignedTo: filterOrAdvisorId.scopeAssignedTo,
       };
 
   // 1. Obtener asesores de la empresa y complementar con oficiales de Meraki
@@ -311,6 +318,8 @@ export async function fetchPipelineCards(
   const leadCol = collection(db, 'companies', companyId, 'leads');
 
   const queriesToRun: Promise<any>[] = [];
+  // Seguridad (R05): un asesor solo consulta sus leads asignados.
+  const scope = opts.scopeAssignedTo ? [where('assignedTo', '==', opts.scopeAssignedTo)] : [];
 
   if (!isHistorical && effectiveStart && effectiveEnd) {
     const startTs = Timestamp.fromDate(effectiveStart);
@@ -318,22 +327,25 @@ export async function fetchPipelineCards(
 
     // Leads con seguimiento registrado en el período
     queriesToRun.push(
-      getDocs(query(leadCol, where('lastFollowUpAt', '>=', startTs), where('lastFollowUpAt', '<=', endTs), limit(500)))
+      getDocs(query(leadCol, ...scope, where('lastFollowUpAt', '>=', startTs), where('lastFollowUpAt', '<=', endTs), limit(500)))
     );
     // Leads captados/creados en el período
     queriesToRun.push(
-      getDocs(query(leadCol, where('createdAt', '>=', startTs), where('createdAt', '<=', endTs), limit(500)))
+      getDocs(query(leadCol, ...scope, where('createdAt', '>=', startTs), where('createdAt', '<=', endTs), limit(500)))
     );
     // Leads asignados en el período
     queriesToRun.push(
-      getDocs(query(leadCol, where('advisorAssignedAt', '>=', startTs), where('advisorAssignedAt', '<=', endTs), limit(300)))
+      getDocs(query(leadCol, ...scope, where('advisorAssignedAt', '>=', startTs), where('advisorAssignedAt', '<=', endTs), limit(300)))
     );
   }
 
-  // Leads con etapa explícita de embudo
-  queriesToRun.push(
-    getDocs(query(leadCol, where('pipelineStage', '!=', null), limit(300)))
-  );
+  // Leads con etapa explícita de embudo (para un asesor ya los cubre la
+  // consulta por assignedTo de abajo; evita un índice extra assignedTo+pipelineStage)
+  if (!opts.scopeAssignedTo) {
+    queriesToRun.push(
+      getDocs(query(leadCol, where('pipelineStage', '!=', null), limit(300)))
+    );
+  }
 
   // Si se filtra por asesor por UID
   if (opts.advisorId && opts.advisorId !== 'all') {
@@ -346,9 +358,9 @@ export async function fetchPipelineCards(
   queriesToRun.push(
     (async () => {
       try {
-        return await getDocs(query(leadCol, orderBy('lastMessageAt', 'desc'), limit(maxLimit)));
+        return await getDocs(query(leadCol, ...scope, orderBy('lastMessageAt', 'desc'), limit(maxLimit)));
       } catch {
-        return await getDocs(query(leadCol, limit(maxLimit)));
+        return await getDocs(query(leadCol, ...scope, limit(maxLimit)));
       }
     })()
   );
