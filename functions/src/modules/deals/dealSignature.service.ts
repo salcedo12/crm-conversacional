@@ -585,6 +585,11 @@ export async function markSignatureCancelled(
   }));
 }
 
+function dealHasDocuBlockDocument(deal: Deal, documentId: string): boolean {
+  return (deal.documents ?? []).some((d) => d.docublockDocumentId === documentId)
+    || (deal.extraSignatures ?? []).some((e) => e.docublockDocumentId === documentId);
+}
+
 async function findDealForWebhookDocument(
   event: DocuBlockWebhookEvent,
 ): Promise<{ ref: DocumentReference; deal: Deal } | null> {
@@ -594,15 +599,16 @@ async function findDealForWebhookDocument(
     const ref = dealsCol(companyId).doc(dealId);
     const snap = await ref.get();
     if (snap.exists) {
-      return { ref, deal: { id: snap.id, companyId, ...snap.data() } as Deal };
+      const deal = { id: snap.id, companyId, ...snap.data() } as Deal;
+      if (dealHasDocuBlockDocument(deal, event.documentId)) {
+        return { ref, deal };
+      }
     }
   }
   const pendingSnap = await db.collectionGroup('deals').where('signaturePending', '==', true).limit(200).get();
   for (const snap of pendingSnap.docs) {
     const data = snap.data() as Deal;
-    const matchedDoc = (data.documents ?? []).some((d) => d.docublockDocumentId === event.documentId)
-      || (data.extraSignatures ?? []).some((e) => e.docublockDocumentId === event.documentId);
-    if (matchedDoc) {
+    if (dealHasDocuBlockDocument(data, event.documentId)) {
       const derivedCompanyId = data.companyId || snap.ref.parent.parent?.id || '';
       return { ref: snap.ref, deal: { ...data, id: snap.id, companyId: derivedCompanyId } };
     }

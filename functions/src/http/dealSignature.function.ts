@@ -99,6 +99,7 @@ const DealSchema = z.object({ companyId: z.string().min(1), dealId: z.string().m
 /** "Actualizar estado" desde el negocio (además de la consulta automática cada 10 min). */
 export const refreshDealSignature = onCall(OPTS, async (request) => {
   const ctx = requireAuth(request);
+  requireRole(ctx, WRITE_ROLES);
   const data = parseInput(DealSchema, request.data, 'actualizar la firma');
   assertCompany(ctx, data.companyId);
   const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
@@ -133,6 +134,9 @@ export const sendDealExtraToSignature = onCall(OPTS, async (request) => {
   const pdfBuffer = Buffer.from(data.base64, 'base64');
   if (!pdfBuffer.length) throw new HttpsError('invalid-argument', 'El archivo PDF está vacío.');
   if (pdfBuffer.length > 10 * 1024 * 1024) throw new HttpsError('invalid-argument', 'El PDF debe pesar máximo 10 MB.');
+  if (pdfBuffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new HttpsError('invalid-argument', 'El archivo debe ser un PDF válido.');
+  }
 
   const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
   const actor = await userDisplayName(data.companyId, ctx.uid);

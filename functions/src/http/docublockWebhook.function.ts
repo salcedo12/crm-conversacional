@@ -29,22 +29,29 @@ export const docublockWebhook = onRequest(
     }
 
     const secret = env.docublockWebhookSecret();
-    if (secret) {
-      const check = verifyDocuBlockWebhookSignature({
-        rawBody: req.rawBody ?? JSON.stringify(req.body ?? {}),
-        timestampHeader: req.get('x-docublock-timestamp'),
-        signatureHeader: req.get('x-docublock-signature'),
-        secret,
-      });
-      if (!check.valid) {
-        logger.warn('[DocuBlock Webhook] Firma HMAC inválida — rechazado');
-        res.status(401).json({ ok: false, error: 'invalid signature' });
-        return;
-      }
-      logger.info('[DocuBlock Webhook] Firma HMAC verificada', { matchedFormat: check.matchedFormat });
-    } else {
-      logger.warn('[DocuBlock Webhook] DOCUBLOCK_WEBHOOK_SECRET no configurado aún');
+    if (!secret) {
+      logger.error('[DocuBlock Webhook] DOCUBLOCK_WEBHOOK_SECRET no configurado — petición rechazada');
+      res.status(503).json({ ok: false, error: 'webhook not configured' });
+      return;
     }
+
+    if (!req.rawBody) {
+      res.status(400).json({ ok: false, error: 'missing raw body' });
+      return;
+    }
+
+    const check = verifyDocuBlockWebhookSignature({
+      rawBody: req.rawBody,
+      timestampHeader: req.get('x-docublock-timestamp'),
+      signatureHeader: req.get('x-docublock-signature'),
+      secret,
+    });
+    if (!check.valid) {
+      logger.warn('[DocuBlock Webhook] Firma HMAC inválida — rechazado');
+      res.status(401).json({ ok: false, error: 'invalid signature' });
+      return;
+    }
+    logger.info('[DocuBlock Webhook] Firma HMAC verificada', { matchedFormat: check.matchedFormat });
 
     const event = parseDocuBlockWebhookEvent(req.body);
     if (!event) {
