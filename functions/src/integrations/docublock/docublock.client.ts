@@ -7,7 +7,7 @@ import type { DocuBlockCity, DocuBlockCountry, DocuBlockDocument, DocuBlockUser,
  * Docs: https://documenter.getpostman.com/view/31094055/2sA3e2gpwM
  */
 
-const BASE_URL = process.env.DOCUBLOCK_BASE_URL || 'https://docublock-bridge-prod-hbfpxe3clq-ue.a.run.app';
+const BASE_URL = process.env.DOCUBLOCK_BASE_URL || 'https://bridge.docublock.co';
 const TIMEOUT_MS = 60_000;
 
 export class DocuBlockError extends Error {
