@@ -5,9 +5,8 @@ import { refreshSignatures } from '../modules/deals/dealSignature.service';
 import type { Deal } from '../modules/deals/deals.types';
 
 /**
- * AUTOMÁTICO: cada 10 min consulta en DocuBlock los contratos en firma (negocios con
- * `signaturePending`) y actualiza quién firmó; al terminar guarda el PDF firmado.
- * DocuBlock no nos avisa (su webhook es de otro sistema), por eso se consulta.
+ * AUTOMÁTICO (respaldo cada 10 min): consulta en DocuBlock los contratos en firma
+ * pendientes por si algún evento de `docublockWebhook` (Webhooks v2) falló o no llegó.
  */
 export const processDealSignatures = onSchedule(
   {

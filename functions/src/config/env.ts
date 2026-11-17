@@ -255,6 +255,8 @@ export const env = {
   mailConfigured: () => !!process.env.SMTP_HOST && !!process.env.SMTP_USER && !!process.env.SMTP_PASS,
 
   openaiApiKey:      () => process.env.OPENAI_API_KEY ?? '',
+  /** Secreto HMAC-SHA256 de DocuBlock Webhooks v2 (cabecera X-Docublock-Signature). */
+  docublockWebhookSecret: () => process.env.DOCUBLOCK_WEBHOOK_SECRET ?? '',
   /** ElevenLabs API Key para notas de voz de Victoria Sarmiento (Andrea Paisa). */
   elevenlabsApiKey:  () => process.env.ELEVENLABS_API_KEY ?? '',
   /** Voice ID de Andrea Paisa en ElevenLabs. */

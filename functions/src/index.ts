@@ -18,6 +18,7 @@ import './config/globalOptions';
 export { ycloudWebhook }      from './http/ycloudWebhook.function';
 export { metaMessagingWebhook } from './http/metaMessagingWebhook.function';
 export { daptaWebhook }       from './http/daptaWebhook.function';
+export { docublockWebhook }   from './http/docublockWebhook.function';
 export { leadWebhook }        from './http/leadWebhook.function';
 export { errorAlertWebhook }  from './http/errorAlertWebhook.function';
 export { onMessageCreated }   from './triggers/messageCreated.trigger';

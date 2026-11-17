@@ -25,8 +25,13 @@ import {
   userFullName,
   type EndorsementInput,
 } from '../../integrations/docublock/docublock.logic';
+import {
+  classifyDocuBlockWebhookEvent,
+  type DocuBlockWebhookEvent,
+} from '../../integrations/docublock/docublockWebhook.logic';
+import { webhookEventExpireAt } from '../../utils/webhookTtl';
 import { moveLotToTramite } from '../inventory/lotReservation.service';
-import { clientsCol } from './dealAccess';
+import { clientsCol, dealsCol } from './dealAccess';
 import { dealActivityDoc, dealActivityRef, leadRef } from './dealAudit';
 import { randomUUID } from 'crypto';
 import { isCurrentDocument, latestCurrentDocument, lotLabel, lotSnapshot } from './dealDocumentLot';
@@ -578,4 +583,94 @@ export async function markSignatureCancelled(
     companyId: deal.companyId, leadId: deal.leadId, dealId: deal.id, actorId: actor.uid, actorName: actor.name,
     event: 'signature_update', title: `${titleLabel}: firma anulada`, lines: [reason],
   }));
+}
+
+async function findDealForWebhookDocument(
+  event: DocuBlockWebhookEvent,
+): Promise<{ ref: DocumentReference; deal: Deal } | null> {
+  const companyId = event.relatedInfo.crmCompanyId;
+  const dealId = event.relatedInfo.crmDealId;
+  if (companyId && dealId) {
+    const ref = dealsCol(companyId).doc(dealId);
+    const snap = await ref.get();
+    if (snap.exists) {
+      return { ref, deal: { id: snap.id, companyId, ...snap.data() } as Deal };
+    }
+  }
+  const pendingSnap = await db.collectionGroup('deals').where('signaturePending', '==', true).limit(200).get();
+  for (const snap of pendingSnap.docs) {
+    const data = snap.data() as Deal;
+    const matchedDoc = (data.documents ?? []).some((d) => d.docublockDocumentId === event.documentId)
+      || (data.extraSignatures ?? []).some((e) => e.docublockDocumentId === event.documentId);
+    if (matchedDoc) {
+      const derivedCompanyId = data.companyId || snap.ref.parent.parent?.id || '';
+      return { ref: snap.ref, deal: { ...data, id: snap.id, companyId: derivedCompanyId } };
+    }
+  }
+  return null;
+}
+
+/**
+ * Procesa un evento de DocuBlock Webhooks v2 sobre un documento del CRM.
+ * Ignora silenciosamente eventos de prueba o de otros sistemas (SmartHome) que
+ * no corresponden a ningún negocio del CRM.
+ */
+export async function applyDocuBlockWebhookEvent(
+  event: DocuBlockWebhookEvent,
+): Promise<{ matched: boolean; ignored?: boolean; duplicate?: boolean; changed?: boolean }> {
+  const action = classifyDocuBlockWebhookEvent(event.type);
+  if (action.kind === 'ignore') return { matched: false, ignored: true };
+
+  const found = await findDealForWebhookDocument(event);
+  if (!found) return { matched: false, ignored: true };
+  const { ref, deal } = found;
+
+  if (event.id) {
+    const eventRef = db.collection('companies').doc(deal.companyId).collection('webhookEvents').doc(`docublock_${event.id}`);
+    try {
+      await eventRef.create({
+        eventId: event.id,
+        type: event.type,
+        documentId: event.documentId,
+        processedAt: Timestamp.now(),
+        expireAt: webhookEventExpireAt(),
+        channel: 'docublock_v2',
+      });
+    } catch (err: unknown) {
+      if ((err as { code?: number })?.code === 6) return { matched: true, duplicate: true };
+      throw err;
+    }
+  }
+
+  if (action.kind === 'refresh') {
+    const res = await refreshSignatures(ref, deal);
+    return { matched: true, changed: res.changed };
+  }
+
+  const targetDoc = (deal.documents ?? []).find((d) => d.docublockDocumentId === event.documentId);
+  const targetExtra = (deal.extraSignatures ?? []).find((e) => e.docublockDocumentId === event.documentId);
+  const item = targetDoc ?? targetExtra;
+  if (!item || item.signatureStatus === 'firmado' || item.signatureStatus === action.status) {
+    return { matched: true, changed: false };
+  }
+
+  item.signatureStatus = action.status;
+  item.lastStatusCheckAt = Timestamp.now();
+  await saveSignatureState(ref, deal);
+
+  const label = targetDoc ? (targetDoc.kind === 'preventa' ? 'Preventa' : 'Promesa') : targetExtra!.name;
+  const actionLabel = action.status === 'rechazado'
+    ? `rechazada${event.signerEmail ? ` por ${event.signerEmail}` : ''}`
+    : action.status === 'anulado' ? 'anulada en DocuBlock' : 'vencida sin completar';
+  await dealActivityRef(deal.companyId, deal.leadId).set(dealActivityDoc({
+    companyId: deal.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: 'docublock',
+    actorName: 'DocuBlock',
+    event: 'signature_update',
+    title: `${label}: firma ${actionLabel}`,
+    lines: [`Evento webhook v2 (${event.type})`],
+  }));
+  return { matched: true, changed: true };
 }
