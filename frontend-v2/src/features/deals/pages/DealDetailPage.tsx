@@ -1315,6 +1315,7 @@ export function DealDetailPage() {
                   companyId={companyId}
                   deal={deal}
                   canManage={isAdmin}
+                  canSend={!readOnly}
                   onChanged={handleRefresh}
                   onViewSigned={(doc) => handleView(doc.kind, doc.version, true)}
                 />

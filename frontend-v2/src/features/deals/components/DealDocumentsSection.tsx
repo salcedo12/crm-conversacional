@@ -13,7 +13,7 @@ import { DealSignatureStatus } from './DealSignatureStatus';
 import { dealActionCls } from './DealSheet';
 import { isCurrentDocument, latestCurrentDocument, lotLabel } from '../utils/documentLot';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { isAdminRole } from '@/features/auth/types';
+import { isAdminRole, isViewerRole } from '@/features/auth/types';
 
 const LABELS: Record<DealDocumentKind, string> = {
   preventa: 'Contrato de preventa',
@@ -26,8 +26,9 @@ const LABELS: Record<DealDocumentKind, string> = {
  */
 export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId: string; deal: DealSummary; onChanged: () => void }) {
   const { role, platformAdmin } = useAuth();
-  // Los asesores solo pueden ver los contratos; descargarlos (PDF o Word) es de administradores.
+  // Los asesores solo pueden ver los contratos en pantalla y enviarlos a firma; descargarlos (PDF o Word) es de administradores.
   const canDownload = platformAdmin || isAdminRole(role);
+  const canSendSignature = platformAdmin || !isViewerRole(role);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ title: string; kind: DealDocumentKind; version: number; pdf: { fileName: string; blob: Blob } } | null>(null);
@@ -146,7 +147,7 @@ export function DealDocumentsSection({ companyId, deal, onChanged }: { companyId
         )}
       </div>
       {error && <p className="mt-1.5 text-[11px] text-red-300">{error}</p>}
-      <DealSignatureStatus companyId={companyId} deal={deal} canManage={canDownload} onChanged={onChanged} onViewSigned={viewSigned} />
+      <DealSignatureStatus companyId={companyId} deal={deal} canManage={canDownload} canSend={canSendSignature} onChanged={onChanged} onViewSigned={viewSigned} />
       {preview && <DealDocumentPreview title={preview.title} pdf={preview.pdf} onDownloadWord={canDownload ? () => downloadDealDocument(companyId, deal.id, preview.kind, preview.version) : undefined} onClose={() => setPreview(null)} />}
     </div>
   );

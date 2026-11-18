@@ -45,13 +45,17 @@ interface SignatureCardItem {
  * Firma con DocuBlock dentro del negocio: avance de cada firmante (se actualiza solo cada
  * 10 min), reenviar invitación, ver PDFs firmados y enviar contratos o documentos adicionales.
  */
-export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onViewSigned }: {
+export function DealSignatureStatus({ companyId, deal, canManage, canSend, onChanged, onViewSigned }: {
   companyId: string;
   deal: DealSummary;
+  /** Permisos administrativos sobre firmas (marcar anulada, descargar PDF). */
   canManage: boolean;
+  /** Permiso para enviar documentos a firma y reenviar invitaciones (asesores y admins). */
+  canSend?: boolean;
   onChanged: () => void;
   onViewSigned: (doc: DealDocumentInfo) => Promise<void>;
 }) {
+  const sendAllowed = canSend ?? canManage;
   const [modalMode, setModalMode] = useState<'contracts' | 'extra' | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,9 +68,9 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
   const sentDocs = (['preventa', 'promesa'] as DealDocumentKind[]).map(latest).filter((d): d is DealDocumentInfo => !!d?.docublockDocumentId);
   const extras = deal.extraSignatures ?? [];
 
-  const canSendContracts = canManage && deal.status !== 'anulado' && deal.status !== 'borrador' && !!latest('preventa')
+  const canSendContracts = sendAllowed && deal.status !== 'anulado' && deal.status !== 'borrador' && !!latest('preventa')
     && (['preventa', 'promesa'] as DealDocumentKind[]).some((k) => { const s = latest(k)?.signatureStatus; return !s || (!pending(s) && s !== 'firmado'); });
-  const canSendExtra = canManage && deal.status !== 'anulado' && deal.status !== 'borrador' && deal.buyers.length > 0 && !!deal.lot;
+  const canSendExtra = sendAllowed && deal.status !== 'anulado' && deal.status !== 'borrador' && deal.buyers.length > 0 && !!deal.lot;
 
   if (!sentDocs.length && !extras.length && !canSendContracts && !canSendExtra) return null;
 
@@ -180,7 +184,7 @@ export function DealSignatureStatus({ companyId, deal, canManage, onChanged, onV
                       <span className="truncate">{s.name}</span>
                       <span className="shrink-0 text-zinc-500">({s.typeSign})</span>
                     </span>
-                    {canManage && !s.signed && pending(item.signatureStatus) && s.docublockSignerId && (
+                    {sendAllowed && !s.signed && pending(item.signatureStatus) && s.docublockSignerId && (
                       <button
                         type="button"
                         disabled={!!busy}

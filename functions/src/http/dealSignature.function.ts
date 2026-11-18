@@ -15,8 +15,9 @@ import { documentPdf, fileName, generateDocument } from './dealDocuments.functio
 import { signatureDocOf } from '../modules/deals/dealSignature.logic';
 
 /**
- * Módulo Negocios — Fase 5: firma con DocuBlock. Enviar a firma, reenviar la invitación
- * y marcar anulado lo hacen administradores y gerentes (los asesores solo ven el estado).
+ * Módulo Negocios — Fase 5: firma con DocuBlock. Administradores, gerentes y asesores
+ * (sobre sus propios negocios) pueden consultar opciones, enviar a firma, enviar PDFs
+ * adicionales y reenviar invitaciones; marcar anulado queda reservado a administradores.
  */
 
 const OPTS = { region: 'us-central1', timeoutSeconds: 180, memory: '512MiB' as const, secrets: ['DOCUBLOCK_API_KEY', 'DOCX_PDF_KEY'] };
@@ -25,7 +26,7 @@ const CompanySchema = z.object({ companyId: z.string().min(1) });
 
 export const getDealSignatureOptions = onCall(OPTS, async (request) => {
   const ctx = requireAuth(request);
-  requireRole(ctx, ADMIN_ROLES);
+  requireRole(ctx, WRITE_ROLES);
   const data = parseInput(CompanySchema, request.data, 'cargar las opciones de firma');
   assertCompany(ctx, data.companyId);
   return signatureOptions();
@@ -77,7 +78,7 @@ const SendSchema = z.object({
 
 export const sendDealToSignature = onCall(OPTS, async (request) => {
   const ctx = requireAuth(request);
-  requireRole(ctx, ADMIN_ROLES);
+  requireRole(ctx, WRITE_ROLES);
   const data = parseInput(SendSchema, request.data, 'enviar a firma');
   assertCompany(ctx, data.companyId);
 
@@ -127,7 +128,7 @@ const SendExtraSchema = z.object({
 
 export const sendDealExtraToSignature = onCall(OPTS, async (request) => {
   const ctx = requireAuth(request);
-  requireRole(ctx, ADMIN_ROLES);
+  requireRole(ctx, WRITE_ROLES);
   const data = parseInput(SendExtraSchema, request.data, 'enviar documento adicional a firma');
   assertCompany(ctx, data.companyId);
 
@@ -188,7 +189,7 @@ const ResendSchema = DealSchema.extend({
 
 export const resendDealSignature = onCall(OPTS, async (request) => {
   const ctx = requireAuth(request);
-  requireRole(ctx, ADMIN_ROLES);
+  requireRole(ctx, WRITE_ROLES);
   const data = parseInput(ResendSchema, request.data, 'reenviar la invitación');
   assertCompany(ctx, data.companyId);
   const { deal } = await loadDeal(ctx, data.companyId, data.dealId);
