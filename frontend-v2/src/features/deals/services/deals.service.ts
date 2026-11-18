@@ -168,6 +168,22 @@ export const MARITAL_LABELS: Record<MaritalStatus, string> = {
   separado:    'Separado(a)',
 };
 
+export const PROJECT_NAMES: Record<string, string> = {
+  'rio-claro': 'Río Claro',
+  'cañon-arizona': 'Cañón de Arizona',
+  'arizona-1': 'Arizona 1',
+  'arizona-2': 'Arizona 2',
+  'gran-arizona': 'Gran Arizona',
+  'laguna-mar': 'Laguna Mar',
+  'sobre-montañas': 'Sobre Montañas',
+  'llano-grande': 'Llano Grande',
+};
+
+export function projectName(projectId: string | undefined): string {
+  if (!projectId) return 'Proyecto sin definir';
+  return PROJECT_NAMES[projectId] || projectId.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export const GENDER_LABELS: Record<Gender, string> = {
   masculino: 'Masculino',
   femenino:  'Femenino',

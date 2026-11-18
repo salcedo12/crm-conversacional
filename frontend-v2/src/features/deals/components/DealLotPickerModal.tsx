@@ -54,7 +54,10 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
 
   const loadLots = useCallback(async (silent = false) => {
     if (!projectId) return;
-    if (!silent) setLoadingLots(true);
+    if (!silent) {
+      setLoadingLots(true);
+      setError(null);
+    }
     try {
       const res = await listAvailableLots(companyId, projectId);
       setLots(res.lots);
@@ -78,9 +81,11 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
 
   const project = projects.find((p) => p.id === projectId);
   const sectors = useMemo(() => Array.from(new Set(lots.map((l) => l.sector))), [lots]);
-  const visible = useMemo(() => lots.filter((l) =>
-    (!sector || l.sector === sector) && (!query.trim() || l.number.startsWith(query.trim()) || l.code.includes(query.trim()))),
-  [lots, sector, query]);
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return lots.filter((l) =>
+      (!sector || l.sector === sector) && (!q || l.number.toLowerCase().startsWith(q) || l.code.toLowerCase().includes(q)));
+  }, [lots, sector, query]);
 
   const handleReserve = async () => {
     if (!selected) return;
@@ -121,7 +126,6 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Número o código"
-                inputMode="numeric"
                 type="search"
                 className={`${dealInputCls} pl-9 sm:pl-8`}
               />

@@ -17,6 +17,7 @@ import {
   createDeal,
   DEAL_STATUS_LABELS,
   listLeadDeals,
+  projectName,
   reassignDealAdvisor,
   type DealStatus,
   type DealSummary,
@@ -33,7 +34,19 @@ const STATUS_STYLES: Record<DealStatus, string> = {
 };
 
 /** Negocios del lead (sección del LeadDrawer): crear negocio (1 por cada lote) y registrar sus compradores. */
-export function LeadDealsPanel({ companyId, lead, projectHint }: { companyId: string; lead: Lead; projectHint?: string }) {
+export function LeadDealsPanel({
+  companyId,
+  lead,
+  projectHint,
+  projectLabel,
+  compactExisting = false,
+}: {
+  companyId: string;
+  lead: Lead;
+  projectHint?: string;
+  projectLabel?: string;
+  compactExisting?: boolean;
+}) {
   const navigate = useNavigate();
   const { role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
@@ -54,6 +67,7 @@ export function LeadDealsPanel({ companyId, lead, projectHint }: { companyId: st
   const [reassignTargetId, setReassignTargetId] = useState('');
   const [reassignBusy, setReassignBusy] = useState(false);
   const [infoNotice, setInfoNotice] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
 
   const load = useCallback(async () => {
     setError(null);
@@ -145,20 +159,118 @@ export function LeadDealsPanel({ companyId, lead, projectHint }: { companyId: st
   };
 
   const hasOpenDeal = deals.some((d) => d.status !== 'anulado');
+  const toggleExpanded = (id: string) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const createBlock = !readOnly && !loading && (
+    <div className={compactExisting ? 'space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3' : 'space-y-2 pt-1'}>
+      {compactExisting && projectLabel && (
+        <p className="text-[11px] font-semibold text-emerald-300">
+          Proyecto actual: <span className="text-zinc-100">{projectLabel}</span>
+        </p>
+      )}
+      {isAdmin && advisorsList.length > 0 && (
+        <label className="block space-y-1">
+          <span className="text-[11px] font-semibold text-zinc-400">
+            Broker / Asesor asignado (sale en preventa)
+          </span>
+          <select
+            value={selectedAdvisorId}
+            onChange={(e) => setSelectedAdvisorId(e.target.value)}
+            className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-200 outline-none focus:border-emerald-500"
+          >
+            {advisorsList.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.displayName || a.email}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <button
+        type="button"
+        onClick={handleCreate}
+        disabled={creating}
+        className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/90 px-3 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50 sm:inline-flex sm:min-h-0 sm:w-auto sm:rounded-md sm:px-3 sm:py-1.5 sm:text-xs"
+      >
+        {creating ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+        {projectLabel
+          ? (hasOpenDeal ? `Agregar negocio en ${projectLabel}` : `Crear negocio en ${projectLabel}`)
+          : (hasOpenDeal ? 'Agregar otro negocio / lote' : 'Crear negocio')}
+      </button>
+    </div>
+  );
 
   return (
     <div className="space-y-2.5">
+      {compactExisting && createBlock}
+      {infoNotice && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{infoNotice}</p>}
+      {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
+
       {loading ? (
         <p className="flex items-center gap-1.5 text-xs text-zinc-500"><Loader2 size={12} className="animate-spin" /> Cargando negocios…</p>
       ) : deals.length === 0 ? (
-        <p className="text-xs text-zinc-500">Sin negocios. Cuando el cliente decida comprar, crea el negocio para registrar sus datos.</p>
+        <p className="text-xs text-zinc-500">Sin negocios previos. Cuando el cliente decida comprar, crea el negocio para registrar sus datos.</p>
       ) : (
-        deals.map((deal) => {
+        <div className="space-y-2">
+          {compactExisting && (
+            <p className="pt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+              Negocios / lotes registrados del cliente ({deals.length})
+            </p>
+          )}
+          {deals.map((deal) => {
           const names = deal.buyerNames?.length
             ? deal.buyerNames
             : deal.buyerProfiles.map((b) => `${b.firstNames} ${b.lastNames}`.trim());
           const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
           const canEditBuyers = !readOnly && canEditDealBuyers(deal.status, isAdmin);
+          const isNewUnassignedDraft = deal.status === 'borrador' && !deal.lot && !(deal.documents?.length ?? 0);
+          const isCompact = compactExisting && !isNewUnassignedDraft && !expandedIds.has(deal.id);
+          if (isCompact) {
+            const plan = deal.plan;
+            return (
+              <div key={deal.id} className="rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[deal.status]}`}>
+                      {DEAL_STATUS_LABELS[deal.status]}
+                    </span>
+                    <span className="text-xs font-bold text-zinc-100 truncate">
+                      {deal.lot
+                        ? `${projectName(deal.lot.projectId)} · ${deal.lot.sector} · Lote ${deal.lot.lotNumber}`
+                        : 'Sin lote asignado'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(deal.id)}
+                      className="rounded-md border border-zinc-700 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+                    >
+                      Detalle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/dashboard/deals/${deal.id}`)}
+                      className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] font-semibold text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300"
+                    >
+                      <ExternalLink size={11} /> Ver ficha
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-1.5 text-[11px] text-zinc-400 truncate">
+                  {names.length ? names.join(' · ') : 'Sin compradores'}
+                  {deal.advisorName ? ` · Broker: ${deal.advisorName}` : ''}
+                  {plan ? ` · ${formatPesos(Math.max(0, plan.landValue - (plan.benefit ?? 0)))}` : ''}
+                </p>
+              </div>
+            );
+          }
           return (
             <div key={deal.id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-3 sm:rounded-lg sm:py-2.5">
               <div className="flex items-center justify-between gap-2">
@@ -166,17 +278,31 @@ export function LeadDealsPanel({ companyId, lead, projectHint }: { companyId: st
                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[deal.status]}`}>
                     {DEAL_STATUS_LABELS[deal.status]}
                   </span>
+                  {deal.lot?.projectId && (
+                    <span className="text-[10px] font-semibold text-emerald-400">{projectName(deal.lot.projectId)}</span>
+                  )}
                   {deal.createdAt && (
                     <span className="text-[10px] text-zinc-600">{new Date(deal.createdAt).toLocaleDateString('es-CO')}</span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => navigate(`/dashboard/deals/${deal.id}`)}
-                  className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] font-semibold text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300"
-                >
-                  <ExternalLink size={11} /> Ver ficha
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {compactExisting && !isNewUnassignedDraft && (
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(deal.id)}
+                      className="rounded-md border border-zinc-700 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+                    >
+                      Resumir
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/dashboard/deals/${deal.id}`)}
+                    className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] font-semibold text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300"
+                  >
+                    <ExternalLink size={11} /> Ver ficha
+                  </button>
+                </div>
               </div>
               {deal.status !== 'anulado' && <DealSteps deal={deal} />}
               <p className="mt-2 text-sm text-zinc-200 sm:text-xs sm:text-zinc-300">
@@ -296,43 +422,13 @@ export function LeadDealsPanel({ companyId, lead, projectHint }: { companyId: st
               )}
             </div>
           );
-        })
-      )}
-
-      {!readOnly && !loading && (
-        <div className="space-y-2 pt-1">
-          {isAdmin && advisorsList.length > 0 && (
-            <label className="block space-y-1">
-              <span className="text-[11px] font-semibold text-zinc-400">
-                Broker / Asesor asignado (sale en preventa)
-              </span>
-              <select
-                value={selectedAdvisorId}
-                onChange={(e) => setSelectedAdvisorId(e.target.value)}
-                className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-200 outline-none focus:border-emerald-500"
-              >
-                {advisorsList.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.displayName || a.email}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={creating}
-            className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 sm:inline-flex sm:min-h-0 sm:w-auto sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-[11px]"
-          >
-            {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-            {hasOpenDeal ? 'Agregar otro negocio / lote' : 'Crear negocio'}
-          </button>
+        })}
         </div>
       )}
 
-      {infoNotice && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{infoNotice}</p>}
-      {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
+      {!compactExisting && createBlock}
+      {!compactExisting && infoNotice && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{infoNotice}</p>}
+      {!compactExisting && error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
 
       {planning && (
         <DealPlanModal

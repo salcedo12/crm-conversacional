@@ -10,6 +10,7 @@ import {
   DEAL_STATUS_LABELS,
   listCompanyDeals,
   listInventoryProjects,
+  projectName,
   type DealAttachmentCategory,
   type DealStatus,
   type DealSummary,
@@ -22,16 +23,7 @@ import { SmartHomeSalesPanel } from '../components/SmartHomeSalesPanel';
 
 const NO_LOT_PROJECT_KEY = '__sin_lote__';
 
-const PROJECT_NAMES: Record<string, string> = {
-  'rio-claro': 'Río Claro',
-  'cañon-arizona': 'Cañón de Arizona',
-  'arizona-1': 'Arizona 1',
-  'arizona-2': 'Arizona 2',
-  'gran-arizona': 'Gran Arizona',
-  'laguna-mar': 'Laguna Mar',
-  'sobre-montañas': 'Sobre Montañas',
-  'llano-grande': 'Llano Grande',
-};
+export { projectName };
 
 interface ProjectCatalogItem {
   key: string;
@@ -78,11 +70,6 @@ export function money(value = 0) {
 
 export function dateTime(value: number | null | undefined) {
   return value ? new Date(value).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
-}
-
-export function projectName(projectId: string | undefined) {
-  if (!projectId) return 'Proyecto sin definir';
-  return PROJECT_NAMES[projectId] || projectId.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function supportStats(deal: DealSummary) {
@@ -312,7 +299,6 @@ export function DealsPage() {
       {creatingDeal && companyId && (
         <NewDealByPhoneModal
           companyId={companyId}
-          projectHint={isNoLotView ? undefined : (selectedProject ?? undefined)}
           onClose={() => setCreatingDeal(false)}
           onChanged={() => void load()}
         />
@@ -346,6 +332,11 @@ export function DealsPage() {
   }
 
   const realSales = scopedSales.filter((sale) => !sale.ignored).length;
+  const activeProjectLabel = isNoLotView
+    ? undefined
+    : (selectedSector && selectedSector !== 'all'
+      ? `${selectedProjectConfig?.name || 'Laguna Mar'} · ${LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.name || selectedSector}`
+      : selectedProjectConfig?.name);
 
   return (
     <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
@@ -500,6 +491,7 @@ export function DealsPage() {
         <NewDealByPhoneModal
           companyId={companyId}
           projectHint={isNoLotView ? undefined : (selectedProject ?? undefined)}
+          projectLabel={activeProjectLabel}
           onClose={() => setCreatingDeal(false)}
           onChanged={() => void load()}
         />

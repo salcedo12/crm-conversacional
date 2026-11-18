@@ -10,9 +10,10 @@ import { DealSheet, dealInputCls } from './DealSheet';
  * se crea y arma su negocio (compradores, lote, plan, documentos y firma), con el mismo
  * panel que tiene el lead en la Bandeja.
  */
-export function NewDealByPhoneModal({ companyId, projectHint, onClose, onChanged }: {
+export function NewDealByPhoneModal({ companyId, projectHint, projectLabel, onClose, onChanged }: {
   companyId: string;
   projectHint?: string;
+  projectLabel?: string;
   onClose: () => void;
   /** Se llama al cerrar para recargar la lista de negocios. */
   onChanged: () => void;
@@ -51,7 +52,15 @@ export function NewDealByPhoneModal({ companyId, projectHint, onClose, onChanged
   })();
 
   return (
-    <DealSheet title="Nuevo negocio" subtitle="Busca al cliente por su celular para crear y armar su negocio." icon={<Phone size={18} />} onClose={close} width="md" layer="base" bodyClassName="space-y-3">
+    <DealSheet
+      title={projectLabel ? `Nuevo negocio · ${projectLabel}` : 'Nuevo negocio'}
+      subtitle={projectLabel ? `Busca al cliente por su celular para crear un negocio en ${projectLabel}.` : 'Busca al cliente por su celular para crear y armar su negocio.'}
+      icon={<Phone size={18} />}
+      onClose={close}
+      width="md"
+      layer="base"
+      bodyClassName="space-y-3"
+    >
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void search(); }}>
         <input
           autoFocus
@@ -75,7 +84,7 @@ export function NewDealByPhoneModal({ companyId, projectHint, onClose, onChanged
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
           <p className="text-base font-bold text-zinc-100 sm:text-sm">{lead.name || 'Sin nombre'}</p>
           <p className="mb-3 text-xs text-zinc-500 sm:text-[11px]">{lead.phone}{result?.advisorName ? ` · Asesor: ${result.advisorName}` : ''}</p>
-          <LeadDealsPanel companyId={companyId} lead={lead} projectHint={projectHint} />
+          <LeadDealsPanel companyId={companyId} lead={lead} projectHint={projectHint} projectLabel={projectLabel} compactExisting />
         </div>
       )}
     </DealSheet>
