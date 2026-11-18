@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Calculator, CheckCircle2, Clock, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Calculator, Check, CheckCircle2, ChevronDown, Clock, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { DealField as Field, DealSheet, dealInputCls as inputCls } from './DealSheet';
 import {
@@ -201,6 +201,37 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
     });
   };
   const hasBadDates = Object.keys(badDates).length > 0;
+
+  type PlanStep = 1 | 2 | 3 | 4;
+  const [activeStep, setActiveStep] = useState<PlanStep>(1);
+  const [openSteps, setOpenSteps] = useState<Set<PlanStep>>(() => new Set([1]));
+  const [step3Visited, setStep3Visited] = useState(() => Boolean(deal.plan));
+  const stepRefs = useRef<Record<PlanStep, HTMLElement | null>>({ 1: null, 2: null, 3: null, 4: null });
+
+  const goToStep = (next: PlanStep, collapsePrev?: PlanStep) => {
+    if (next === 3 || collapsePrev === 3) setStep3Visited(true);
+    setActiveStep(next);
+    setOpenSteps((prev) => {
+      const copy = new Set(prev);
+      if (collapsePrev) copy.delete(collapsePrev);
+      copy.add(next);
+      return copy;
+    });
+    window.requestAnimationFrame(() => {
+      stepRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
+  const toggleStep = (step: PlanStep) => {
+    if (step === 3) setStep3Visited(true);
+    setActiveStep(step);
+    setOpenSteps((prev) => {
+      const copy = new Set(prev);
+      if (copy.has(step)) copy.delete(step);
+      else copy.add(step);
+      return copy;
+    });
+  };
 
   // Sondeo cada 4 segundos mientras la aprobación esté pendiente
   useEffect(() => {
@@ -485,6 +516,32 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   const setExtraordinary = (list: SimpleInputs['extraordinary']) => setSimple({ ...simple, extraordinary: list });
   const setRanges = (list: NonNullable<SimpleInputs['ordinaryRanges']>) => setSimple({ ...simple, ordinaryRanges: list });
 
+  const step1Complete = landValue > 0 && termMonths !== null && !specialIssue && !(severanceAmount > 0 && !severanceFund.trim());
+  const step2Complete = !hasBadDates && !termAlert && summary.separationTotal > 0 && summary.difference === 0 && summary.issues.length === 0;
+  const step3Complete = step3Visited || Boolean(deal.plan);
+  const step4Complete = step1Complete && step2Complete && isVerified && canSave;
+
+  const termLabel = special
+    ? `Especial (${termMonths ?? '?'} m)`
+    : termMonths === 0
+      ? 'De contado'
+      : termMonths !== null
+        ? `${termMonths} meses`
+        : 'Sin plazo';
+  const step1Summary = `${termLabel} · Total cliente: ${formatPesos(summary.totalLand)}${benefit > 0 ? ` · Bono ${formatPesos(benefit)}` : ''}`;
+  const step2Summary = `Sep. ${formatPesos(summary.separationTotal)} · Ord. ${formatPesos(summary.ordinaryTotal)}${summary.extraordinaryTotal > 0 ? ` · Extra ${formatPesos(summary.extraordinaryTotal)}` : ''} · ${summary.difference === 0 ? 'Cuadra' : summary.difference > 0 ? `Faltan ${formatPesos(summary.difference)}` : `Sobran ${formatPesos(-summary.difference)}`}`;
+  const step3Summary = `${referralName(referredBy) ? `Referido: ${referralName(referredBy)}` : 'Sin referido'}${notes.trim() ? ' · Con observaciones' : ''}`;
+  const step4Summary = isVerified
+    ? (canSave ? 'Plan comprobado y listo para guardar' : 'Comprobación con alertas pendientes')
+    : 'Revisa el resumen final y pulsa "Comprobar plan"';
+
+  const stepItems: Array<{ step: PlanStep; label: string; complete: boolean }> = [
+    { step: 1, label: 'Plazo y valor', complete: step1Complete },
+    { step: 2, label: 'Plan de pagos', complete: step2Complete },
+    { step: 3, label: 'Referido y notas', complete: step3Complete },
+    { step: 4, label: 'Comprobación', complete: step4Complete },
+  ];
+
   return (
     <DealSheet
       title="Plan de negocio"
@@ -497,7 +554,39 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       )}
       onClose={onClose}
       width="xl"
-      bodyClassName="space-y-4"
+      bodyClassName="space-y-3"
+      toolbar={
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          {stepItems.map(({ step, label, complete }) => {
+            const isActive = activeStep === step;
+            return (
+              <button
+                key={step}
+                type="button"
+                onClick={() => goToStep(step)}
+                className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition ${
+                  isActive
+                    ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100'
+                    : complete
+                      ? 'border-emerald-500/30 bg-zinc-950/60 text-emerald-300 hover:border-emerald-500/50'
+                      : 'border-zinc-800 bg-zinc-950/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                }`}
+              >
+                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                  complete
+                    ? 'bg-emerald-500 text-zinc-950'
+                    : isActive
+                      ? 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/50'
+                      : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {complete ? <Check size={11} strokeWidth={3} /> : step}
+                </span>
+                <span className="truncate font-semibold">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      }
       footer={
         <div className="space-y-2.5">
           {/* Cuadre siempre visible: en celular el resumen queda muy abajo. */}
@@ -549,7 +638,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-[auto_1fr] gap-2 sm:flex sm:justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <Button
                 variant="ghost"
                 onClick={() => {
@@ -562,35 +651,74 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
               >
                 Cancelar
               </Button>
-              <Button onClick={handleSave} loading={saving} disabled={!canSave} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
-                Guardar plan
-              </Button>
+              <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+                {activeStep < 4 && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => goToStep((activeStep + 1) as PlanStep, activeStep)}
+                    className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+                  >
+                    Siguiente etapa <ArrowRight size={13} />
+                  </Button>
+                )}
+                <Button onClick={handleSave} loading={saving} disabled={!canSave} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">
+                  Guardar plan
+                </Button>
+              </div>
             </div>
           )}
         </div>
       }
     >
-      {/* Cierre del negocio */}
-      <Section title="Cierre del negocio">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field
-            label="Plazo"
-            hint={loadingPrices ? (
-              <p className="mt-1 text-[11px] text-zinc-500">Cargando precios…</p>
-            ) : !options.length && (
-              <p className="mt-1 text-[11px] text-zinc-500">Este lote no está en la lista de precios: escribe el plazo y el valor.</p>
-            )}
-          >
-            <select className={inputCls} value={special ? SPECIAL : (termMonths ?? '')} onChange={(e) => pickTerm(e.target.value)}>
-              {!special && termMonths === null && <option value="">Seleccionar</option>}
-              {options.map((o) => (
-                <option key={o.termMonths} value={o.termMonths}>
-                  {o.termMonths === 0 ? 'De contado' : `${o.termMonths} meses`} · {formatPesos(o.price)}
-                </option>
-              ))}
-              <option value={SPECIAL}>{options.length ? 'Plazo especial (aprobado por gerencia)' : 'Plazo y valor a mano'}</option>
-            </select>
-          </Field>
+      {/* Etapa 1: Cierre del negocio */}
+      <StepSection
+        step={1}
+        title="Plazo y valor del terreno"
+        summary={step1Summary}
+        complete={step1Complete}
+        active={activeStep === 1}
+        open={openSteps.has(1)}
+        onToggle={() => toggleStep(1)}
+        sectionRef={(el) => { stepRefs.current[1] = el; }}
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field
+              label="Plazo"
+              hint={loadingPrices ? (
+                <p className="mt-1 text-[11px] text-zinc-500">Cargando precios…</p>
+              ) : !options.length && (
+                <p className="mt-1 text-[11px] text-zinc-500">Este lote no está en la lista de precios: escribe el plazo y el valor.</p>
+              )}
+            >
+              <select className={inputCls} value={special ? SPECIAL : (termMonths ?? '')} onChange={(e) => pickTerm(e.target.value)}>
+                {!special && termMonths === null && <option value="">Seleccionar</option>}
+                {options.map((o) => (
+                  <option key={o.termMonths} value={o.termMonths}>
+                    {o.termMonths === 0 ? 'De contado' : `${o.termMonths} meses`} · {formatPesos(o.price)}
+                  </option>
+                ))}
+                <option value={SPECIAL}>{options.length ? 'Plazo especial (aprobado por gerencia)' : 'Plazo y valor a mano'}</option>
+              </select>
+            </Field>
+            <Field
+              label="Valor total del terreno (Precio lista)"
+              hint={
+                <div className="mt-1 space-y-0.5 text-[11px]">
+                  {listPrice !== null && listPrice !== landValue && (
+                    <p className="text-amber-300/90">Distinto al de lista ({formatPesos(listPrice)}).</p>
+                  )}
+                  <p className="text-zinc-400">
+                    <span className="font-semibold text-emerald-300">Arras ({earnestPercent}%): {formatPesos(earnest)}</span>
+                    {' '}· calculadas sobre el valor total sin restar el bono.
+                  </p>
+                </div>
+              }
+            >
+              <MoneyInput value={landValue} onChange={setLandValue} />
+            </Field>
+          </div>
           {special && (
             <div className="rounded-xl border border-amber-500/40 bg-gradient-to-b from-amber-500/10 to-amber-950/20 p-3.5 sm:col-span-3">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-2.5">
@@ -852,25 +980,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
               )}
             </div>
           )}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-zinc-300">
-                Valor total del terreno (Precio lista)
-              </label>
-              <span className="rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-bold text-emerald-300">
-                Arras ({earnestPercent}%): {formatPesos(earnest)}
-              </span>
-            </div>
-            <MoneyInput value={landValue} onChange={setLandValue} />
-            {listPrice !== null && listPrice !== landValue && (
-              <p className="text-[11px] text-amber-300/90">Distinto al de lista ({formatPesos(listPrice)}).</p>
-            )}
-            <p className="text-[10px] text-zinc-400">
-              * Las arras del {earnestPercent}% se liquidan sobre el valor total ({formatPesos(landValue)}), sin restar el bono.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 sm:contents">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Beneficio / Bono descuento">
               <MoneyInput value={benefit} onChange={setBenefit} />
             </Field>
@@ -884,28 +994,45 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             </Field>
           )}
 
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-300">
-                Total a pagar por el cliente
-              </span>
-              <span className="text-lg sm:text-base font-extrabold text-white">
+          <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-300">
+                  Total a pagar por el cliente
+                </p>
+                <p className="mt-0.5 text-[11px] text-zinc-400">
+                  {formatPesos(landValue)} (Total terreno) − {formatPesos(benefit)} (Bono)
+                  {benefit > 0 && <span className="ml-2 font-semibold text-amber-300">· Bono aplicado</span>}
+                </p>
+              </div>
+              <span className="whitespace-nowrap text-xl font-extrabold text-white">
                 {formatPesos(summary.totalLand)}
               </span>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-zinc-400 pt-0.5 border-t border-emerald-500/20">
-              <span>{formatPesos(landValue)} (Total terreno) − {formatPesos(benefit)} (Bono)</span>
-              {benefit > 0 && (
-                <span className="font-semibold text-amber-300">Bono aplicado: −{formatPesos(benefit)}</span>
-              )}
-            </div>
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <Button
+              type="button"
+              onClick={() => goToStep(2, 1)}
+              className="h-10 sm:h-auto sm:px-4 sm:py-2 sm:text-xs"
+            >
+              Continuar a Etapa 2: Plan de pagos <ArrowRight size={14} />
+            </Button>
           </div>
         </div>
-      </Section>
+      </StepSection>
 
-      {/* Cuotas */}
-      <Section
+      {/* Etapa 2: Cuotas */}
+      <StepSection
+        step={2}
         title="Plan de pagos"
+        summary={step2Summary}
+        complete={step2Complete}
+        active={activeStep === 2}
+        open={openSteps.has(2)}
+        onToggle={() => toggleStep(2)}
+        sectionRef={(el) => { stepRefs.current[2] = el; }}
         right={
           <Segmented
             value={mode}
@@ -1145,11 +1272,77 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             <p className="text-xs text-zinc-500 sm:text-[11px]">Cada fila son N cuotas mensuales del mismo valor desde la fecha indicada. Las cuotas en 0 se ignoran.</p>
           </div>
         )}
-      </Section>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800/80 pt-3">
+          <span className={`text-xs font-medium ${summary.difference === 0 && !hasBadDates ? 'text-emerald-300' : 'text-amber-300'}`}>
+            {hasBadDates
+              ? 'Corrige las fechas inválidas'
+              : summary.difference === 0
+                ? 'Las cuotas cuadran con el valor total ✓'
+                : summary.difference > 0
+                  ? `Faltan ${formatPesos(summary.difference)} por asignar`
+                  : `Sobran ${formatPesos(-summary.difference)}`}
+          </span>
+          <Button
+            type="button"
+            onClick={() => goToStep(3, 2)}
+            className="h-10 sm:h-auto sm:px-4 sm:py-2 sm:text-xs"
+          >
+            Continuar a Etapa 3: Referido y notas <ArrowRight size={14} />
+          </Button>
+        </div>
+      </StepSection>
 
-      {/* Resumen como en la preventa */}
-      <Section
-        title="Resumen"
+      {/* Etapa 3: Referido y observaciones */}
+      <StepSection
+        step={3}
+        title="Referido y observaciones"
+        summary={step3Summary}
+        complete={step3Complete}
+        active={activeStep === 3}
+        open={openSteps.has(3)}
+        onToggle={() => toggleStep(3)}
+        sectionRef={(el) => { stepRefs.current[3] = el; }}
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field
+            label="Referido por"
+            hint={
+              <p className="mt-1 text-[11px] text-zinc-500">
+                {referredBy.trim() && !referralName(referredBy)
+                  ? 'Se toma como sin referido: no se pedirá evidencia.'
+                  : referralName(referredBy)
+                    ? 'Se pedirá la evidencia del referido en los soportes.'
+                    : 'Déjalo vacío (o escribe N/A) si no hay referido.'}
+              </p>
+            }
+          >
+            <input className={inputCls} value={referredBy} placeholder="Nombre de quien lo refirió" onChange={(e) => setReferredBy(e.target.value)} />
+          </Field>
+          <Field label="Observaciones">
+            <textarea rows={3} className={`${inputCls} resize-none`} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Field>
+        </div>
+        <div className="mt-4 flex justify-end border-t border-zinc-800/80 pt-3">
+          <Button
+            type="button"
+            onClick={() => goToStep(4, 3)}
+            className="h-10 sm:h-auto sm:px-4 sm:py-2 sm:text-xs"
+          >
+            Ir a Etapa 4: Comprobación y cierre <ArrowRight size={14} />
+          </Button>
+        </div>
+      </StepSection>
+
+      {/* Etapa 4: Resumen y comprobación final */}
+      <StepSection
+        step={4}
+        title="Comprobación y resumen final"
+        summary={step4Summary}
+        complete={step4Complete}
+        active={activeStep === 4}
+        open={openSteps.has(4)}
+        onToggle={() => toggleStep(4)}
+        sectionRef={(el) => { stepRefs.current[4] = el; }}
         right={
           <Button
             type="button"
@@ -1162,7 +1355,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
               }
             }}
             disabled={checkingApproval}
-            className="min-h-[40px] border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 sm:min-h-0"
+            className="min-h-[36px] border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 sm:min-h-0"
           >
             {checkingApproval ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} {isVerified ? 'Plan comprobado' : 'Comprobar plan'}
           </Button>
@@ -1179,6 +1372,26 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             {severanceAmount > 0 && <>Cesantías: {formatPesos(severanceAmount)}. </>}
             {summary.bonusTotal > 0 && <>Cuota bono descuento: {formatPesos(summary.bonusTotal)}.</>}
           </p>
+        )}
+        {!isVerified && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2.5">
+            <p className="text-xs text-zinc-300">Pulsa <strong>Comprobar plan</strong> para verificar la cuenta detallada antes de guardar.</p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                setVerifiedSignature(verificationSignature);
+                if (special && approvalMethod === 'whatsapp' && approvalStatus !== 'approved') {
+                  await handleCheckStatus();
+                }
+              }}
+              disabled={checkingApproval}
+              className="border border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+            >
+              {checkingApproval ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Comprobar plan
+            </Button>
+          </div>
         )}
         {isVerified && (
           <div className={`mt-3 rounded-lg border px-3 py-2.5 ${
@@ -1273,29 +1486,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         ) : (
           <p className="mt-3 flex items-center gap-1.5 text-xs text-emerald-300 sm:text-[11px]"><CheckCircle2 size={13} /> El plan cuadra con el total del terreno.</p>
         )}
-      </Section>
-
-      <Section title="Referido y observaciones">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field
-            label="Referido por"
-            hint={
-              <p className="mt-1 text-[11px] text-zinc-500">
-                {referredBy.trim() && !referralName(referredBy)
-                  ? 'Se toma como sin referido: no se pedirá evidencia.'
-                  : referralName(referredBy)
-                    ? 'Se pedirá la evidencia del referido en los soportes.'
-                    : 'Déjalo vacío (o escribe N/A) si no hay referido.'}
-              </p>
-            }
-          >
-            <input className={inputCls} value={referredBy} placeholder="Nombre de quien lo refirió" onChange={(e) => setReferredBy(e.target.value)} />
-          </Field>
-          <Field label="Observaciones">
-            <textarea rows={3} className={`${inputCls} resize-none`} value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </Field>
-        </div>
-      </Section>
+      </StepSection>
     </DealSheet>
   );
 }
@@ -1323,14 +1514,78 @@ function PlanBalance({ totalLand, paid, difference }: { totalLand: number; paid:
   );
 }
 
-function Section({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
+function StepSection({ step, title, summary, complete, active, open, onToggle, right, sectionRef, children }: {
+  step: number;
+  title: string;
+  summary: string;
+  complete: boolean;
+  active: boolean;
+  open: boolean;
+  onToggle: () => void;
+  right?: ReactNode;
+  sectionRef?: (el: HTMLElement | null) => void;
+  children: ReactNode;
+}) {
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-zinc-200 sm:text-xs">{title}</p>
-        {right}
+    <section
+      ref={sectionRef}
+      className={`scroll-mt-2 rounded-xl border transition-colors ${
+        active
+          ? 'border-emerald-500/45 bg-zinc-950/60 shadow-lg shadow-emerald-950/20'
+          : complete
+            ? 'border-emerald-500/25 bg-zinc-950/40'
+            : 'border-zinc-800 bg-zinc-950/40'
+      }`}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        className={`flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3 text-left select-none hover:bg-zinc-900/50 ${open ? 'rounded-t-xl border-b border-zinc-800/80' : 'rounded-xl'}`}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+              complete
+                ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40'
+                : active
+                  ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/40'
+                  : 'bg-zinc-800 text-zinc-400'
+            }`}
+          >
+            {complete ? <Check size={14} /> : step}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-zinc-100 sm:text-xs">{title}</p>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                complete
+                  ? 'bg-emerald-500/15 text-emerald-300'
+                  : active
+                    ? 'bg-amber-500/15 text-amber-200'
+                    : 'bg-zinc-800 text-zinc-400'
+              }`}>
+                {complete ? 'Completo' : active ? 'En curso' : 'Pendiente'}
+              </span>
+            </div>
+            <p className="mt-0.5 truncate text-[11px] text-zinc-400">{summary}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+          {open && right}
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label={open ? `Contraer etapa ${step}` : `Abrir etapa ${step}`}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          >
+            <ChevronDown size={16} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
       </div>
-      {children}
+      {open && <div className="p-4">{children}</div>}
     </section>
   );
 }
