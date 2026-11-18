@@ -3,6 +3,7 @@ import { AlertTriangle, Loader2, MapPin } from 'lucide-react';
 import { DealLotPickerModal } from './DealLotPickerModal';
 import { dealActionCls } from './DealSheet';
 import {
+  canEditDealConditions,
   formatArea,
   getDealLotStatus,
   releaseDealLot,
@@ -15,6 +16,8 @@ interface DealLotSectionProps {
   companyId:    string;
   deal:         DealSummary;
   projectHint?: string;
+  isAdmin?:     boolean;
+  readOnly?:    boolean;
   onChanged:    () => void;
 }
 
@@ -30,23 +33,24 @@ function formatUntil(iso?: string): string {
  * Lote del negocio dentro de la tarjeta: apartarlo desde el inventario en vivo,
  * cambiarlo o liberarlo, y avisar si la reserva de 24 h venció o alguien más lo tomó.
  */
-export function DealLotSection({ companyId, deal, projectHint, onChanged }: DealLotSectionProps) {
+export function DealLotSection({ companyId, deal, projectHint, isAdmin = false, readOnly = false, onChanged }: DealLotSectionProps) {
   const [picking, setPicking] = useState(false);
   const [state, setState] = useState<{ state: DealLotState; expiresAt?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const editable = deal.status === 'borrador' || deal.status === 'plan_listo';
+  const isDraft = deal.status === 'borrador' || deal.status === 'plan_listo';
+  const editable = !readOnly && canEditDealConditions(deal.status, isAdmin);
   const lot = deal.lot;
 
   useEffect(() => {
-    if (!lot || !editable) { setState(null); return; }
+    if (!lot || !isDraft) { setState(null); return; }
     let alive = true;
     getDealLotStatus(companyId, deal.id)
       .then((s) => { if (alive) setState(s); })
       .catch(() => { if (alive) setState(null); });
     return () => { alive = false; };
     // reservedUntil cambia al volver a apartar el mismo lote: hay que reconsultar su estado.
-  }, [companyId, deal.id, lot?.inventoryLotId, lot?.reservedUntil, editable]);
+  }, [companyId, deal.id, lot?.inventoryLotId, lot?.reservedUntil, isDraft]);
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -71,22 +75,22 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
               {lot.sector} · Lote {lot.lotNumber}{lot.lotCode ? ` · Cód. ${lot.lotCode}` : ''} · {formatArea(lot.areaM2)}{lot.corner ? ' · Esquinero' : ''}
             </span>
           </p>
-          {editable && state?.state === 'reservado' && (
+          {isDraft && state?.state === 'reservado' && (
             <p className="mt-1 text-[11px] text-zinc-500">Apartado hasta {formatUntil(state.expiresAt || lot.reservedUntil)}</p>
           )}
-          {editable && state?.state === 'vencido' && (
+          {isDraft && state?.state === 'vencido' && (
             <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-300">
               <AlertTriangle size={11} /> La reserva venció y el lote volvió a estar disponible.
             </p>
           )}
-          {editable && (state?.state === 'tomado' || state?.state === 'no_existe') && (
+          {isDraft && (state?.state === 'tomado' || state?.state === 'no_existe') && (
             <p className="mt-1 flex items-center gap-1 text-[11px] text-red-300">
               <AlertTriangle size={11} /> Este lote ya no está apartado para este negocio. Escoge otro.
             </p>
           )}
           {editable && (
             <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-1.5 sm:gap-3">
-              {state?.state === 'vencido' && (
+              {isDraft && state?.state === 'vencido' && (
                 <button
                   type="button"
                   disabled={busy}
@@ -107,7 +111,12 @@ export function DealLotSection({ companyId, deal, projectHint, onChanged }: Deal
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => run(() => releaseDealLot(companyId, deal.id))}
+                onClick={() => {
+                  if (!isDraft && !window.confirm('Este negocio ya tiene contratos generados o en firma. ¿Liberar este lote y marcar sus contratos como vencidos?')) {
+                    return;
+                  }
+                  void run(() => releaseDealLot(companyId, deal.id));
+                }}
                 className={`${dealActionCls} font-normal text-zinc-500 hover:text-zinc-300`}
               >
                 Liberar

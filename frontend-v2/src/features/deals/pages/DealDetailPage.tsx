@@ -30,6 +30,7 @@ import { listAdvisors, type Advisor } from '@/features/leads/services/advisors.s
 import {
   cancelDeal,
   canEditDealBuyers,
+  canEditDealConditions,
   createDeal,
   DEAL_STATUS_LABELS,
   deleteDealAttachment,
@@ -421,9 +422,9 @@ export function DealDetailPage() {
   const attachments = deal.attachments ?? [];
   const stats = supportStats(deal);
   const missingSupports = missingSupportsSummary(deal);
-  const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
+  const editable = !readOnly && canEditDealConditions(deal.status, isAdmin);
   const canEditBuyers = !readOnly && canEditDealBuyers(deal.status, isAdmin);
-  const canCancelDeal = !readOnly && deal.status !== 'anulado' && (editable || isAdmin);
+  const canCancelDeal = !readOnly && deal.status !== 'anulado' && (deal.status === 'borrador' || deal.status === 'plan_listo' || isAdmin);
   const hasPendingSignatures = [...(deal.documents ?? []), ...(deal.extraSignatures ?? [])].some(
     (d) => d.docublockDocumentId && (d.signatureStatus === 'en_firma' || d.signatureStatus === 'firmado_parcial'),
   );
@@ -822,6 +823,8 @@ export function DealDetailPage() {
                   <DealLotSection
                     companyId={companyId}
                     deal={deal}
+                    isAdmin={isAdmin}
+                    readOnly={readOnly}
                     onChanged={() => void handleRefresh()}
                   />
                 </div>

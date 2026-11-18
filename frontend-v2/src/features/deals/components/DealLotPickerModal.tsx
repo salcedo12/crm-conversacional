@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, MapPin, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, Loader2, MapPin, RefreshCw, Search } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { DealSheet, DealSheetFooter, dealInputCls } from './DealSheet';
 import {
@@ -179,6 +179,14 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
         />
       }
     >
+      {deal.lot && (deal.documents?.some((d) => !d.superseded) || !['borrador', 'plan_listo'].includes(deal.status)) && (
+        <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-200">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-400" />
+          <p className="text-[11px] leading-relaxed">
+            Este negocio ya tiene contratos generados o en firma para el lote actual. Al escoger otro lote, esos contratos del lote anterior quedarán vencidos y deberás confirmar el plan financiero y generar los nuevos contratos.
+          </p>
+        </div>
+      )}
       {loadingLots && !lots.length ? (
         <p className="flex items-center gap-1.5 text-sm text-zinc-500 sm:text-xs"><Loader2 size={14} className="animate-spin" /> Cargando disponibilidad…</p>
       ) : visible.length === 0 ? (

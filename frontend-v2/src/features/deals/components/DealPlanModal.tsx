@@ -171,12 +171,16 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       ? rawApprStatus
       : (deal.plan?.specialTerm?.approvedBy ? 'approved' : 'none');
   const [approvalStatus, setApprovalStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>(initialApprovalStatus);
-  const planFingerprint = `${termMonths ?? ''}|${landValue}|${benefit}|${severanceAmount}`;
+  const planFingerprint = `${termMonths ?? ''}|${landValue}|${benefit}|${severanceAmount}|${summary.separationTotal}|${summary.extraordinaryTotal}`;
   const requestedFingerprintRef = useRef<string | null>(
     initialApprovalStatus === 'pending' ? planFingerprint : null,
   );
   const [approvedFingerprint, setApprovedFingerprint] = useState<string | null>(
     initialApprovalStatus === 'approved' ? planFingerprint : null,
+  );
+  const hasContractsOrSignature = Boolean(
+    deal.documents?.some((d) => !d.superseded)
+    || !['borrador', 'plan_listo'].includes(deal.status),
   );
   const [approvalNotes, setApprovalNotes] = useState<string>(deal.planApproval?.responseNotes ?? '');
   const [checkingApproval, setCheckingApproval] = useState(false);
@@ -673,6 +677,17 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
         </div>
       }
     >
+      {hasContractsOrSignature && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-400" />
+          <div className="space-y-0.5">
+            <p className="font-semibold text-amber-100">Este negocio ya tiene contratos generados o en firma</p>
+            <p className="text-[11px] leading-relaxed text-amber-200/90">
+              Si ajustas el plan financiero aquí, luego vuelve a generar la Preventa (y la Promesa) desde la pestaña <strong>Contratos</strong> y reenvía a DocuBlock si el cliente necesita firmar la nueva versión. Si el nuevo plan es de plazo especial, debe volver a enviarse a autorización de Gerencia.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Etapa 1: Cierre del negocio */}
       <StepSection
         step={1}
@@ -931,29 +946,45 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
 
                   {approvalStatus === 'approved' && (
                     <div className={`rounded-lg border p-3 ${approvalStale ? 'border-amber-500/40 bg-amber-500/10' : 'border-emerald-500/40 bg-emerald-500/10'}`}>
-                      <div className="flex items-center gap-2">
-                        <span className={approvalStale ? 'text-amber-400' : 'text-emerald-400'}>{approvalStale ? '⚠️' : '✅'}</span>
-                        <div className="flex-1">
-                          <p className={`text-xs font-bold ${approvalStale ? 'text-amber-200' : 'text-emerald-200'}`}>
-                            {approvalStale ? 'Condiciones modificadas tras la autorización' : '¡Plan Especial Autorizado por Gerencia!'}
-                          </p>
-                          <p className={`text-[11px] ${approvalStale ? 'text-amber-300/80' : 'text-emerald-300/80'}`}>
-                            {approvalStale
-                              ? 'Cambiaste valor, plazo o beneficio. Solicita una nueva aprobación antes de guardar.'
-                              : `${approvedBy ? `Registrado como: ${approvedBy}` : 'Autorizado vía WhatsApp'}${approvalNotes ? ` · Respuesta: "${approvalNotes}"` : ''}`}
-                          </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className={approvalStale ? 'text-amber-400' : 'text-emerald-400'}>{approvalStale ? '⚠️' : '✅'}</span>
+                          <div className="min-w-0 flex-1">
+                            <p className={`text-xs font-bold ${approvalStale ? 'text-amber-200' : 'text-emerald-200'}`}>
+                              {approvalStale ? 'Condiciones modificadas tras la autorización' : '¡Plan Especial Autorizado por Gerencia!'}
+                            </p>
+                            <p className={`text-[11px] ${approvalStale ? 'text-amber-300/80' : 'text-emerald-300/80'}`}>
+                              {approvalStale
+                                ? 'Cambiaste valor, plazo, beneficio, cesantías o cuotas clave. Debes volver a solicitar autorización a Gerencia antes de guardar.'
+                                : `${approvedBy ? `Registrado como: ${approvedBy}` : 'Autorizado vía WhatsApp'}${approvalNotes ? ` · Respuesta: "${approvalNotes}"` : ''}`}
+                            </p>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setApprovalStatus('none');
-                            setApprovedFingerprint(null);
-                            setApprovedBy('');
-                          }}
-                          className="text-[10px] text-zinc-400 underline hover:text-zinc-200"
-                        >
-                          {approvalStale ? 'Solicitar de nuevo' : 'Cambiar'}
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {approvalStale ? (
+                            <button
+                              type="button"
+                              onClick={handleRequestApproval}
+                              disabled={requestingApproval || (!termMonths && termMonths !== 0)}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-emerald-500 disabled:opacity-50"
+                            >
+                              {requestingApproval ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span>📲</span>}
+                              <span>{requestingApproval ? 'Enviando...' : 'Solicitar nueva autorización'}</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setApprovalStatus('none');
+                                setApprovedFingerprint(null);
+                                setApprovedBy('');
+                              }}
+                              className="text-[10px] text-zinc-400 underline hover:text-zinc-200"
+                            >
+                              Cambiar
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}

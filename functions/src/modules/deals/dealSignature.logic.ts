@@ -8,10 +8,11 @@ export const isPendingSignature = (status: SignatureStatus) => status === 'en_fi
  * (puede no ser la última versión: se puede escoger cuál enviar); si ninguno, el último.
  */
 export const signatureDocOf = (deal: Pick<Deal, 'documents'>, kind: 'preventa' | 'promesa') => {
-  const ofKind = [...(deal.documents ?? [])].filter((d) => d.kind === kind);
-  const sent = ofKind.filter((d) => d.docublockDocumentId).sort((a, b) => (a.sentAt?.toMillis?.() ?? 0) - (b.sentAt?.toMillis?.() ?? 0));
-  // Sin envíos: el último no vencido por cambio de lote (o el último, si todos lo están).
-  return sent.at(-1) ?? ofKind.filter((d) => !d.superseded).at(-1) ?? ofKind.at(-1);
+  const activeDocs = (deal.documents ?? []).filter((d) => d.kind === kind && !d.superseded);
+  const sent = activeDocs
+    .filter((d) => d.docublockDocumentId)
+    .sort((a, b) => (a.sentAt?.toMillis?.() ?? 0) - (b.sentAt?.toMillis?.() ?? 0));
+  return sent.at(-1) ?? activeDocs.at(-1);
 };
 const latest = signatureDocOf;
 

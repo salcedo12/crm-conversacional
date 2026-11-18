@@ -295,6 +295,19 @@ test('canEditDealBuyers: borrador/plan_listo todos, en firma solo admin, anulado
   expect(canEditDealBuyers('anulado', true)).toBe(false);
 });
 
+test('canEditDealConditions: editable antes de promesa_firmada, admin en promesa_firmada, nunca en anulado', async () => {
+  const { canEditDealConditions } = await import('./dealStatus');
+  expect(canEditDealConditions('borrador', false)).toBe(true);
+  expect(canEditDealConditions('plan_listo', false)).toBe(true);
+  expect(canEditDealConditions('preventa_en_firma', false)).toBe(true);
+  expect(canEditDealConditions('preventa_firmada', false)).toBe(true);
+  expect(canEditDealConditions('promesa_en_firma', false)).toBe(true);
+  expect(canEditDealConditions('promesa_firmada', false)).toBe(false);
+  expect(canEditDealConditions('promesa_firmada', true)).toBe(true);
+  expect(canEditDealConditions('anulado', false)).toBe(false);
+  expect(canEditDealConditions('anulado', true)).toBe(false);
+});
+
 // ── Plazo: todas las cuotas deben caber desde la primera ordinaria ───────────
 
 const plazo30 = expandRows([

@@ -15,6 +15,17 @@ export function canEditDealBuyers(status: DealStatus, admin: boolean): boolean {
 }
 
 /**
+ * Permite cambiar el lote o editar el plan financiero en borrador, plan_listo y
+ * durante las etapas de firma antes del cierre final; con promesa firmada lo
+ * gestiona únicamente administración y en negocios anulados se bloquea.
+ */
+export function canEditDealConditions(status: DealStatus, admin: boolean): boolean {
+  if (status === 'anulado') return false;
+  if (status === 'promesa_firmada') return admin;
+  return true;
+}
+
+/**
  * Estado de un negocio mientras se arma: "plan_listo" cuando tiene compradores, lote
  * apartado y un plan válido hecho para ese mismo lote; si no, "borrador". Los estados
  * de firma en adelante no se tocan.

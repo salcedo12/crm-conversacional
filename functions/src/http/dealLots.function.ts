@@ -4,12 +4,13 @@ import { z } from 'zod';
 import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/authContext';
-import { draftStatusFor, EDITABLE_STATUSES, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
+import { canEditDealConditions, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { inventoryDb } from '../modules/inventory/inventory.client';
 import { availableLotsFromSummary, INVENTORY_PROJECT_NAMES, normalizeStatus, type SummaryEntry } from '../modules/inventory/inventory.logic';
 import { getLotStatus, releaseLot, reserveLot } from '../modules/inventory/lotReservation.service';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
 import { lotLabel, supersedeForLotChange } from '../modules/deals/dealDocumentLot';
+import { isPendingSignature } from '../modules/deals/dealSignature.logic';
 
 /**
  * Módulo Negocios — Fase 2: lote del negocio desde el inventario de disponibilidad.
@@ -74,9 +75,15 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
   assertCompany(ctx, data.companyId);
 
   const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
-  if (!EDITABLE_STATUSES.includes(deal.status)) {
-    throw new HttpsError('failed-precondition', 'Este negocio ya tiene documentos; el lote no se puede cambiar.');
+  if (!canEditDealConditions(deal.status, isAdmin(ctx))) {
+    throw new HttpsError(
+      'failed-precondition',
+      deal.status === 'anulado'
+        ? 'Este negocio está anulado; el lote no se puede cambiar.'
+        : 'Este negocio ya tiene la promesa firmada; solo administración puede cambiar el lote.',
+    );
   }
+  const changingAfterDraft = !EDITABLE_STATUSES.includes(deal.status);
 
   const actor = await userDisplayName(data.companyId, ctx.uid);
   const advisor = deal.advisorId === ctx.uid ? actor : await userDisplayName(data.companyId, deal.advisorId);
@@ -90,9 +97,34 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
   try {
     const now = Timestamp.now();
     // Preventa/promesa de otro lote: quedan vencidas (historial), no sirven para este lote.
-    const { documents, superseded } = supersedeForLotChange(deal.documents ?? [], deal.lot, dealLot, now);
+    const { documents: rawDocs, superseded } = supersedeForLotChange(deal.documents ?? [], deal.lot, dealLot, now);
+    const documents = rawDocs.map((d) =>
+      d.superseded && d.docublockDocumentId && isPendingSignature(d.signatureStatus)
+        ? { ...d, signatureStatus: 'anulado' as const }
+        : d,
+    );
+    const switchedLot = Boolean(previous && previous !== data.lotId);
+    const pendingExtras = (deal.extraSignatures ?? []).some((e) => e.docublockDocumentId && isPendingSignature(e.signatureStatus));
+    const pendingDocs = documents.some((d) => !d.superseded && d.docublockDocumentId && isPendingSignature(d.signatureStatus));
+    const nextStatus = switchedLot
+      ? draftStatusFor({ ...deal, status: 'borrador', lot: dealLot })
+      : draftStatusFor({ ...deal, lot: dealLot });
     const batch = db.batch();
-    batch.update(ref, { lot: dealLot, documents, status: draftStatusFor({ ...deal, lot: dealLot }), updatedAt: now });
+    batch.update(ref, {
+      lot: dealLot,
+      documents,
+      signaturePending: pendingDocs || pendingExtras,
+      status: nextStatus,
+      ...(switchedLot && deal.planApproval?.status === 'pending'
+        ? {
+            'planApproval.status': 'cancelled',
+            'planApproval.resolvedAt': now,
+            'planApproval.resolvedBy': actor.name,
+            'planApproval.responseNotes': 'Cancelada por cambio de lote',
+          }
+        : {}),
+      updatedAt: now,
+    });
     batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
       companyId: data.companyId,
       leadId: deal.leadId,
@@ -100,7 +132,9 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
       actorId: ctx.uid,
       actorName: actor.name,
       event: 'lot_reserved',
-      title: previous && previous !== data.lotId ? 'Lote del negocio cambiado' : 'Lote apartado',
+      title: switchedLot
+        ? (changingAfterDraft ? 'Lote cambiado (negocio en firma)' : 'Lote del negocio cambiado')
+        : 'Lote apartado',
       lines: [
         `${dealLot.projectId} · ${dealLot.sector} · Lote ${dealLot.lotNumber} · ${dealLot.areaM2} m²${dealLot.corner ? ' · Esquinero' : ''}`,
         ...(dealLot.reservedUntil ? [`Reserva vigente hasta ${dealLot.reservedUntil}`] : []),
@@ -133,16 +167,44 @@ export const releaseDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
   assertCompany(ctx, data.companyId);
 
   const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
-  if (!EDITABLE_STATUSES.includes(deal.status)) {
-    throw new HttpsError('failed-precondition', 'Este negocio ya tiene documentos; el lote no se puede liberar desde aquí.');
+  if (!canEditDealConditions(deal.status, isAdmin(ctx))) {
+    throw new HttpsError(
+      'failed-precondition',
+      deal.status === 'anulado'
+        ? 'Este negocio está anulado; el lote no se puede liberar.'
+        : 'Este negocio ya tiene la promesa firmada; solo administración puede liberar el lote.',
+    );
   }
   if (!deal.lot) return { ok: true as const };
 
   const actor = await userDisplayName(data.companyId, ctx.uid);
   await releaseLot(deal.lot.inventoryLotId, deal.id, actor);
   const now = Timestamp.now();
+  const documents = (deal.documents ?? []).map((d) => {
+    if (d.superseded) return d;
+    return {
+      ...d,
+      superseded: { at: now, reason: `Lote liberado: ${lotLabel(deal.lot!)}` },
+      ...(d.docublockDocumentId && isPendingSignature(d.signatureStatus) ? { signatureStatus: 'anulado' as const } : {}),
+    };
+  });
+  const pendingExtras = (deal.extraSignatures ?? []).some((e) => e.docublockDocumentId && isPendingSignature(e.signatureStatus));
   const batch = db.batch();
-  batch.update(ref, { lot: null, status: draftStatusFor({ ...deal, lot: null }), updatedAt: now });
+  batch.update(ref, {
+    lot: null,
+    documents,
+    signaturePending: pendingExtras,
+    status: draftStatusFor({ ...deal, status: 'borrador', lot: null }),
+    ...(deal.planApproval?.status === 'pending'
+      ? {
+          'planApproval.status': 'cancelled',
+          'planApproval.resolvedAt': now,
+          'planApproval.resolvedBy': actor.name,
+          'planApproval.responseNotes': 'Cancelada al liberar el lote',
+        }
+      : {}),
+    updatedAt: now,
+  });
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,

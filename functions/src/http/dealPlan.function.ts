@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/authContext';
-import { draftStatusFor, EDITABLE_STATUSES, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
+import { canEditDealConditions, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef, money as formatMoney } from '../modules/deals/dealAudit';
 import { parseCivilDate } from '../modules/deals/civilDate';
 import { computeEarnestMoney, summarizePlan, termIssue } from '../modules/deals/paymentPlan';
@@ -86,9 +86,15 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
   assertCompany(ctx, data.companyId);
 
   const { ref, deal } = await loadDeal(ctx, data.companyId, data.dealId);
-  if (!EDITABLE_STATUSES.includes(deal.status)) {
-    throw new HttpsError('failed-precondition', 'Este negocio ya tiene documentos; el plan no se puede cambiar.');
+  if (!canEditDealConditions(deal.status, isAdmin(ctx))) {
+    throw new HttpsError(
+      'failed-precondition',
+      deal.status === 'anulado'
+        ? 'Este negocio está anulado; el plan no se puede cambiar.'
+        : 'Este negocio ya tiene la promesa firmada; solo administración puede modificar el plan.',
+    );
   }
+  const editingAfterDraft = !EDITABLE_STATUSES.includes(deal.status);
   if (!deal.lot) throw new HttpsError('failed-precondition', 'Primero escoge el lote del negocio.');
 
   const preservedApproval = deal.planApproval?.status === 'approved' && deal.plan?.specialTerm
@@ -128,6 +134,7 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
   const batch = db.batch();
   batch.update(ref, {
     plan,
+    ...(!plan.specialTerm ? { planApproval: null, draftPlan: null } : { draftPlan: null }),
     planTotals: {
       totalLand: summary.totalLand,
       separation: summary.separationTotal,
@@ -148,8 +155,9 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
     actorId: ctx.uid,
     actorName: actor.name,
     event: 'plan_saved',
-    title: deal.plan ? 'Plan de negocio actualizado' : 'Plan de negocio guardado',
+    title: editingAfterDraft ? 'Plan financiero actualizado (negocio en firma)' : deal.plan ? 'Plan de negocio actualizado' : 'Plan de negocio guardado',
     lines: [
+      ...(editingAfterDraft ? [`Negocio en estado "${deal.status}": regenerar preventa/promesa y reenviar a firma si aplica.`] : []),
       `Valor del terreno: ${formatMoney(plan.landValue)} · Plazo: ${plan.termMonths} meses`
         + (plan.specialTerm ? ` (especial${plan.specialTerm.approvedBy ? `, aprobado por ${plan.specialTerm.approvedBy}` : ''})` : ''),
       `Separación: ${formatMoney(summary.separationTotal)} · Ordinarias: ${formatMoney(summary.ordinaryTotal)} · Extraordinarias: ${formatMoney(summary.extraordinaryTotal)}`,

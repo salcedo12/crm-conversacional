@@ -15,6 +15,7 @@ import { formatPesos, summarizePlan } from '../utils/paymentPlan';
 import {
   cancelDeal,
   canEditDealBuyers,
+  canEditDealConditions,
   createDeal,
   DEAL_STATUS_LABELS,
   listLeadDeals,
@@ -294,7 +295,7 @@ export function LeadDealsPanel({
           const names = deal.buyerNames?.length
             ? deal.buyerNames
             : deal.buyerProfiles.map((b) => `${b.firstNames} ${b.lastNames}`.trim());
-          const editable = !readOnly && (deal.status === 'borrador' || deal.status === 'plan_listo');
+          const editable = !readOnly && canEditDealConditions(deal.status, isAdmin);
           const canEditBuyers = !readOnly && canEditDealBuyers(deal.status, isAdmin);
           const isNewUnassignedDraft = deal.status === 'borrador' && !deal.lot && !(deal.documents?.length ?? 0);
           const isCompact = compactExisting && !isNewUnassignedDraft && !expandedIds.has(deal.id);
@@ -428,6 +429,8 @@ export function LeadDealsPanel({
                   companyId={companyId}
                   deal={deal}
                   projectHint={projectHint || lead.projectInterest?.[0]}
+                  isAdmin={isAdmin}
+                  readOnly={readOnly}
                   onChanged={() => void load()}
                 />
               )}

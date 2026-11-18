@@ -6,7 +6,7 @@ import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import type { AuthContext } from '../lib/authContext';
-import { draftStatusFor, EDITABLE_STATUSES, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
+import { canEditDealConditions, draftStatusFor, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
 import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
 import { computeEarnestMoney, summarizePlan, termIssue } from '../modules/deals/paymentPlan';
 import { phoneTail } from '../utils/phone';
@@ -433,8 +433,8 @@ export async function resolvePlanApproval(params: {
     if (dealData.status === 'anulado') {
       return { ok: false, message: 'El negocio ya fue anulado; no se puede aplicar la autorización.', approval: { ...approval, status: 'cancelled' } };
     }
-    if (!EDITABLE_STATUSES.includes(dealData.status)) {
-      return { ok: false, message: 'El negocio ya entró a firma; no se puede promover el plan automáticamente.', approval: { ...approval, status } };
+    if (!canEditDealConditions(dealData.status, true)) {
+      return { ok: false, message: 'El negocio ya fue anulado; no se puede aplicar la autorización.', approval: { ...approval, status: 'cancelled' } };
     }
     const specialTermApprovedBy = `${params.resolvedBy}${cleanNotes ? `: "${cleanNotes}"` : ''}`;
 

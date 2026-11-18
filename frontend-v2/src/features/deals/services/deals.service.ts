@@ -199,6 +199,16 @@ export function canEditDealBuyers(status: DealStatus, isAdmin: boolean): boolean
   return status === 'borrador' || status === 'plan_listo' || isAdmin;
 }
 
+/**
+ * Permite cambiar lote o editar el plan financiero en borrador, plan_listo y
+ * durante las etapas de firma antes del cierre final (con promesa firmada solo admin).
+ */
+export function canEditDealConditions(status: DealStatus, isAdmin: boolean): boolean {
+  if (status === 'anulado') return false;
+  if (status === 'promesa_firmada') return isAdmin;
+  return true;
+}
+
 const _list   = httpsCallable<{ companyId: string; leadId: string }, { deals: DealSummary[] }>(functions, 'listLeadDeals');
 const _listCompany = httpsCallable<{ companyId: string }, { deals: DealSummary[] }>(functions, 'listCompanyDeals');
 const _get = httpsCallable<{ companyId: string; dealId: string }, { deal: DealSummary }>(functions, 'getDeal');
