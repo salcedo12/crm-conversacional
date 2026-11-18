@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Calculator, Check, CheckCircle2, ChevronDown, Clock, HelpCircle, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Calculator, Check, CheckCircle2, ChevronDown, Clock, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
+import { InfoTip } from '@/shared/components/Tooltip';
 import { DealField as Field, DealSheet, dealInputCls as inputCls } from './DealSheet';
 import {
   formatArea,
@@ -712,7 +713,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                   )}
                   <p className="flex items-center gap-1 text-zinc-400">
                     <span className="font-semibold text-emerald-300">Arras ({earnestPercent}%): {formatPesos(earnest)}</span>
-                    <HelpTip text="Porcentaje contractual de arras calculado sobre el valor total del terreno antes de descuentos/bono." />
+                    <InfoTip text="Porcentaje contractual de arras calculado sobre el valor total del terreno antes de descuentos/bono." />
                   </p>
                 </div>
               }
@@ -982,10 +983,10 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             </div>
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label={<span className="inline-flex items-center gap-1">Beneficio / Bono descuento <HelpTip text="Descuento pactado con el cliente. Se registra como cuota bono descuento al final y no se cobra en cuotas." /></span>}>
+            <Field label={<span className="inline-flex items-center gap-1">Beneficio / Bono descuento <InfoTip text="Descuento pactado con el cliente. Se registra como cuota bono descuento al final y no se cobra en cuotas." /></span>}>
               <MoneyInput value={benefit} onChange={setBenefit} />
             </Field>
-            <Field label={<span className="inline-flex items-center gap-1">Cesantías <HelpTip text="Valor cubierto con cesantías del comprador. Se resta del total a pagar para calcular el saldo en cuotas." /></span>}>
+            <Field label={<span className="inline-flex items-center gap-1">Cesantías <InfoTip text="Valor cubierto con cesantías del comprador. Se resta del total a pagar para calcular el saldo en cuotas." /></span>}>
               <MoneyInput value={severanceAmount} onChange={setSeveranceAmount} />
             </Field>
           </div>
@@ -1103,7 +1104,16 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                   />
                 }
               >
-                Cuotas ordinarias
+                <span className="inline-flex items-center gap-1.5">
+                  Cuotas ordinarias
+                  <InfoTip
+                    text={
+                      simple.ordinaryMode === 'rangos'
+                        ? 'En cada rango se crea una cuota mensual del valor indicado, incluyendo las fechas inicial y final.'
+                        : 'En modo Automáticas las cuotas se calculan con el saldo pendiente; en Por rangos defines bloques de meses con valor fijo.'
+                    }
+                  />
+                </span>
               </SubTitle>
               {simple.ordinaryMode === 'rangos' ? (
                 <div className="space-y-2.5">
@@ -1174,7 +1184,13 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                   </Field>
                   {/* Valor calculado: tarjeta informativa, no parece un campo editable. */}
                   <div className="col-span-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 sm:col-span-1 sm:py-1.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 sm:text-[10px]">Valor cuota ordinaria</p>
+                    <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 sm:text-[10px]">
+                      <span>Valor cuota ordinaria</span>
+                      <InfoTip
+                        size={11}
+                        text="Se calcula automáticamente con lo que falta del total. Si la división no es exacta, el residuo se suma a la primera cuota (igual que en SmartHome)."
+                      />
+                    </p>
                     {automaticOrdinaryRows.length === 0 ? (
                       <p className="text-sm text-zinc-400 sm:text-xs">—</p>
                     ) : automaticOrdinaryRows.length === 1 ? (
@@ -1217,15 +1233,15 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                 Agregar extraordinaria
               </AddButton>
             </div>
-            <p className="text-xs text-zinc-500 sm:text-[11px]">
-              {simple.ordinaryMode === 'rangos'
-                ? 'En cada rango se crea una cuota mensual del valor indicado, incluyendo las fechas inicial y final.'
-                : 'Las ordinarias se calculan solas con lo que falta del total (el residuo va en la primera, como en SmartHome).'}
-              {benefit > 0 && ' El beneficio queda como cuota bono descuento al final.'}
-            </p>
           </div>
         ) : (
           <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-zinc-400">
+              <span className="inline-flex items-center gap-1.5">
+                Filas manuales de cuotas
+                <InfoTip text="Cada fila crea N cuotas mensuales del mismo valor desde la primera fecha indicada. Las filas en $0 se ignoran." />
+              </span>
+            </div>
             {/* Encabezados solo en computador; en celular cada fila es una tarjeta con sus etiquetas. */}
             {rows.length > 0 && (
               <div className="hidden grid-cols-[1.2fr_0.6fr_1.2fr_1.1fr_32px] gap-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 sm:grid">
@@ -1285,7 +1301,6 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             <AddButton onClick={() => setRows((prev) => [...prev, { kind: 'ordinaria', count: 1, amount: 0, firstDate: start }])}>
               Agregar fila
             </AddButton>
-            <p className="text-xs text-zinc-500 sm:text-[11px]">Cada fila son N cuotas mensuales del mismo valor desde la fecha indicada. Las cuotas en 0 se ignoran.</p>
           </div>
         )}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800/80 pt-3">
@@ -1321,15 +1336,18 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field
-            label="Referido por"
+            label={
+              <span className="inline-flex items-center gap-1">
+                Referido por
+                <InfoTip text="Si lo dejas vacío o escribes N/A, no se pedirá evidencia. Si indicas un nombre, el sistema solicitará el soporte en la pestaña Soportes." />
+              </span>
+            }
             hint={
-              <p className="mt-1 text-[11px] text-zinc-500">
-                {referredBy.trim() && !referralName(referredBy)
-                  ? 'Se toma como sin referido: no se pedirá evidencia.'
-                  : referralName(referredBy)
-                    ? 'Se pedirá la evidencia del referido en los soportes.'
-                    : 'Déjalo vacío (o escribe N/A) si no hay referido.'}
-              </p>
+              referralName(referredBy) ? (
+                <p className="mt-1 text-[11px] text-emerald-300">
+                  Se solicitará evidencia de referido en Soportes.
+                </p>
+              ) : undefined
             }
           >
             <input className={inputCls} value={referredBy} placeholder="Nombre de quien lo refirió" onChange={(e) => setReferredBy(e.target.value)} />
@@ -1527,14 +1545,6 @@ function PlanBalance({ totalLand, paid, difference }: { totalLand: number; paid:
         />
       </div>
     </div>
-  );
-}
-
-function HelpTip({ text }: { text: string }) {
-  return (
-    <span title={text} aria-label={text} className="inline-flex cursor-help text-zinc-500 hover:text-zinc-200">
-      <HelpCircle size={12} />
-    </span>
   );
 }
 

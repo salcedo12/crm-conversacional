@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { Tooltip, InfoTip } from '@/shared/components/Tooltip';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import { listAdvisors, type Advisor } from '@/features/leads/services/advisors.service';
 import {
@@ -554,34 +555,39 @@ export function DealDetailPage() {
                 {DEAL_STATUS_LABELS[deal.status]}
               </span>
               {!readOnly && (
-                <button
-                  type="button"
-                  disabled={creatingAnotherDeal}
-                  onClick={() => void handleCreateAnotherDeal()}
-                  title="Crear otro negocio con estos mismos compradores para otro lote"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-200 hover:border-emerald-500/40 hover:text-emerald-300 transition disabled:opacity-50"
-                >
-                  {creatingAnotherDeal ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                  <span className="hidden sm:inline">Otro lote</span>
-                </button>
+                <Tooltip content="Crear otro negocio con estos mismos compradores para otro lote">
+                  <button
+                    type="button"
+                    disabled={creatingAnotherDeal}
+                    onClick={() => void handleCreateAnotherDeal()}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-200 hover:border-emerald-500/40 hover:text-emerald-300 transition disabled:opacity-50"
+                  >
+                    {creatingAnotherDeal ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                    <span className="hidden sm:inline">Otro lote</span>
+                  </button>
+                </Tooltip>
               )}
               {!readOnly && (
+                <Tooltip content="Abrir resumen e informe imprimible de venta">
+                  <button
+                    type="button"
+                    onClick={() => setShowSalesReport(true)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3.5 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/25 transition shadow-sm"
+                  >
+                    <FileText size={14} /> <span className="hidden sm:inline">Reporte de venta</span><span className="sm:hidden">Reporte</span>
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip content="Actualizar datos del negocio">
                 <button
                   type="button"
-                  onClick={() => setShowSalesReport(true)}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3.5 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/25 transition shadow-sm"
+                  onClick={() => void handleRefresh()}
+                  aria-label="Actualizar datos"
+                  className="rounded-xl border border-zinc-800 bg-zinc-900/90 p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
                 >
-                  <FileText size={14} /> <span className="hidden sm:inline">Reporte de venta</span><span className="sm:hidden">Reporte</span>
+                  <RefreshCw size={15} />
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => void handleRefresh()}
-                title="Actualizar datos"
-                className="rounded-xl border border-zinc-800 bg-zinc-900/90 p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
-              >
-                <RefreshCw size={15} />
-              </button>
+              </Tooltip>
             </div>
           </div>
 
@@ -1089,7 +1095,10 @@ export function DealDetailPage() {
               {/* TARJETA CONTROL DOCUMENTAL */}
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4 sm:p-5 shadow-xl backdrop-blur-md space-y-3">
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Control documental</h3>
+                  <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
+                    <span>Control documental</span>
+                    <InfoTip text="Lista de soportes recomendados según compradores, descuentos, referido y abonos de separación registrados." />
+                  </h3>
                   <button
                     type="button"
                     onClick={() => setTab('soportes')}

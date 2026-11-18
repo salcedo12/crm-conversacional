@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, HelpCircle, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { CountryPhoneInput } from '@/shared/components/CountryPhoneInput';
+import { InfoTip, Tooltip } from '@/shared/components/Tooltip';
 import {
   buildInternationalPhone,
   detectCountryFromInput,
@@ -231,7 +232,10 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
 
             {isOpen && (
               <div className="space-y-4 border-t border-zinc-800 px-4 pb-4 pt-3">
-                <Group title="Identificación">
+                <Group
+                  title="Identificación"
+                  tip="Escribe la cédula o NIT y pulsa la lupa para autocompletar si el cliente ya tiene ficha en el CRM."
+                >
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <Field label="Tipo de cliente">
                       <select className={inputCls} value={b.personKind} onChange={(e) => update(key, { personKind: e.target.value as ClientInput['personKind'] })}>
@@ -258,15 +262,16 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
                           inputMode={b.identificationKind === 'PAS' ? 'text' : 'numeric'}
                           autoComplete="off"
                         />
-                        <button
-                          type="button"
-                          onClick={() => lookup(key)}
-                          className="flex w-11 shrink-0 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 hover:text-zinc-200 sm:w-8 sm:rounded-md"
-                          title="Buscar ficha guardada"
-                          aria-label="Buscar ficha guardada"
-                        >
-                          {searching === key ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-                        </button>
+                        <Tooltip content="Buscar ficha guardada en el CRM">
+                          <button
+                            type="button"
+                            onClick={() => lookup(key)}
+                            className="flex h-full w-11 shrink-0 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 hover:text-zinc-200 sm:w-8 sm:rounded-md"
+                            aria-label="Buscar ficha guardada"
+                          >
+                            {searching === key ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+                          </button>
+                        </Tooltip>
                       </div>
                     </Field>
                   </div>
@@ -347,7 +352,14 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
                     </Field>
                   </div>
                   <div className="mt-3">
-                    <Field label="Celular">
+                    <Field
+                      label={
+                        <span className="inline-flex items-center gap-1">
+                          Celular
+                          <InfoTip text="El prefijo se ajusta con el selector de país para que DocuBlock envíe la firma internacional por WhatsApp o SMS correctamente." />
+                        </span>
+                      }
+                    >
                       <BuyerMobileInput
                         value={b.mobile}
                         residenceCountry={b.residenceCountry}
@@ -396,11 +408,7 @@ function Group({ title, tip, children }: { title: string; tip?: string; children
     <div>
       <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-zinc-300 sm:text-[11px]">
         <span>{title}</span>
-        {tip && (
-          <span title={tip} className="inline-flex cursor-help text-zinc-500 hover:text-zinc-300">
-            <HelpCircle size={12} />
-          </span>
-        )}
+        {tip && <InfoTip text={tip} size={12} />}
       </p>
       {children}
     </div>
