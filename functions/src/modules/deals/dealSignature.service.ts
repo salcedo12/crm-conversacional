@@ -19,6 +19,7 @@ import {
   placeKey,
   matchCity,
   countryCode,
+  localCellphone,
   suggestCities,
   missingSignerData,
   userEndorsement,
@@ -192,6 +193,8 @@ async function buildSignersCore<T extends { source: 'buyer' | 'docublock_user'; 
     }
     // DocuBlock pide el país como abreviatura ("CO"), no el nombre.
     endorsement.country = countryCode(endorsement.country, places.countries);
+    const rawMobile = choice.source === 'buyer' ? (buyers.get(choice.refId)?.mobile ?? '') : (users.get(choice.refId)?.phone ?? '');
+    endorsement.cellphone = localCellphone(rawMobile, endorsement.country);
     const missing = missingSignerData(endorsement);
     if (missing.length) problems.push(`${name}: falta ${missing.join(', ')}`);
     endorsements.push(endorsement);

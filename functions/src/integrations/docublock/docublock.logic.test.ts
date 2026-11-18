@@ -29,6 +29,9 @@ test('comprador → firmante de DocuBlock (celular sin indicativo, correo en min
   });
   expect(missingSignerData(e)).toEqual([]);
   expect(localCellphone('3001234567')).toBe('3001234567');
+  expect(localCellphone('+13139772852', 'US')).toBe('3139772852');
+  expect(localCellphone('+34641357991', 'ES')).toBe('641357991');
+  expect(localCellphone('+525512345678', 'MX')).toBe('5512345678');
 });
 
 test('usuario de Meraki en DocuBlock → firmante (secuencia 2, sin foto)', () => {

@@ -1,6 +1,12 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
+import { CountryPhoneInput } from '@/shared/components/CountryPhoneInput';
+import {
+  buildInternationalPhone,
+  detectCountryFromInput,
+  getCountryByIso,
+} from '@/features/inbox/services/contacts.service';
 import type { Lead } from '@/features/inbox/types';
 import {
   findClientByIdentification,
@@ -328,25 +334,22 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
                 </Group>
 
                 <Group title="Contacto">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <Field label="Dirección">
                       <input className={inputCls} value={b.address} autoComplete="off" onChange={(e) => update(key, { address: e.target.value })} />
-                    </Field>
-                    <Field label="Celular">
-                      <input
-                        className={inputCls}
-                        value={b.mobile}
-                        placeholder="+57 300 000 0000"
-                        onChange={(e) => update(key, { mobile: e.target.value })}
-                        onBlur={() => update(key, { mobile: normalizeMobile(b.mobile) })}
-                        inputMode="tel"
-                        type="tel"
-                        autoComplete="off"
-                      />
                     </Field>
                     <Field label="Correo">
                       <input type="email" inputMode="email" autoCapitalize="none" autoCorrect="off" autoComplete="off" className={inputCls} value={b.email}
                         onChange={(e) => update(key, { email: e.target.value })} />
+                    </Field>
+                  </div>
+                  <div className="mt-3">
+                    <Field label="Celular">
+                      <BuyerMobileInput
+                        value={b.mobile}
+                        residenceCountry={b.residenceCountry}
+                        onChange={(mobile) => update(key, { mobile })}
+                      />
                     </Field>
                   </div>
                 </Group>
@@ -390,6 +393,71 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
     <div>
       <p className="mb-2 text-xs font-semibold text-zinc-300 sm:text-[11px]">{title}</p>
       {children}
+    </div>
+  );
+}
+
+const normCountry = (v: string) =>
+  v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+function splitMobile(raw: string): { iso: string; localDigits: string } {
+  const normalized = normalizeMobile(raw || '');
+  if (!normalized) return { iso: 'co', localDigits: '' };
+  if (normalized.startsWith('+')) return detectCountryFromInput(normalized, 'co');
+  return { iso: 'co', localDigits: normalized.replace(/\D/g, '') };
+}
+
+function BuyerMobileInput({ value, residenceCountry, onChange }: {
+  value: string;
+  residenceCountry?: string;
+  onChange: (mobile: string) => void;
+}) {
+  const [{ iso, localDigits }, setState] = useState(() => splitMobile(value));
+  const isoRef = useRef(iso);
+  isoRef.current = iso;
+
+  useEffect(() => {
+    const built = buildInternationalPhone(iso, localDigits).fullPhone;
+    const normalized = normalizeMobile(value || '');
+    if (normalized !== built && !(normalized === '' && localDigits === '')) {
+      const next = splitMobile(value);
+      isoRef.current = next.iso;
+      setState(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const selected = getCountryByIso(iso);
+  const currentRes = residenceCountry || 'Colombia';
+  const countryMismatch =
+    Boolean(localDigits) &&
+    normCountry(selected.name) !== normCountry(currentRes) &&
+    !(selected.iso === 'us' && normCountry(currentRes).includes('estados unidos'));
+
+  return (
+    <div>
+      <CountryPhoneInput
+        countryIso={iso}
+        phone={localDigits}
+        required={false}
+        onCountryChange={(nextIso) => {
+          isoRef.current = nextIso;
+          const max = getCountryByIso(nextIso).maxDigits;
+          const nextLocal = localDigits.replace(/\D/g, '').slice(0, max);
+          setState({ iso: nextIso, localDigits: nextLocal });
+          onChange(buildInternationalPhone(nextIso, nextLocal).fullPhone);
+        }}
+        onPhoneChange={(nextLocal) => {
+          const activeIso = isoRef.current;
+          setState({ iso: activeIso, localDigits: nextLocal });
+          onChange(buildInternationalPhone(activeIso, nextLocal).fullPhone);
+        }}
+      />
+      {countryMismatch && (
+        <p className="mt-1 text-[11px] text-amber-300/90">
+          Para firma en DocuBlock, el prefijo sigue el país de residencia ({currentRes}). Si el comprador reside en {selected.name}, selecciónalo arriba también.
+        </p>
+      )}
     </div>
   );
 }

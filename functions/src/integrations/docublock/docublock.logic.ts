@@ -73,9 +73,30 @@ export interface DocuBlockDocument {
 
 const clean = (value: unknown) => String(value ?? '').replace(/\s+/g, ' ').trim();
 
-/** '+573022911626' → '3022911626' (DocuBlock pide el celular sin indicativo, como en su ejemplo). */
-export function localCellphone(mobile: string): string {
-  const digits = String(mobile ?? '').replace(/\D/g, '');
+const CALLING_CODE_BY_ISO: Record<string, string> = {
+  CO: '57', US: '1', CA: '1', DO: '1', PR: '1',
+  ES: '34', MX: '52', PA: '507', EC: '593', PE: '51',
+  CL: '56', AR: '54', CR: '506', BR: '55', GB: '44',
+  FR: '33', DE: '49', IT: '39', CH: '41', AU: '61',
+  AE: '971', BO: '591', PY: '595', UY: '598', VE: '58',
+  GT: '502', HN: '504', NI: '505', SV: '503', PT: '351',
+};
+
+/**
+ * '+573022911626' (CO) → '3022911626', '+13139772852' (US) → '3139772852'.
+ * DocuBlock pide el celular local sin indicativo; cuando se conoce el país (`countryIso`),
+ * retira ese indicativo aunque no sea Colombia.
+ */
+export function localCellphone(mobile: string, countryIso?: string): string {
+  const raw = String(mobile ?? '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  if (countryIso) {
+    const code = CALLING_CODE_BY_ISO[countryIso.trim().toUpperCase()];
+    if (code && digits.startsWith(code) && digits.length - code.length >= 7) {
+      return digits.slice(code.length);
+    }
+  }
   return digits.length === 12 && digits.startsWith('57') ? digits.slice(2) : digits;
 }
 
