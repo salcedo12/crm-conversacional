@@ -207,13 +207,13 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
         const fullName = `${b.firstNames} ${natural ? b.lastNames : ''}`.trim();
         const pending = missing[i]!;
         return (
-          <section key={key} id={`buyer-${key}`} className="scroll-mt-2 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40">
+          <section key={key} id={`buyer-${key}`} className="scroll-mt-2 rounded-xl border border-zinc-800 bg-zinc-950/40">
             {/* Encabezado plegable: nombre, documento y si le faltan datos. */}
             <button
               type="button"
               onClick={() => toggle(key)}
               aria-expanded={isOpen}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-900/60"
+              className={`flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-900/60 ${isOpen ? 'rounded-t-xl' : 'rounded-xl'}`}
             >
               <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${pending.length ? 'bg-amber-500/10 text-amber-300' : 'bg-emerald-500/10 text-emerald-300'}`}>
                 {pending.length ? <UserRound size={16} /> : <CheckCircle2 size={16} />}

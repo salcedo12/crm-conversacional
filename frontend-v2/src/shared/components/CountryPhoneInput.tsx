@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Search, Check } from 'lucide-react';
 import {
   COUNTRY_PREFIX_OPTIONS,
@@ -43,24 +44,63 @@ export function CountryPhoneInput({
 }: CountryPhoneInputProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [coords, setCoords] = useState<{ left: number; width: number; top?: number; bottom?: number; maxHeight: number }>({
+    left: 12,
+    width: 300,
+    top: 0,
+    maxHeight: 288,
+  });
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedCountry = useMemo(() => getCountryByIso(countryIso), [countryIso]);
 
+  const updateCoords = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = Math.min(Math.max(rect.width, 280), vw - 24);
+    const left = Math.max(12, Math.min(rect.left, vw - width - 12));
+    const spaceBelow = vh - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+    const openUp = spaceBelow < 240 && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(180, Math.min(288, openUp ? spaceAbove : spaceBelow));
+    setCoords({
+      left,
+      width,
+      maxHeight,
+      ...(openUp ? { bottom: vh - rect.top + 6 } : { top: rect.bottom + 6 }),
+    });
+  }, []);
+
   useEffect(() => {
-    if (open) {
-      setSearch('');
-      setTimeout(() => searchInputRef.current?.focus(), 30);
-    }
-  }, [open]);
+    if (!open) return;
+    setSearch('');
+    updateCoords();
+    const raf = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    const onResize = () => updateCoords();
+    const onScroll = (e: Event) => {
+      if (dropdownRef.current && e.target instanceof Node && dropdownRef.current.contains(e.target)) return;
+      updateCoords();
+    };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open, updateCoords]);
 
   useEffect(() => {
     if (!open) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -122,7 +162,7 @@ export function CountryPhoneInput({
           type="button"
           onClick={() => setOpen((prev) => !prev)}
           title={`${selectedCountry.name} (${selectedCountry.code})`}
-          className="flex items-center justify-between gap-1.5 shrink-0 rounded-xl border border-zinc-700 bg-zinc-800/95 hover:bg-zinc-800 px-2.5 py-2 text-xs text-zinc-100 focus:border-amber-500/60 focus:outline-none cursor-pointer transition-colors min-w-[96px]"
+          className="flex items-center justify-between gap-1.5 shrink-0 rounded-xl border border-zinc-700 bg-zinc-800/95 hover:bg-zinc-800 px-2 sm:px-2.5 py-2 text-xs text-zinc-100 focus:border-amber-500/60 focus:outline-none cursor-pointer transition-colors min-w-[86px] sm:min-w-[96px]"
         >
           <span className="flex items-center gap-1.5">
             <img
@@ -165,11 +205,21 @@ export function CountryPhoneInput({
         )}
       </div>
 
-      {/* Menú Desplegable con Buscador en Tiempo Real */}
-      {open && (
-        <div className="absolute left-0 top-11 z-50 w-72 sm:w-80 rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl overflow-hidden flex flex-col max-h-72">
+      {/* Menú Desplegable con Buscador en Tiempo Real (en Portal para no recortarse en modales/tarjetas) */}
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{
+            position: 'fixed',
+            left: coords.left,
+            width: coords.width,
+            maxHeight: coords.maxHeight,
+            ...(coords.top !== undefined ? { top: coords.top } : { bottom: coords.bottom }),
+          }}
+          className="z-[9999] rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl overflow-hidden flex flex-col"
+        >
           {/* Buscador */}
-          <div className="p-2 border-b border-zinc-800 bg-zinc-950/80 sticky top-0">
+          <div className="p-2 border-b border-zinc-800 bg-zinc-950/90 shrink-0">
             <div className="relative flex items-center">
               <Search size={13} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
               <input
@@ -222,7 +272,8 @@ export function CountryPhoneInput({
               })
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
