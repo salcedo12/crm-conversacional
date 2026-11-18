@@ -1,5 +1,7 @@
 rules_version = '2';
 
+// Seguridad R05 (activa desde 2026-11-18): un asesor solo lee/edita sus leads asignados.
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Reglas de producción — aislamiento por empresa (multi-tenant) vía custom claims.
 //
@@ -54,8 +56,24 @@ service cloud.firestore {
              && (isPlatformAdmin() || request.auth.token.get('role', 'advisor') != 'viewer');
     }
 
+    // Rol "Solo lectura": ve todo (como admin) pero no modifica.
+    function isViewer(companyId) {
+      return inCompany(companyId) && request.auth.token.get('role', 'advisor') == 'viewer';
+    }
+
+    // Ve todos los leads de la empresa: admin/manager, platformAdmin y "Solo lectura".
+    function seesAllLeads(companyId) {
+      return isAdmin(companyId) || isViewer(companyId);
+    }
+
+    // Seguridad (R05): las subcolecciones de un lead (mensajes, notas, llamadas,
+    // evidencias…) solo las ve quien puede ver el lead: su asesor asignado o
+    // quien ve todo. Cuesta una lectura extra (get del lead) por consulta.
     function canReadLead(companyId, leadId) {
-      return inCompany(companyId) && leadId != null;
+      return seesAllLeads(companyId)
+             || (inCompany(companyId)
+                 && get(/databases/$(database)/documents/companies/$(companyId)/leads/$(leadId))
+                      .data.get('assignedTo', null) == request.auth.uid);
     }
 
     match /companies/{companyId} {
@@ -99,12 +117,20 @@ service cloud.firestore {
       }
 
       // ── Leads y mensajes ───────────────────────────────────────────────────
-      // Lectura para cualquier miembro de la empresa (la bandeja y embudo del CRM).
-      // Actualizaciones permitidas para miembros de la empresa (pipeline, notas, seguimientos),
-      // excepto el rol "Solo lectura" (viewer), que solo consulta.
+      // Seguridad (R05): un asesor solo lee y edita SUS leads (assignedTo == uid).
+      // Las consultas de un asesor deben llevar where('assignedTo','==',uid) o
+      // Firestore las rechaza completas. Admin/manager y "Solo lectura" ven todo.
+      // Un asesor no puede reasignar (cambiar assignedTo); eso lo hace un admin.
       match /leads/{leadId} {
-        allow read:   if inCompany(companyId);
-        allow update: if canWrite(companyId);
+        function ownsLead() {
+          return resource.data.get('assignedTo', null) == request.auth.uid;
+        }
+
+        allow read:   if seesAllLeads(companyId) || (inCompany(companyId) && ownsLead());
+        allow update: if canWrite(companyId)
+                      && (isAdmin(companyId)
+                          || (ownsLead()
+                              && request.resource.data.get('assignedTo', null) == resource.data.get('assignedTo', null)));
         allow create, delete: if false;
 
         match /messages/{messageId} {
@@ -122,7 +148,10 @@ service cloud.firestore {
         // Notas internas y recordatorios del lead. Lectura y registro desde el cliente
         match /notes/{noteId} {
           allow read:   if canReadLead(companyId, leadId);
-          allow create: if canWrite(companyId);
+          // Autoría: un asesor no puede firmar como otro usuario ni como la IA ('ai').
+          allow create: if canWrite(companyId) && canReadLead(companyId, leadId)
+                        && (isAdmin(companyId)
+                            || request.resource.data.get('authorId', request.auth.uid) == request.auth.uid);
           allow update, delete: if isAdmin(companyId);
         }
 
