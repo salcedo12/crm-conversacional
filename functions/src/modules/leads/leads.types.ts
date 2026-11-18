@@ -200,6 +200,11 @@ export interface Lead {
   smartHomeSyncRetries?: number;
   /** Coincidencias encontradas en SmartHome cuando se bloquea una creacion por duplicado. */
   smartHomeDuplicateMatches?: SmartHomeDuplicateMatch[];
+  email?:           string | null;
+  city?:            string | null;
+  documentNumber?:  string | null;
+  documentType?:    string | null;
+  contactPhone?:    string | null;
 }
 
 /**

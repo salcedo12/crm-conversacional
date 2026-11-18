@@ -9,7 +9,8 @@ import { leadsRepository } from '../modules/leads/leads.repository';
 import { ClientInputSchema, clientDocId, normalizeIdentification, MAX_BUYERS } from '../modules/deals/clientProfile';
 import type { ClientProfile, Deal, DealAttachment, DealAttachmentCategory } from '../modules/deals/deals.types';
 import { canEditDealBuyers, clientsCol, dealsCol, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
-import { dealActivityDoc, dealActivityRef, leadRef } from '../modules/deals/dealAudit';
+import { dealActivityDoc, dealActivityRef, leadRef, syncDealActivityToLeadAndSmartHome } from '../modules/deals/dealAudit';
+import { phoneTail, toNormalizedPhone } from '../utils/phone';
 import { backfillDealLots, lotSnapshot } from '../modules/deals/dealDocumentLot';
 import { isPendingSignature } from '../modules/deals/dealSignature.logic';
 import { releaseLot } from '../modules/inventory/lotReservation.service';
@@ -210,6 +211,8 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
   const ref = dealsCol(data.companyId).doc();
   const batch = db.batch();
   batch.set(ref, { ...deal, createdBy: ctx.uid });
+  const createTitle = inheritedBuyers.length ? 'Nuevo negocio creado (compradores vinculados)' : 'Negocio creado';
+  const createLines = assigned ? [`Broker / asesor asignado: ${assigned.name}`] : undefined;
   batch.set(dealActivityRef(data.companyId, data.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: data.leadId,
@@ -217,10 +220,20 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     actorId: ctx.uid,
     actorName: actor.name,
     event: 'created',
-    title: inheritedBuyers.length ? 'Nuevo negocio creado (compradores vinculados)' : 'Negocio creado',
-    ...(assigned ? { lines: [`Broker / asesor asignado: ${assigned.name}`] } : {}),
+    title: createTitle,
+    ...(createLines ? { lines: createLines } : {}),
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: data.leadId,
+    dealId: ref.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'created',
+    title: createTitle,
+    ...(createLines ? { lines: createLines } : {}),
+  });
   logger.info('[Deals] Negocio creado', { companyId: data.companyId, leadId: data.leadId, dealId: ref.id });
   return { dealId: ref.id };
 });
@@ -306,15 +319,27 @@ export const saveDealBuyers = onCall({ region: 'us-central1', timeoutSeconds: 30
 
   const now = Timestamp.now();
   const actor = await userDisplayName(data.companyId, ctx.uid);
+  const primaryCandidate = data.buyers[0];
+  let canPromotePrimaryPhone = false;
+  if (/^\+\d{7,15}$/.test(primaryCandidate.mobile)) {
+    const dup = await leadsRepository.findByPhoneTail(data.companyId, phoneTail(primaryCandidate.mobile), deal.leadId);
+    canPromotePrimaryPhone = !dup;
+  }
+
+  let savedActivityTitle = editingAfterDraft ? 'Compradores actualizados por administración (en firma)' : 'Compradores guardados y ficha actualizada';
+  let savedActivityLines: string[] = [];
+
   await db.runTransaction(async (tx) => {
     const clientRefs = ids.map((id) => clientsCol(data.companyId).doc(id));
-    const existing = await tx.getAll(...clientRefs);
+    const lRef = leadRef(data.companyId, deal.leadId);
+    const [leadSnap, ...existing] = await tx.getAll(lRef, ...clientRefs);
 
     const auditLines: string[] = [];
     const labels: Array<[keyof (typeof data.buyers)[number], string]> = [
       ['firstNames', 'nombres'], ['lastNames', 'apellidos'], ['identificationKind', 'tipo de documento'],
       ['identificationNumber', 'documento'], ['email', 'correo'], ['mobile', 'móvil'],
-      ['residenceCity', 'ciudad'], ['address', 'dirección'], ['expeditionCity', 'lugar de expedición'],
+      ['residenceCountry', 'país de residencia'], ['residenceCity', 'ciudad'], ['address', 'dirección'],
+      ['expeditionCountry', 'país de expedición'], ['expeditionCity', 'lugar de expedición'],
       ['expeditionDate', 'fecha de expedición'], ['birthDate', 'fecha de nacimiento'],
       ['maritalStatus', 'estado civil'], ['gender', 'género'],
     ];
@@ -370,26 +395,69 @@ export const saveDealBuyers = onCall({ region: 'us-central1', timeoutSeconds: 30
     });
 
     const primary = data.buyers[0];
-    tx.update(leadRef(data.companyId, deal.leadId), {
-      name: `${primary.firstNames} ${primary.lastNames}`.trim(),
+    const primaryFullName = `${primary.firstNames} ${primary.lastNames}`.trim();
+    const prevLeadData = leadSnap.exists ? (leadSnap.data() as Record<string, any>) : {};
+    const prevLeadPhone = String(prevLeadData.phone ?? '').trim();
+    const prevLeadContactPhone = String(prevLeadData.contactPhone ?? prevLeadData.dealPrimaryBuyer?.mobile ?? '').trim();
+    const prevLeadDoc = String(prevLeadData.documentNumber ?? '').trim();
+    const prevLeadName = String(prevLeadData.name ?? '').trim();
+    const nextPrimaryDoc = normalizeIdentification(primary.identificationNumber);
+
+    const leadChanges: string[] = [];
+    if (prevLeadName && prevLeadName !== primaryFullName) leadChanges.push(`Nombre en ficha: “${prevLeadName}” → “${primaryFullName}”`);
+    if (prevLeadDoc && prevLeadDoc !== nextPrimaryDoc) leadChanges.push(`Cédula/Doc ficha: “${prevLeadDoc}” → “${nextPrimaryDoc}”`);
+    if (prevLeadPhone && prevLeadPhone !== primary.mobile && prevLeadContactPhone !== primary.mobile) {
+      leadChanges.push(`Celular comprador: “${prevLeadContactPhone || prevLeadPhone}” → “${primary.mobile}”`);
+    }
+
+    const isPlaceholderPhone = !prevLeadPhone || prevLeadPhone.startsWith('user_') || prevLeadPhone.includes('CO.');
+    const shouldPromotePhone = isPlaceholderPhone && canPromotePrimaryPhone;
+
+    tx.update(lRef, {
+      name: primaryFullName,
       email: primary.email,
       city: primary.residenceCity,
-      documentNumber: normalizeIdentification(primary.identificationNumber),
+      documentNumber: nextPrimaryDoc,
+      documentType: primary.identificationKind,
+      contactPhone: primary.mobile,
+      'metadata.documentType': primary.identificationKind,
+      'metadata.address': primary.address,
+      'metadata.residenceCountry': primary.residenceCountry || 'Colombia',
+      'metadata.expeditionCity': primary.expeditionCity,
+      'metadata.expeditionCountry': primary.expeditionCountry || 'Colombia',
+      'metadata.expeditionDate': primary.expeditionDate,
+      ...(primary.birthDate ? { 'metadata.birthDate': primary.birthDate } : {}),
+      'metadata.contactPhone': primary.mobile,
+      ...(shouldPromotePhone ? {
+        phone: primary.mobile,
+        normalizedPhone: toNormalizedPhone(primary.mobile),
+        phoneTail: phoneTail(primary.mobile),
+      } : {}),
       dealPrimaryBuyer: {
         dealId: deal.id,
         personKind: primary.personKind,
         firstNames: primary.firstNames,
         lastNames: primary.lastNames,
         identificationKind: primary.identificationKind,
-        identificationNumber: normalizeIdentification(primary.identificationNumber),
+        identificationNumber: nextPrimaryDoc,
         email: primary.email,
         mobile: primary.mobile,
         residenceCity: primary.residenceCity,
+        residenceCountry: primary.residenceCountry || 'Colombia',
         address: primary.address,
+        expeditionCity: primary.expeditionCity,
+        expeditionCountry: primary.expeditionCountry || 'Colombia',
+        expeditionDate: primary.expeditionDate,
+        ...(primary.birthDate ? { birthDate: primary.birthDate } : {}),
         updatedAt: now,
       },
       updatedAt: now,
     });
+
+    savedActivityLines = editingAfterDraft
+      ? [`Negocio en estado "${deal.status}": regenerar contratos si aplica.`, ...leadChanges, ...auditLines]
+      : [...leadChanges, ...auditLines];
+
     tx.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
       companyId: data.companyId,
       leadId: deal.leadId,
@@ -397,12 +465,22 @@ export const saveDealBuyers = onCall({ region: 'us-central1', timeoutSeconds: 30
       actorId: ctx.uid,
       actorName: actor.name,
       event: 'buyers_saved',
-      title: editingAfterDraft ? 'Compradores actualizados por administración (en firma)' : 'Compradores guardados y ficha actualizada',
-      lines: editingAfterDraft
-        ? [`Negocio en estado "${deal.status}": regenerar contratos si aplica.`, ...auditLines]
-        : auditLines,
+      title: savedActivityTitle,
+      lines: savedActivityLines,
       createdAt: now,
     }));
+  });
+
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'buyers_saved',
+    title: savedActivityTitle,
+    lines: savedActivityLines,
+    createdAt: now,
   });
 
   logger.info('[Deals] Compradores guardados', { companyId: data.companyId, dealId: data.dealId, buyers: ids.length });
@@ -499,6 +577,13 @@ export const uploadDealAttachment = onCall(
       uploadedByName: actor.name,
     };
 
+    const attLines = [
+      ATTACHMENT_LABELS[data.category],
+      ...(buyerName ? [`Comprador: ${buyerName}`] : []),
+      ...(data.paymentAmount ? [`Pago: $ ${data.paymentAmount.toLocaleString('es-CO')} · ${data.paymentDate}`] : []),
+      `Archivo: ${data.fileName}`,
+      ...(data.note ? [`Nota: ${data.note}`] : []),
+    ];
     try {
       await db.runTransaction(async (tx) => {
         const currentSnap = await tx.get(ref);
@@ -512,13 +597,7 @@ export const uploadDealAttachment = onCall(
           actorName: actor.name,
           event: 'attachment_uploaded',
           title: 'Soporte agregado al negocio',
-          lines: [
-            ATTACHMENT_LABELS[data.category],
-            ...(buyerName ? [`Comprador: ${buyerName}`] : []),
-            ...(data.paymentAmount ? [`Pago: $ ${data.paymentAmount.toLocaleString('es-CO')} · ${data.paymentDate}`] : []),
-            `Archivo: ${data.fileName}`,
-            ...(data.note ? [`Nota: ${data.note}`] : []),
-          ],
+          lines: attLines,
           createdAt: now,
         }));
       });
@@ -526,6 +605,18 @@ export const uploadDealAttachment = onCall(
       await storage.bucket().file(storagePath).delete({ ignoreNotFound: true }).catch(() => {});
       throw err;
     }
+
+    await syncDealActivityToLeadAndSmartHome({
+      companyId: data.companyId,
+      leadId: deal.leadId,
+      dealId: deal.id,
+      actorId: ctx.uid,
+      actorName: actor.name,
+      event: 'attachment_uploaded',
+      title: 'Soporte agregado al negocio',
+      lines: attLines,
+      createdAt: now,
+    });
 
     return { attachment: { ...attachment, uploadedAt: now.toMillis() } };
   },
@@ -566,6 +657,7 @@ export const deleteDealAttachment = onCall({ region: 'us-central1', timeoutSecon
 
   const actor = await userDisplayName(data.companyId, ctx.uid);
   const now = Timestamp.now();
+  const delLines = [ATTACHMENT_LABELS[attachment.category], `Archivo: ${attachment.fileName}`];
   await db.runTransaction(async (tx) => {
     const currentSnap = await tx.get(ref);
     const current = currentSnap.data() as Deal;
@@ -581,11 +673,22 @@ export const deleteDealAttachment = onCall({ region: 'us-central1', timeoutSecon
       actorName: actor.name,
       event: 'attachment_deleted',
       title: 'Soporte eliminado del negocio',
-      lines: [ATTACHMENT_LABELS[attachment.category], `Archivo: ${attachment.fileName}`],
+      lines: delLines,
       createdAt: now,
     }));
   });
   await storage.bucket().file(attachment.storagePath).delete({ ignoreNotFound: true });
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'attachment_deleted',
+    title: 'Soporte eliminado del negocio',
+    lines: delLines,
+    createdAt: now,
+  });
   return { ok: true as const };
 });
 
@@ -657,6 +760,10 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
       responseNotes: `Negocio anulado: ${data.reason}`,
     }, { merge: true });
   }
+  const cancelLines = [
+    `Motivo: ${data.reason}`,
+    ...(hadPendingSignatures ? ['Se detuvo el seguimiento de firma en el CRM (anula también en el panel de DocuBlock si siguen vigentes)'] : []),
+  ];
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
@@ -665,13 +772,21 @@ export const cancelDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
     actorName: actor.name,
     event: 'cancelled',
     title: 'Negocio anulado',
-    lines: [
-      `Motivo: ${data.reason}`,
-      ...(hadPendingSignatures ? ['Se detuvo el seguimiento de firma en el CRM (anula también en el panel de DocuBlock si siguen vigentes)'] : []),
-    ],
+    lines: cancelLines,
     createdAt: now,
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'cancelled',
+    title: 'Negocio anulado',
+    lines: cancelLines,
+    createdAt: now,
+  });
 
   // Devolver el lote al inventario (solo si sigue apartado por este negocio; nunca un VENDIDO).
   if (deal.lot) {
@@ -784,6 +899,17 @@ export const reassignDealAdvisor = onCall({ region: 'us-central1', timeoutSecond
     createdAt: now,
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'advisor_reassigned',
+    title: 'Asesor del negocio reasignado',
+    lines: [`${prevAdvisor.name} → ${nextAdvisorName}`],
+    createdAt: now,
+  });
 
   if (data.advisorId !== ctx.uid) {
     const lotDesc = deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}` : 'Negocio sin lote';

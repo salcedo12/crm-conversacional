@@ -1,9 +1,14 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { Timestamp }          from 'firebase-admin/firestore';
 import { z }                  from 'zod';
+import { db }                 from '../lib/admin';
 import { logger }             from '../utils/logger';
 import { leadsRepository }    from '../modules/leads/leads.repository';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import { sendLeadReassignedPush } from '../modules/messages/pushNotifications.service';
+import { userDisplayName }    from '../modules/deals/dealAccess';
+import { bogotaNowString, leadRef as dealLeadRef, mergeBitacoraLists } from '../modules/deals/dealAudit';
+import { postLeadSmartHomeBitacora } from '../modules/smarthome/smarthomeEvents.service';
 import { normalizePhone, phoneTail, toNormalizedPhone } from '../utils/phone';
 
 const UpdateLeadSchema = z.object({
@@ -126,7 +131,85 @@ export const updateLead = onCall(
       return { leadId }; // nada que actualizar
     }
 
-    await leadsRepository.update(companyId, leadId, update);
+    const changeLines: string[] = [];
+    const cmp = (label: string, prev: unknown, next: unknown) => {
+      const a = String(prev ?? '').trim();
+      const b = String(next ?? '').trim();
+      if (a !== b) changeLines.push(`${label}: “${a || 'vacío'}” → “${b || 'vacío'}”`);
+    };
+    if (fields.name !== undefined) cmp('Nombre', lead.name, fields.name);
+    if (fields.phone !== undefined && update.phone) cmp('Teléfono', lead.phone, update.phone);
+    if (fields.email !== undefined) cmp('Correo', lead.email, fields.email);
+    if (fields.city !== undefined) cmp('Ciudad', lead.city, fields.city);
+    if (fields.documentNumber !== undefined) cmp('Documento', lead.documentNumber, fields.documentNumber);
+    if (fields.fuenteUbicacion !== undefined) cmp('Fuente', lead.fuenteUbicacion, fields.fuenteUbicacion);
+    if (fields.projectInterest !== undefined) {
+      cmp('Proyecto', (lead.projectInterest ?? []).join(', '), (fields.projectInterest ?? []).join(', '));
+    }
+
+    if (changeLines.length > 0) {
+      const nowTs = Timestamp.now();
+      const actor = await userDisplayName(companyId, ctx.uid);
+      const description = changeLines.join(' · ').slice(0, 600);
+      const entry = {
+        id_registro: `ficha_${nowTs.toMillis()}`,
+        origen: 'CRM',
+        fecha: bogotaNowString(nowTs.toMillis()),
+        lastDate: bogotaNowString(nowTs.toMillis()),
+        action: 'Actualización de Ficha',
+        description,
+        asesor: actor.name,
+      };
+      const mergedBitacoras = mergeBitacoraLists([
+        (update.bitacoras as unknown[]) ?? (lead as any).bitacoras,
+        (update.metadata as any)?.smarthomeBitacoras ?? lead.metadata?.smarthomeBitacoras,
+        (lead as any).smarthomeBitacoras,
+      ], entry);
+
+      update.bitacoras = mergedBitacoras;
+      if (update.metadata && typeof update.metadata === 'object') {
+        (update.metadata as Record<string, unknown>).smarthomeBitacoras = mergedBitacoras;
+        (update.metadata as Record<string, unknown>).hasFicha = true;
+      } else {
+        update['metadata.smarthomeBitacoras'] = mergedBitacoras;
+        update['metadata.hasFicha'] = true;
+      }
+      update.smartHomeLastBitacoraAt = nowTs;
+      update.smartHomeLastBitacoraBy = ctx.uid;
+      update.smartHomeLastBitacoraByName = actor.name;
+      update.smartHomeLastBitacoraText = description.slice(0, 240);
+      update.smartHomeLastActionLabel = 'Actualización de Ficha';
+      update.smartHomeTrackingUpdatedAt = nowTs;
+      update.lastFollowUpAt = nowTs;
+      update.lastFollowUpAction = 'actualizacion_ficha';
+      update.lastFollowUpSummary = description.slice(0, 240);
+      update.lastFollowUpAuthor = actor.name;
+
+      await leadsRepository.update(companyId, leadId, update);
+
+      await db.runTransaction(async (tx) => {
+        const noteRef = dealLeadRef(companyId, leadId).collection('notes').doc();
+        tx.set(noteRef, {
+          companyId,
+          leadId,
+          kind: 'note',
+          type: 'ficha_tecnica',
+          actionType: 'actualizacion_ficha',
+          result: 'Actualización de Ficha',
+          text: ['📝 FICHA ACTUALIZADA', ...changeLines.map((l) => `• ${l}`)].join('\n'),
+          authorId: ctx.uid,
+          authorName: actor.name,
+          createdAt: nowTs,
+        });
+      }).catch((err) => logger.warn('[UpdateLead] No se pudo escribir nota de bitácora', { leadId, err }));
+
+      await postLeadSmartHomeBitacora(
+        { ...lead, ...(fields.phone && update.phone ? { phone: String(update.phone) } : {}), companyId, id: leadId },
+        `[CRM · Ficha actualizada] ${description}`,
+      ).catch((err) => logger.warn('[UpdateLead] No se pudo sincronizar cambio a SmartHome', { leadId, err }));
+    } else {
+      await leadsRepository.update(companyId, leadId, update);
+    }
 
     if (update.assignedTo && typeof update.assignedTo === 'string' && update.assignedTo !== lead.assignedTo && update.assignedTo !== ctx.uid) {
       await sendLeadReassignedPush(companyId, lead, update.assignedTo, ctx.uid).catch((err) => {

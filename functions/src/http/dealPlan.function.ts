@@ -5,7 +5,7 @@ import { db } from '../lib/admin';
 import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES } from '../lib/authContext';
 import { canEditDealConditions, draftStatusFor, EDITABLE_STATUSES, isAdmin, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
-import { dealActivityDoc, dealActivityRef, money as formatMoney } from '../modules/deals/dealAudit';
+import { dealActivityDoc, dealActivityRef, money as formatMoney, syncDealActivityToLeadAndSmartHome } from '../modules/deals/dealAudit';
 import { parseCivilDate } from '../modules/deals/civilDate';
 import { computeEarnestMoney, summarizePlan, termIssue } from '../modules/deals/paymentPlan';
 import { getProjectLegalProfile } from '../modules/deals/legalProfiles';
@@ -148,6 +148,20 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
     status,
     updatedAt: now,
   });
+  const planTitle = editingAfterDraft
+    ? 'Plan financiero actualizado (negocio en firma)'
+    : deal.plan
+      ? 'Plan de negocio actualizado'
+      : 'Plan de negocio guardado';
+  const planLines = [
+    ...(editingAfterDraft ? [`Negocio en estado "${deal.status}": regenerar preventa/promesa y reenviar a firma si aplica.`] : []),
+    `Valor del terreno: ${formatMoney(plan.landValue)} · Plazo: ${plan.termMonths} meses`
+      + (plan.specialTerm ? ` (especial${plan.specialTerm.approvedBy ? `, aprobado por ${plan.specialTerm.approvedBy}` : ''})` : ''),
+    `Separación: ${formatMoney(summary.separationTotal)} · Ordinarias: ${formatMoney(summary.ordinaryTotal)} · Extraordinarias: ${formatMoney(summary.extraordinaryTotal)}`,
+    `Beneficio: ${formatMoney(plan.benefit)} · Cesantías: ${formatMoney(summary.severanceTotal)}`,
+    ...(plan.referredBy ? [`Referido por: ${plan.referredBy}`] : []),
+    ...(plan.notes ? [`Observaciones: ${plan.notes}`] : []),
+  ];
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
@@ -155,19 +169,22 @@ export const saveDealPlan = onCall({ region: 'us-central1', timeoutSeconds: 30 }
     actorId: ctx.uid,
     actorName: actor.name,
     event: 'plan_saved',
-    title: editingAfterDraft ? 'Plan financiero actualizado (negocio en firma)' : deal.plan ? 'Plan de negocio actualizado' : 'Plan de negocio guardado',
-    lines: [
-      ...(editingAfterDraft ? [`Negocio en estado "${deal.status}": regenerar preventa/promesa y reenviar a firma si aplica.`] : []),
-      `Valor del terreno: ${formatMoney(plan.landValue)} · Plazo: ${plan.termMonths} meses`
-        + (plan.specialTerm ? ` (especial${plan.specialTerm.approvedBy ? `, aprobado por ${plan.specialTerm.approvedBy}` : ''})` : ''),
-      `Separación: ${formatMoney(summary.separationTotal)} · Ordinarias: ${formatMoney(summary.ordinaryTotal)} · Extraordinarias: ${formatMoney(summary.extraordinaryTotal)}`,
-      `Beneficio: ${formatMoney(plan.benefit)} · Cesantías: ${formatMoney(summary.severanceTotal)}`,
-      ...(plan.referredBy ? [`Referido por: ${plan.referredBy}`] : []),
-      ...(plan.notes ? [`Observaciones: ${plan.notes}`] : []),
-    ],
+    title: planTitle,
+    lines: planLines,
     createdAt: now,
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'plan_saved',
+    title: planTitle,
+    lines: planLines,
+    createdAt: now,
+  });
 
   logger.info('[DealPlan] Plan guardado', { companyId: data.companyId, dealId: deal.id, status });
   return { ok: true as const, status };

@@ -8,7 +8,7 @@ import { canEditDealConditions, draftStatusFor, EDITABLE_STATUSES, isAdmin, load
 import { inventoryDb } from '../modules/inventory/inventory.client';
 import { availableLotsFromSummary, INVENTORY_PROJECT_NAMES, normalizeStatus, type SummaryEntry } from '../modules/inventory/inventory.logic';
 import { getLotStatus, releaseLot, reserveLot } from '../modules/inventory/lotReservation.service';
-import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
+import { dealActivityDoc, dealActivityRef, syncDealActivityToLeadAndSmartHome } from '../modules/deals/dealAudit';
 import { lotLabel, supersedeForLotChange } from '../modules/deals/dealDocumentLot';
 import { isPendingSignature } from '../modules/deals/dealSignature.logic';
 
@@ -125,6 +125,14 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
         : {}),
       updatedAt: now,
     });
+    const reserveTitle = switchedLot
+      ? (changingAfterDraft ? 'Lote cambiado (negocio en firma)' : 'Lote del negocio cambiado')
+      : 'Lote apartado';
+    const reserveLines = [
+      `${dealLot.projectId} · ${dealLot.sector} · Lote ${dealLot.lotNumber} · ${dealLot.areaM2} m²${dealLot.corner ? ' · Esquinero' : ''}`,
+      ...(dealLot.reservedUntil ? [`Reserva vigente hasta ${dealLot.reservedUntil}`] : []),
+      ...superseded.map((d) => `${d.kind === 'preventa' ? 'Preventa' : 'Promesa'} v${d.version} (${d.lot ? lotLabel(d.lot) : 'lote anterior'}) queda vencida`),
+    ];
     batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
       companyId: data.companyId,
       leadId: deal.leadId,
@@ -132,17 +140,22 @@ export const reserveDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
       actorId: ctx.uid,
       actorName: actor.name,
       event: 'lot_reserved',
-      title: switchedLot
-        ? (changingAfterDraft ? 'Lote cambiado (negocio en firma)' : 'Lote del negocio cambiado')
-        : 'Lote apartado',
-      lines: [
-        `${dealLot.projectId} · ${dealLot.sector} · Lote ${dealLot.lotNumber} · ${dealLot.areaM2} m²${dealLot.corner ? ' · Esquinero' : ''}`,
-        ...(dealLot.reservedUntil ? [`Reserva vigente hasta ${dealLot.reservedUntil}`] : []),
-        ...superseded.map((d) => `${d.kind === 'preventa' ? 'Preventa' : 'Promesa'} v${d.version} (${d.lot ? lotLabel(d.lot) : 'lote anterior'}) queda vencida`),
-      ],
+      title: reserveTitle,
+      lines: reserveLines,
       createdAt: now,
     }));
     await batch.commit();
+    await syncDealActivityToLeadAndSmartHome({
+      companyId: data.companyId,
+      leadId: deal.leadId,
+      dealId: deal.id,
+      actorId: ctx.uid,
+      actorName: actor.name,
+      event: 'lot_reserved',
+      title: reserveTitle,
+      lines: reserveLines,
+      createdAt: now,
+    });
   } catch (err) {
     // El negocio no quedó con el lote: devolverlo al inventario para no dejarlo bloqueado.
     await releaseLot(data.lotId, deal.id, actor).catch(() => {});
@@ -205,6 +218,7 @@ export const releaseDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
       : {}),
     updatedAt: now,
   });
+  const relLines = [`${deal.lot.projectId} · ${deal.lot.sector} · Lote ${deal.lot.lotNumber}`];
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
@@ -213,10 +227,21 @@ export const releaseDealLot = onCall({ region: 'us-central1', timeoutSeconds: 30
     actorName: actor.name,
     event: 'lot_released',
     title: 'Lote liberado',
-    lines: [`${deal.lot.projectId} · ${deal.lot.sector} · Lote ${deal.lot.lotNumber}`],
+    lines: relLines,
     createdAt: now,
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'lot_released',
+    title: 'Lote liberado',
+    lines: relLines,
+    createdAt: now,
+  });
   return { ok: true as const };
 });
 

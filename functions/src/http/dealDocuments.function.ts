@@ -11,7 +11,7 @@ import { fechaCorta, fechaEnLetras, formatDMY } from '../modules/deals/civilDate
 import { formatoPesos, pesosEnLetras } from '../modules/deals/numeroALetras';
 import { renderContract } from '../modules/contracts/contractRenderer';
 import type { ClientProfile, Deal, DealDocument, DealDocumentKind } from '../modules/deals/deals.types';
-import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
+import { dealActivityDoc, dealActivityRef, syncDealActivityToLeadAndSmartHome } from '../modules/deals/dealAudit';
 import { latestCurrentDocument, lotSnapshot } from '../modules/deals/dealDocumentLot';
 import { isPendingSignature, signatureDealStatus } from '../modules/deals/dealSignature.logic';
 import { draftStatusFor } from '../modules/deals/dealStatus';
@@ -161,6 +161,8 @@ export async function generateDocument(
   const actor = await userDisplayName(data.companyId, ctx.uid);
   const batch = db.batch();
   batch.update(ref, { documents: [...documents, doc], updatedAt: now });
+  const genTitle = data.kind === 'preventa' ? 'Contrato de preventa generado' : 'Promesa de compraventa generada';
+  const genLines = [`Versión ${version} · Archivo Word guardado en el negocio`];
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
@@ -168,11 +170,22 @@ export async function generateDocument(
     actorId: ctx.uid,
     actorName: actor.name,
     event: 'document_generated',
-    title: data.kind === 'preventa' ? 'Contrato de preventa generado' : 'Promesa de compraventa generada',
-    lines: [`Versión ${version} · Archivo Word guardado en el negocio`],
+    title: genTitle,
+    lines: genLines,
     createdAt: now,
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'document_generated',
+    title: genTitle,
+    lines: genLines,
+    createdAt: now,
+  });
 
   logger.info('[DealDocuments] Documento generado', { dealId: deal.id, kind: data.kind, version });
   deal.documents = [...documents, doc];
@@ -344,6 +357,8 @@ export const deleteDealDocument = onCall({ region: 'us-central1', timeoutSeconds
 
   const batch = db.batch();
   batch.update(ref, { documents: remaining, status: nextStatus, signaturePending: pending, updatedAt: now });
+  const delDocTitle = data.kind === 'preventa' ? 'Contrato de preventa eliminado' : 'Promesa de compraventa eliminada';
+  const delDocLines = [`Versión ${data.version} eliminada por el administrador`];
   batch.set(dealActivityRef(data.companyId, deal.leadId), dealActivityDoc({
     companyId: data.companyId,
     leadId: deal.leadId,
@@ -351,11 +366,22 @@ export const deleteDealDocument = onCall({ region: 'us-central1', timeoutSeconds
     actorId: ctx.uid,
     actorName: actor.name,
     event: 'document_deleted',
-    title: data.kind === 'preventa' ? 'Contrato de preventa eliminado' : 'Promesa de compraventa eliminada',
-    lines: [`Versión ${data.version} eliminada por el administrador`],
+    title: delDocTitle,
+    lines: delDocLines,
     createdAt: now,
   }));
   await batch.commit();
+  await syncDealActivityToLeadAndSmartHome({
+    companyId: data.companyId,
+    leadId: deal.leadId,
+    dealId: deal.id,
+    actorId: ctx.uid,
+    actorName: actor.name,
+    event: 'document_deleted',
+    title: delDocTitle,
+    lines: delDocLines,
+    createdAt: now,
+  });
 
   logger.info('[DealDocuments] Documento eliminado', { dealId: deal.id, kind: data.kind, version: data.version });
   return { ok: true, remainingCount: remaining.length };

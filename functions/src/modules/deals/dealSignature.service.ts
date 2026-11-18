@@ -34,7 +34,7 @@ import { webhookEventExpireAt } from '../../utils/webhookTtl';
 import { getLotStatus, moveLotToTramite, releaseLot, reserveLot } from '../inventory/lotReservation.service';
 import { sendAdvisorPush } from '../messages/pushNotifications.service';
 import { clientsCol, dealsCol, userDisplayName } from './dealAccess';
-import { dealActivityDoc, dealActivityRef, leadRef } from './dealAudit';
+import { leadRef, writeDealActivity } from './dealAudit';
 import { randomUUID } from 'crypto';
 import { isCurrentDocument, latestCurrentDocument, lotLabel, lotSnapshot } from './dealDocumentLot';
 import { signatureDealStatus, isPendingSignature, signatureDocOf } from './dealSignature.logic';
@@ -351,12 +351,12 @@ export async function sendToSignature(opts: {
     throw err;
   } finally {
     if (sent.length) {
-      await dealActivityRef(input.companyId, deal.leadId).set(dealActivityDoc({
+      await writeDealActivity({
         companyId: input.companyId, leadId: deal.leadId, dealId: deal.id, actorId: actor.uid, actorName: actor.name,
         event: 'sent_to_signature',
         title: sent.length === 2 ? 'Preventa y promesa enviadas a firma' : `${sent[0] === 'preventa' ? 'Preventa' : 'Promesa'} enviada a firma`,
         lines: [`Firmantes: ${plans[0]!.signers.map((s) => s.name).join(', ')}`, 'Lote en TRÁMITE mientras se firma'],
-      }));
+      });
     }
   }
   return { sent };
@@ -440,12 +440,12 @@ export async function sendExtraToSignature(opts: {
   };
   deal.extraSignatures = [...(deal.extraSignatures ?? []), extra];
   await saveSignatureState(ref, deal);
-  await dealActivityRef(input.companyId, deal.leadId).set(dealActivityDoc({
+  await writeDealActivity({
     companyId: input.companyId, leadId: deal.leadId, dealId: deal.id, actorId: actor.uid, actorName: actor.name,
     event: 'sent_to_signature',
     title: `Documento adicional enviado a firma: ${extra.name}`,
     lines: [`Firmantes: ${built.signers.map((s) => s.name).join(', ')}`],
-  }));
+  });
   logger.info('[DealSignature] Adicional enviado a DocuBlock', { dealId: deal.id, extraId: id, docublockId });
   return { extra };
 }
@@ -475,7 +475,7 @@ async function saveSignatureState(ref: DocumentReference, deal: Deal): Promise<D
       if (lSnap.exists && lSnap.get('status') !== 'closed') {
         await lRef.update({ status: 'closed', closedByDealId: deal.id, updatedAt: now });
         await ref.update({ closedLeadAt: now });
-        await dealActivityRef(deal.companyId, deal.leadId).set(dealActivityDoc({
+        await writeDealActivity({
           companyId: deal.companyId,
           leadId: deal.leadId,
           dealId: deal.id,
@@ -485,7 +485,7 @@ async function saveSignatureState(ref: DocumentReference, deal: Deal): Promise<D
           title: 'Lead marcado como Vendido',
           lines: ['Promesa firmada por todos · Lote se mantiene en TRÁMITE para auditoría interna'],
           createdAt: now,
-        }));
+        });
       }
     } catch (err) {
       logger.warn('[DealSignature] No se pudo marcar el lead como closed al firmar promesa', {
@@ -607,10 +607,10 @@ export async function refreshSignatures(ref: DocumentReference, deal: Deal): Pro
   }
   if (changed) await saveSignatureState(ref, deal);
   if (updates.length) {
-    await dealActivityRef(companyId, deal.leadId).set(dealActivityDoc({
+    await writeDealActivity({
       companyId, leadId: deal.leadId, dealId: deal.id, actorId: 'docublock', actorName: 'DocuBlock',
       event: 'signature_update', title: 'Avance de la firma', lines: updates,
-    }));
+    });
   }
   return { changed };
 }
@@ -642,10 +642,10 @@ export async function markSignatureCancelled(
   const titleLabel = target.extraId
     ? (doc as ExtraSignatureDocument).name
     : target.kind === 'preventa' ? 'Preventa' : 'Promesa';
-  await dealActivityRef(deal.companyId, deal.leadId).set(dealActivityDoc({
+  await writeDealActivity({
     companyId: deal.companyId, leadId: deal.leadId, dealId: deal.id, actorId: actor.uid, actorName: actor.name,
     event: 'signature_update', title: `${titleLabel}: firma anulada`, lines: [reason],
-  }));
+  });
 }
 
 function dealHasDocuBlockDocument(deal: Deal, documentId: string): boolean {
@@ -731,7 +731,7 @@ export async function applyDocuBlockWebhookEvent(
   const actionLabel = action.status === 'rechazado'
     ? `rechazada${event.signerEmail ? ` por ${event.signerEmail}` : ''}`
     : action.status === 'anulado' ? 'anulada en DocuBlock' : 'vencida sin completar';
-  await dealActivityRef(deal.companyId, deal.leadId).set(dealActivityDoc({
+  await writeDealActivity({
     companyId: deal.companyId,
     leadId: deal.leadId,
     dealId: deal.id,
@@ -740,6 +740,6 @@ export async function applyDocuBlockWebhookEvent(
     event: 'signature_update',
     title: `${label}: firma ${actionLabel}`,
     lines: [`Evento webhook v2 (${event.type})`],
-  }));
+  });
   return { matched: true, changed: true };
 }

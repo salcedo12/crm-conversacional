@@ -7,7 +7,7 @@ import { logger } from '../utils/logger';
 import { requireAuth, requireRole, assertCompany, WRITE_ROLES, ADMIN_ROLES } from '../lib/authContext';
 import type { AuthContext } from '../lib/authContext';
 import { canEditDealConditions, draftStatusFor, loadDeal, parseInput, userDisplayName } from '../modules/deals/dealAccess';
-import { dealActivityDoc, dealActivityRef } from '../modules/deals/dealAudit';
+import { writeDealActivity } from '../modules/deals/dealAudit';
 import { computeEarnestMoney, summarizePlan, termIssue } from '../modules/deals/paymentPlan';
 import { phoneTail } from '../utils/phone';
 import { getYcloudClientForCompany } from '../integrations/ycloud/ycloud.client';
@@ -255,8 +255,8 @@ export const requestPlanApproval = onCall({ region: 'us-central1', timeoutSecond
 
   await ref.update(updateDealPayload);
 
-  // Bitácora de actividad en el deal
-  await dealActivityRef(data.companyId, deal.leadId).set(dealActivityDoc({
+  // Bitácora de actividad en el deal y ficha
+  await writeDealActivity({
     companyId: data.companyId,
     leadId: deal.leadId,
     dealId: deal.id,
@@ -270,7 +270,7 @@ export const requestPlanApproval = onCall({ region: 'us-central1', timeoutSecond
       `Valor negociado: ${totalLandFormatted}${benefitFormatted ? ` (Bono: ${benefitFormatted})` : ''}`,
     ],
     createdAt: now,
-  }));
+  });
 
   // Envío a WhatsApp por Línea 317 vía YCloud
   let sentVia = 'template_autorizacion_plan_especial';
@@ -500,7 +500,7 @@ export async function resolvePlanApproval(params: {
     await dealRef.update(updatePayload);
 
     // Bitácora
-    await dealActivityRef(params.companyId, approval.leadId).set(dealActivityDoc({
+    await writeDealActivity({
       companyId: params.companyId,
       leadId: approval.leadId,
       dealId: approval.dealId,
@@ -516,7 +516,7 @@ export async function resolvePlanApproval(params: {
         ...(cleanNotes ? [`Notas / Condiciones: "${cleanNotes}"`] : []),
       ],
       createdAt: now,
-    }));
+    });
   }
 
   if (advisorToNotify) {
