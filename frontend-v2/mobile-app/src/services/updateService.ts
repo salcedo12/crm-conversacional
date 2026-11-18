@@ -15,7 +15,7 @@ export async function checkAndApplyUpdate(silent = true): Promise<boolean> {
     if (!silent) {
       Alert.alert(
         'Modo Desarrollo / Emulador',
-        `Las actualizaciones OTA automáticas están inactivas en modo de desarrollo o emulador.\nVersión compilada: ${Updates.runtimeVersion || '1.0.52'}`
+        `Las actualizaciones OTA automáticas están inactivas en modo de desarrollo o emulador.\nVersión compilada: ${Updates.runtimeVersion || '1.0.53'}`
       );
     }
     return false;
@@ -47,14 +47,17 @@ export async function checkAndApplyUpdate(silent = true): Promise<boolean> {
     } else if (!silent) {
       Alert.alert(
         'Aplicación al día',
-        `Ya cuentas con la versión más reciente instalada (${Updates.runtimeVersion || '1.0.52'}).`
+        `Ya cuentas con la versión más reciente instalada (${Updates.runtimeVersion || '1.0.53'}).`
       );
     }
   } catch (err: any) {
     if (!silent) {
+      // Mostrar la causa real: el mensaje genérico de "conexión" ocultó durante semanas
+      // que la app consultaba sin canal (400 del servidor de EAS).
+      const detail = [err?.code, err?.message].filter(Boolean).join(': ').slice(0, 200);
       Alert.alert(
         'Comprobación de actualización',
-        'No se pudo conectar al servidor de actualizaciones. Por favor verifica tu conexión a internet.'
+        `No se pudo comprobar si hay actualizaciones.\n\nDetalle: ${detail || 'desconocido'}\nVersión: ${Updates.runtimeVersion || '?'} · Canal: ${Updates.channel || 'sin canal'}`
       );
     }
     console.warn('[updateService] Error comprobando actualizaciones:', err);

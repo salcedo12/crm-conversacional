@@ -556,7 +556,7 @@ function MainShell() {
                     Buscar actualizaciones
                   </Text>
                   <Text style={{ fontSize: 11, color: palette.textSubtle, marginLeft: 'auto' }}>
-                    v1.0.52
+                    v1.0.53
                   </Text>
                 </Pressable>
               </View>
