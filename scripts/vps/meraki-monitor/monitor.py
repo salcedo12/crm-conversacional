@@ -56,6 +56,10 @@ HTTP_CHECKS = {
     # — Sistemas externos (Hostinger + Firebase) —
     'CRM web (crm.)': ('https://crm.grupoconstructormeraki.com.co/', 'Meraki CRM'),
     'Página web (grupoconstructormeraki.com.co)': ('https://grupoconstructormeraki.com.co/', 'Meraki'),
+    # Formularios PHP de la página (Hostinger): 405 a un GET = el PHP está vivo; 5xx = roto.
+    'Página web → formulario de citas': ('https://grupoconstructormeraki.com.co/enviar-cita-meraki.php', None),
+    'Página web → formulario de referidos': ('https://grupoconstructormeraki.com.co/send-referidos.php', None),
+    'Página web → conversiones Meta': ('https://grupoconstructormeraki.com.co/meta-conversions.php', None),
     'Solicitudes y Peticiones (web)': ('https://solicitudesypeticiones.grupoconstructormeraki.com.co/', 'Derechos de Petici'),
     'CRM servidor (Firebase Functions)': ('https://us-central1-crm-conversacional.cloudfunctions.net/ycloudWebhook', None),
     'Peticiones servidor (Firebase Functions)': ('https://us-central1-control-derecho-peticiones.cloudfunctions.net/downloadPetitionFile', None),
@@ -375,7 +379,8 @@ ERR_PER_FN = 10              # errores de una misma función en 10 min
 ERR_TOTAL = 25               # errores totales en 10 min
 READS_LIMIT = 200_000        # lecturas Firestore en 10 min (normal p99 ≈ 34k)
 SPA_SITES = {'CRM web': 'https://crm.grupoconstructormeraki.com.co/',
-             'Solicitudes y Peticiones': 'https://solicitudesypeticiones.grupoconstructormeraki.com.co/'}
+             'Solicitudes y Peticiones': 'https://solicitudesypeticiones.grupoconstructormeraki.com.co/',
+             'Página web': 'https://grupoconstructormeraki.com.co/'}
 
 
 def _msg(entry):
@@ -397,7 +402,7 @@ def check_cloud(st):
     except Exception as e:  # noqa: BLE001
         log(f'gcp no disponible: {e}')
         return out, events
-    window = max(10, int((time.time() - st.get('cloud_checked', time.time() - 600)) / 60) + 1)
+    window = min(60, max(10, int((time.time() - st.get("cloud_checked", time.time() - 600)) / 60) + 1))
     seen = set(st.get('cloud_seen', []))
     for proj, label in GCP_PROJECTS.items():
         # 1) Registros de seguridad que dejamos en el código ([SECURITY])
@@ -458,19 +463,24 @@ def check_cloud(st):
             claims[uid] = cur
     except Exception as e:  # noqa: BLE001
         log(f'cloud claims: {e}')
-    # 5) Publicación de versiones nuevas de las apps web (detecta despliegues no autorizados)
-    try:
-        builds = st.setdefault('builds', {})
-        for name, url in SPA_SITES.items():
-            html = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'meraki-monitor'}), timeout=15).read(100_000).decode('utf-8', 'ignore')
-            m = re.search(r'assets/index-[A-Za-z0-9_-]+\.js', html)
-            if not m:
-                continue
-            if builds.get(name) and builds[name] != m.group(0):
-                events.append(f'Se publicó una versión NUEVA de <b>{name}</b>. Si nadie del equipo la subió, avisa de inmediato.')
-            builds[name] = m.group(0)
-    except Exception as e:  # noqa: BLE001
-        log(f'cloud builds: {e}')
+    # 5) Cambios en los archivos de las apps web (versión nueva o alteración no autorizada).
+    #    Huella = página principal + su archivo JavaScript principal: si alguien edita
+    #    cualquiera de los dos en Hostinger, la huella cambia.
+    builds = st.setdefault('builds', {})
+    for name, url in SPA_SITES.items():
+        try:
+            get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'meraki-monitor'}), timeout=20).read(15_000_000)
+            html = get(url)
+            m = re.search(rb'/?assets/index-[A-Za-z0-9_-]+\.js', html)
+            js = get(urllib.parse.urljoin(url, m.group(0).decode())) if m else b''
+            print_ = hashlib.sha256(html + js).hexdigest()[:16]
+            prev = builds.get(name)
+            if prev and prev != print_:
+                events.append(f'Cambiaron los archivos de <b>{name}</b> (versión nueva publicada o modificación). '
+                              f'Si nadie del equipo la subió, avisa de inmediato.')
+            builds[name] = print_
+        except Exception as e:  # noqa: BLE001
+            log(f'cloud builds {name}: {e}')
     st['cloud_seen'] = list(seen)[-500:]
     st['cloud_checked'] = time.time()
     return out, events
