@@ -10,8 +10,9 @@ import { DealSheet, dealInputCls } from './DealSheet';
  * se crea y arma su negocio (compradores, lote, plan, documentos y firma), con el mismo
  * panel que tiene el lead en la Bandeja.
  */
-export function NewDealByPhoneModal({ companyId, onClose, onChanged }: {
+export function NewDealByPhoneModal({ companyId, projectHint, onClose, onChanged }: {
   companyId: string;
+  projectHint?: string;
   onClose: () => void;
   /** Se llama al cerrar para recargar la lista de negocios. */
   onChanged: () => void;
@@ -74,7 +75,7 @@ export function NewDealByPhoneModal({ companyId, onClose, onChanged }: {
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
           <p className="text-base font-bold text-zinc-100 sm:text-sm">{lead.name || 'Sin nombre'}</p>
           <p className="mb-3 text-xs text-zinc-500 sm:text-[11px]">{lead.phone}{result?.advisorName ? ` · Asesor: ${result.advisorName}` : ''}</p>
-          <LeadDealsPanel companyId={companyId} lead={lead} />
+          <LeadDealsPanel companyId={companyId} lead={lead} projectHint={projectHint} />
         </div>
       )}
     </DealSheet>

@@ -309,7 +309,14 @@ export function DealsPage() {
 
   if (!selectedProject) {
     return <>
-      {creatingDeal && companyId && <NewDealByPhoneModal companyId={companyId} onClose={() => setCreatingDeal(false)} onChanged={() => void load()} />}
+      {creatingDeal && companyId && (
+        <NewDealByPhoneModal
+          companyId={companyId}
+          projectHint={isNoLotView ? undefined : (selectedProject ?? undefined)}
+          onClose={() => setCreatingDeal(false)}
+          onChanged={() => void load()}
+        />
+      )}
       <ProjectSelection
         deals={deals}
         sales={shEnabled ? shSales : null}
@@ -489,7 +496,14 @@ export function DealsPage() {
         </>)}
       </div>
 
-      {creatingDeal && companyId && <NewDealByPhoneModal companyId={companyId} onClose={() => setCreatingDeal(false)} onChanged={() => void load()} />}
+      {creatingDeal && companyId && (
+        <NewDealByPhoneModal
+          companyId={companyId}
+          projectHint={isNoLotView ? undefined : (selectedProject ?? undefined)}
+          onClose={() => setCreatingDeal(false)}
+          onChanged={() => void load()}
+        />
+      )}
     </div>
   );
 }

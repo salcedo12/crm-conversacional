@@ -15,6 +15,7 @@ import {
   Loader2,
   MapPin,
   Paperclip,
+  Plus,
   RefreshCw,
   Trash2,
   Upload,
@@ -28,6 +29,7 @@ import { listAdvisors, type Advisor } from '@/features/leads/services/advisors.s
 import {
   cancelDeal,
   canEditDealBuyers,
+  createDeal,
   DEAL_STATUS_LABELS,
   deleteDealAttachment,
   deleteDealDocument,
@@ -106,6 +108,7 @@ export function DealDetailPage() {
   const [advisorsList, setAdvisorsList] = useState<Advisor[]>([]);
   const [nextAdvisorId, setNextAdvisorId] = useState('');
   const [busyReassign, setBusyReassign] = useState(false);
+  const [creatingAnotherDeal, setCreatingAnotherDeal] = useState(false);
 
   const [category, setCategory] = useState<DealAttachmentCategory>('buyer_identification');
   const [buyerClientId, setBuyerClientId] = useState('');
@@ -216,6 +219,22 @@ export function DealDetailPage() {
       setError(err instanceof Error ? err.message : 'No se pudo reasignar el asesor.');
     } finally {
       setBusyReassign(false);
+    }
+  };
+
+  const handleCreateAnotherDeal = async () => {
+    if (!companyId || !deal) return;
+    const who = deal.buyerNames?.join(', ') || deal.leadName || 'este cliente';
+    if (!window.confirm(`¿Crear un nuevo negocio para comprar otro lote con los mismos compradores (${who})?`)) return;
+    setCreatingAnotherDeal(true);
+    setError(null);
+    try {
+      const newDealId = await createDeal(companyId, deal.leadId, isAdmin ? deal.advisorId : undefined);
+      navigate(`/dashboard/deals/${newDealId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo crear el nuevo negocio.');
+    } finally {
+      setCreatingAnotherDeal(false);
     }
   };
 
@@ -534,6 +553,18 @@ export function DealDetailPage() {
               <span className={`rounded-full border px-3 py-1 text-xs font-bold shadow-sm ${STATUS_STYLE[deal.status]}`}>
                 {DEAL_STATUS_LABELS[deal.status]}
               </span>
+              {!readOnly && (
+                <button
+                  type="button"
+                  disabled={creatingAnotherDeal}
+                  onClick={() => void handleCreateAnotherDeal()}
+                  title="Crear otro negocio con estos mismos compradores para otro lote"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-200 hover:border-emerald-500/40 hover:text-emerald-300 transition disabled:opacity-50"
+                >
+                  {creatingAnotherDeal ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                  <span className="hidden sm:inline">Otro lote</span>
+                </button>
+              )}
               {!readOnly && (
                 <button
                   type="button"

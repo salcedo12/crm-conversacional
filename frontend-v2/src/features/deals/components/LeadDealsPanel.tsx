@@ -32,8 +32,8 @@ const STATUS_STYLES: Record<DealStatus, string> = {
   anulado:           'border-red-500/30 bg-red-500/10 text-red-300',
 };
 
-/** Negocios del lead (sección del LeadDrawer): crear negocio y registrar sus compradores. */
-export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: Lead }) {
+/** Negocios del lead (sección del LeadDrawer): crear negocio (1 por cada lote) y registrar sus compradores. */
+export function LeadDealsPanel({ companyId, lead, projectHint }: { companyId: string; lead: Lead; projectHint?: string }) {
   const navigate = useNavigate();
   const { role, platformAdmin, user } = useAuth();
   const isAdmin = platformAdmin || isAdminRole(role);
@@ -53,6 +53,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
   const [reassigningId, setReassigningId] = useState<string | null>(null);
   const [reassignTargetId, setReassignTargetId] = useState('');
   const [reassignBusy, setReassignBusy] = useState(false);
+  const [infoNotice, setInfoNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -95,11 +96,16 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
   const handleCreate = async () => {
     setCreating(true);
     setError(null);
+    setInfoNotice(null);
     try {
       const dealId = await createDeal(companyId, lead.id, isAdmin && selectedAdvisorId ? selectedAdvisorId : undefined);
       const list = await load();
       const created = list.find((d) => d.id === dealId);
-      if (created) setEditing(created);
+      if (created && created.buyers.length === 0) {
+        setEditing(created);
+      } else if (created) {
+        setInfoNotice('Nuevo negocio creado con los mismos compradores; escoge el nuevo lote arriba.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo crear el negocio.');
     } finally {
@@ -228,7 +234,7 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
                 <DealLotSection
                   companyId={companyId}
                   deal={deal}
-                  projectHint={lead.projectInterest?.[0]}
+                  projectHint={projectHint || lead.projectInterest?.[0]}
                   onChanged={() => void load()}
                 />
               )}
@@ -293,8 +299,8 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
         })
       )}
 
-      {!readOnly && !loading && !hasOpenDeal && (
-        <div className="space-y-2">
+      {!readOnly && !loading && (
+        <div className="space-y-2 pt-1">
           {isAdmin && advisorsList.length > 0 && (
             <label className="block space-y-1">
               <span className="text-[11px] font-semibold text-zinc-400">
@@ -319,11 +325,13 @@ export function LeadDealsPanel({ companyId, lead }: { companyId: string; lead: L
             disabled={creating}
             className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 sm:inline-flex sm:min-h-0 sm:w-auto sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-[11px]"
           >
-            {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Crear negocio
+            {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+            {hasOpenDeal ? 'Agregar otro negocio / lote' : 'Crear negocio'}
           </button>
         </div>
       )}
 
+      {infoNotice && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{infoNotice}</p>}
       {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
 
       {planning && (
