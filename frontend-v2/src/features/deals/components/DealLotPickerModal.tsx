@@ -200,16 +200,16 @@ export function DealLotPickerModal({ companyId, deal, projectHint, onClose, onRe
                 }`}
               >
                 <div className="flex items-baseline justify-between gap-1">
-                  <p className="text-base font-semibold text-zinc-100 sm:text-sm">{lot.number}</p>
+                  <p className="text-base font-bold text-zinc-100 sm:text-sm">{lot.number}</p>
                   {lot.code && (
-                    <span className="font-mono text-[10px] text-zinc-400 sm:text-[9px]">
+                    <span className="font-mono text-[10px] font-medium text-zinc-300 sm:text-[9px]">
                       {lot.code}
                     </span>
                   )}
                 </div>
-                <p className="truncate text-[11px] text-zinc-500 sm:text-[10px]">{formatArea(lot.areaM2)}</p>
-                {(sectors.length > 1 && !sector) && <p className="truncate text-[10px] text-zinc-600 sm:text-[9px]">{lot.sector}</p>}
-                {lot.corner && <p className="mt-0.5 text-[10px] font-semibold uppercase text-amber-300/90 sm:text-[9px]">Esquinero</p>}
+                <p className="truncate text-[11px] font-medium text-zinc-400 sm:text-[10px]">{formatArea(lot.areaM2)}</p>
+                {(sectors.length > 1 && !sector) && <p className="truncate text-[10px] font-medium text-zinc-400 sm:text-[9px]">{lot.sector}</p>}
+                {lot.corner && <p className="mt-0.5 text-[10px] font-bold uppercase text-amber-300 sm:text-[9px]">Esquinero</p>}
               </button>
             );
           })}

@@ -171,33 +171,45 @@ html.light .bg-zinc-950\/95,
 html.light .bg-zinc-950\/90,
 html.light .bg-zinc-950\/85,
 html.light .bg-zinc-950\/80,
+html.light .bg-zinc-950\/75,
+html.light .bg-zinc-950\/70,
 html.light .bg-zinc-950\/60,
 html.light .bg-zinc-950\/50,
+html.light .bg-zinc-950\/40,
+html.light .bg-zinc-950\/30,
 [data-theme="light"] .bg-zinc-950\/95,
 [data-theme="light"] .bg-zinc-950\/90,
 [data-theme="light"] .bg-zinc-950\/85,
 [data-theme="light"] .bg-zinc-950\/80,
+[data-theme="light"] .bg-zinc-950\/75,
+[data-theme="light"] .bg-zinc-950\/70,
 [data-theme="light"] .bg-zinc-950\/60,
-[data-theme="light"] .bg-zinc-950\/50 {
-  background-color: rgba(255, 255, 255, 0.95) !important;
+[data-theme="light"] .bg-zinc-950\/50,
+[data-theme="light"] .bg-zinc-950\/40,
+[data-theme="light"] .bg-zinc-950\/30 {
+  background-color: #f8fafc !important;
 }
 
 html.light .bg-zinc-900,
 html.light .bg-zinc-900\/95,
 html.light .bg-zinc-900\/90,
 html.light .bg-zinc-900\/80,
+html.light .bg-zinc-900\/75,
 html.light .bg-zinc-900\/70,
 html.light .bg-zinc-900\/60,
 html.light .bg-zinc-900\/50,
 html.light .bg-zinc-900\/40,
+html.light .bg-zinc-900\/30,
 [data-theme="light"] .bg-zinc-900,
 [data-theme="light"] .bg-zinc-900\/95,
 [data-theme="light"] .bg-zinc-900\/90,
 [data-theme="light"] .bg-zinc-900\/80,
+[data-theme="light"] .bg-zinc-900\/75,
 [data-theme="light"] .bg-zinc-900\/70,
 [data-theme="light"] .bg-zinc-900\/60,
 [data-theme="light"] .bg-zinc-900\/50,
-[data-theme="light"] .bg-zinc-900\/40 {
+[data-theme="light"] .bg-zinc-900\/40,
+[data-theme="light"] .bg-zinc-900\/30 {
   background-color: #ffffff !important;
 }
 
@@ -285,6 +297,9 @@ html.light .hover\:bg-zinc-800\/70:hover,
 html.light .hover\:bg-zinc-800\/60:hover,
 html.light .hover\:bg-zinc-800\/40:hover,
 html.light .hover\:bg-zinc-900:hover,
+html.light .hover\:bg-zinc-900\/60:hover,
+html.light .hover\:bg-zinc-900\/50:hover,
+html.light .hover\:bg-zinc-900\/40:hover,
 html.light .hover\:bg-zinc-700:hover,
 [data-theme="light"] .hover\:bg-zinc-800:hover,
 [data-theme="light"] .hover\:bg-zinc-800\/80:hover,
@@ -292,6 +307,9 @@ html.light .hover\:bg-zinc-700:hover,
 [data-theme="light"] .hover\:bg-zinc-800\/60:hover,
 [data-theme="light"] .hover\:bg-zinc-800\/40:hover,
 [data-theme="light"] .hover\:bg-zinc-900:hover,
+[data-theme="light"] .hover\:bg-zinc-900\/60:hover,
+[data-theme="light"] .hover\:bg-zinc-900\/50:hover,
+[data-theme="light"] .hover\:bg-zinc-900\/40:hover,
 [data-theme="light"] .hover\:bg-zinc-700:hover {
   background-color: #e9ecef !important;
 }
@@ -338,40 +356,64 @@ html.light select:focus,
 }
 
 /* Badges y Chips de Estado Adaptados */
+html.light .text-amber-50,
+html.light .text-amber-100,
 html.light .text-amber-300,
 html.light .text-amber-400,
 html.light .text-amber-200,
+[data-theme="light"] .text-amber-50,
+[data-theme="light"] .text-amber-100,
 [data-theme="light"] .text-amber-300,
 [data-theme="light"] .text-amber-400,
 [data-theme="light"] .text-amber-200 {
-  color: #947018 !important; /* Oro Oscuro Meraki */
+  color: #78350f !important; /* Ámbar oscuro contraste alto */
 }
 
+html.light .bg-amber-950\/20,
+html.light .bg-amber-950\/30,
+html.light .bg-amber-950\/40,
+html.light .bg-amber-500\/25,
 html.light .bg-amber-500\/20,
 html.light .bg-amber-500\/15,
 html.light .bg-amber-500\/10,
+[data-theme="light"] .bg-amber-950\/20,
+[data-theme="light"] .bg-amber-950\/30,
+[data-theme="light"] .bg-amber-950\/40,
+[data-theme="light"] .bg-amber-500\/25,
 [data-theme="light"] .bg-amber-500\/20,
 [data-theme="light"] .bg-amber-500\/15,
 [data-theme="light"] .bg-amber-500\/10 {
-  background-color: rgba(183, 135, 28, 0.12) !important;
-  border-color: rgba(183, 135, 28, 0.3) !important;
+  background-color: #fef3c7 !important;
+  border-color: #f59e0b !important;
 }
 
+html.light .text-emerald-50,
+html.light .text-emerald-100,
 html.light .text-emerald-300,
 html.light .text-emerald-400,
 html.light .text-emerald-200,
+html.light .text-green-100,
+html.light .text-green-200,
 html.light .text-green-300,
 html.light .text-green-400,
 html.light .text-green-500,
+[data-theme="light"] .text-emerald-50,
+[data-theme="light"] .text-emerald-100,
 [data-theme="light"] .text-emerald-300,
 [data-theme="light"] .text-emerald-400,
 [data-theme="light"] .text-emerald-200,
+[data-theme="light"] .text-green-100,
+[data-theme="light"] .text-green-200,
 [data-theme="light"] .text-green-300,
 [data-theme="light"] .text-green-400,
 [data-theme="light"] .text-green-500 {
-  color: #166534 !important; /* Verde bosque profundo de alto contraste (WCAG AAA) */
+  color: #14532d !important; /* Verde bosque profundo de alto contraste (WCAG AAA) */
 }
 
+html.light .bg-emerald-950\/40,
+html.light .bg-emerald-950\/20,
+html.light .bg-emerald-500\/30,
+html.light .bg-emerald-500\/25,
 html.light .bg-emerald-500\/20,
 html.light .bg-emerald-500\/15,
 html.light .bg-emerald-500\/10,
@@ -380,6 +422,10 @@ html.light .bg-green-500\/20,
 html.light .bg-green-500\/15,
 html.light .bg-green-500\/10,
 html.light .bg-green-500\/5,
+[data-theme="light"] .bg-emerald-950\/40,
+[data-theme="light"] .bg-emerald-950\/20,
+[data-theme="light"] .bg-emerald-500\/30,
+[data-theme="light"] .bg-emerald-500\/25,
 [data-theme="light"] .bg-emerald-500\/20,
 [data-theme="light"] .bg-emerald-500\/15,
 [data-theme="light"] .bg-emerald-500\/10,
@@ -388,8 +434,8 @@ html.light .bg-green-500\/5,
 [data-theme="light"] .bg-green-500\/15,
 [data-theme="light"] .bg-green-500\/10,
 [data-theme="light"] .bg-green-500\/5 {
-  background-color: #f0fdf4 !important;
-  border-color: #bbf7d0 !important;
+  background-color: #ecfdf5 !important;
+  border-color: #6ee7b7 !important;
 }
 
 html.light .bg-emerald-400,
@@ -403,19 +449,45 @@ html.light .text-rose-100,
 html.light .text-rose-200,
 html.light .text-rose-300,
 html.light .text-rose-400,
+html.light .text-red-100,
+html.light .text-red-200,
+html.light .text-red-300,
 html.light .text-red-400,
 [data-theme="light"] .text-rose-100,
 [data-theme="light"] .text-rose-200,
 [data-theme="light"] .text-rose-300,
 [data-theme="light"] .text-rose-400,
+[data-theme="light"] .text-red-100,
+[data-theme="light"] .text-red-200,
+[data-theme="light"] .text-red-300,
 [data-theme="light"] .text-red-400 {
-  color: #b91c1c !important;
+  color: #991b1b !important;
+}
+
+html.light .bg-red-500\/10,
+html.light .bg-red-500\/20,
+html.light .bg-red-950\/20,
+html.light .bg-red-950\/40,
+html.light .bg-red-950\/60,
+[data-theme="light"] .bg-red-500\/10,
+[data-theme="light"] .bg-red-500\/20,
+[data-theme="light"] .bg-red-950\/20,
+[data-theme="light"] .bg-red-950\/40,
+[data-theme="light"] .bg-red-950\/60 {
+  background-color: #fef2f2 !important;
+  border-color: #fca5a5 !important;
 }
 
 html.light button.text-white,
 html.light a.text-white,
+html.light button[class*="bg-emerald-600"],
+html.light button[class*="bg-sky-600"],
+html.light button[class*="bg-violet-600"],
 [data-theme="light"] button.text-white,
-[data-theme="light"] a.text-white {
+[data-theme="light"] a.text-white,
+[data-theme="light"] button[class*="bg-emerald-600"],
+[data-theme="light"] button[class*="bg-sky-600"],
+[data-theme="light"] button[class*="bg-violet-600"] {
   color: #ffffff !important;
 }
 
@@ -433,12 +505,18 @@ html.light .bg-rose-950\/80,
   border-color: rgba(239, 68, 68, 0.3) !important;
 }
 
+html.light .text-sky-100,
+html.light .text-sky-200,
 html.light .text-sky-300,
 html.light .text-sky-400,
+html.light .text-blue-200,
 html.light .text-blue-300,
 html.light .text-blue-100,
+[data-theme="light"] .text-sky-100,
+[data-theme="light"] .text-sky-200,
 [data-theme="light"] .text-sky-300,
 [data-theme="light"] .text-sky-400,
+[data-theme="light"] .text-blue-200,
 [data-theme="light"] .text-blue-300,
 [data-theme="light"] .text-blue-100 {
   color: #0369a1 !important;

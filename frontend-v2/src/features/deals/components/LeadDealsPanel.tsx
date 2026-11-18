@@ -6,6 +6,7 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { isAdminRole, isViewerRole } from '@/features/auth/types';
 import { listAdvisors, type Advisor } from '@/features/leads/services/advisors.service';
 import { DealBuyersModal } from './DealBuyersModal';
+import { DealLotPickerModal } from './DealLotPickerModal';
 import { DealLotSection } from './DealLotSection';
 import { DealPlanModal } from './DealPlanModal';
 import { DealDocumentsSection } from './DealDocumentsSection';
@@ -56,6 +57,9 @@ export function LeadDealsPanel({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<DealSummary | null>(null);
+  const [pickingLot, setPickingLot] = useState<DealSummary | null>(null);
+  const [copyFromDealId, setCopyFromDealId] = useState<string>('none');
+  const [lastCreatedDealId, setLastCreatedDealId] = useState<string | null>(null);
   const [planning, setPlanning] = useState<DealSummary | null>(null);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -111,14 +115,24 @@ export function LeadDealsPanel({
     setCreating(true);
     setError(null);
     setInfoNotice(null);
+    setLastCreatedDealId(null);
     try {
-      const dealId = await createDeal(companyId, lead.id, isAdmin && selectedAdvisorId ? selectedAdvisorId : undefined);
+      const dealsWithBuyers = deals.filter((d) => d.buyers.length > 0);
+      const copyArg = dealsWithBuyers.length > 0 ? copyFromDealId : undefined;
+      const dealId = await createDeal(
+        companyId,
+        lead.id,
+        isAdmin && selectedAdvisorId ? selectedAdvisorId : undefined,
+        copyArg,
+      );
       const list = await load();
       const created = list.find((d) => d.id === dealId);
+      setLastCreatedDealId(dealId);
       if (created && created.buyers.length === 0) {
         setEditing(created);
       } else if (created) {
-        setInfoNotice('Nuevo negocio creado con los mismos compradores; escoge el nuevo lote arriba.');
+        setInfoNotice(`Nuevo negocio creado${created.buyers.length ? ' con los compradores seleccionados' : ''}.`);
+        setPickingLot(created);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo crear el negocio.');
@@ -159,6 +173,7 @@ export function LeadDealsPanel({
   };
 
   const hasOpenDeal = deals.some((d) => d.status !== 'anulado');
+  const dealsWithBuyers = deals.filter((d) => d.buyers.length > 0);
   const toggleExpanded = (id: string) =>
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -192,6 +207,31 @@ export function LeadDealsPanel({
           </select>
         </label>
       )}
+      {dealsWithBuyers.length > 0 && (
+        <label className="block space-y-1">
+          <span className="text-[11px] font-semibold text-zinc-400">
+            Compradores para el nuevo negocio
+          </span>
+          <select
+            value={copyFromDealId}
+            onChange={(e) => setCopyFromDealId(e.target.value)}
+            className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-200 outline-none focus:border-emerald-500"
+          >
+            <option value="none">Registrar compradores nuevos (sin copiar)</option>
+            {dealsWithBuyers.map((d) => {
+              const who = d.buyerNames?.length
+                ? d.buyerNames.join(', ')
+                : d.buyerProfiles.map((b) => `${b.firstNames} ${b.lastNames}`.trim()).join(', ');
+              const where = d.lot ? `${projectName(d.lot.projectId)} · Lote ${d.lot.lotNumber}` : 'Borrador sin lote';
+              return (
+                <option key={d.id} value={d.id}>
+                  Copiar de {where} ({d.buyers.length}: {who || 'compradores'})
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      )}
       <button
         type="button"
         onClick={handleCreate}
@@ -209,7 +249,34 @@ export function LeadDealsPanel({
   return (
     <div className="space-y-2.5">
       {compactExisting && createBlock}
-      {infoNotice && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{infoNotice}</p>}
+      {infoNotice && (() => {
+        const recentDeal = lastCreatedDealId ? deals.find((d) => d.id === lastCreatedDealId) : undefined;
+        return (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+            <span>{infoNotice}</span>
+            {recentDeal && (
+              <div className="flex items-center gap-2 shrink-0">
+                {!recentDeal.lot && (
+                  <button
+                    type="button"
+                    onClick={() => setPickingLot(recentDeal)}
+                    className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-500"
+                  >
+                    Escoger lote
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => navigate(`/dashboard/deals/${recentDeal.id}`)}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 px-2.5 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/15"
+                >
+                  <ExternalLink size={11} /> Ver ficha
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {error && <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
 
       {loading ? (
@@ -445,7 +512,36 @@ export function LeadDealsPanel({
           deal={editing}
           lead={lead}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); void load(); }}
+          onSaved={async () => {
+            const targetId = editing.id;
+            const hadLot = Boolean(editing.lot);
+            setEditing(null);
+            const list = await load();
+            if (!hadLot) {
+              const refreshed = list.find((d) => d.id === targetId);
+              if (refreshed && !refreshed.lot) {
+                setLastCreatedDealId(refreshed.id);
+                setInfoNotice('Compradores guardados. Selecciona ahora el lote para este negocio.');
+                setPickingLot(refreshed);
+              }
+            }
+          }}
+        />
+      )}
+
+      {pickingLot && (
+        <DealLotPickerModal
+          companyId={companyId}
+          deal={pickingLot}
+          projectHint={projectHint || lead.projectInterest?.[0]}
+          onClose={() => setPickingLot(null)}
+          onReserved={() => {
+            const reservedId = pickingLot.id;
+            setPickingLot(null);
+            setLastCreatedDealId(reservedId);
+            setInfoNotice('Lote apartado correctamente. Puedes armar el plan o abrir la ficha del negocio.');
+            void load();
+          }}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Calculator, Check, CheckCircle2, ChevronDown, Clock, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Calculator, Check, CheckCircle2, ChevronDown, Clock, HelpCircle, Loader2, MapPin, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { DealField as Field, DealSheet, dealInputCls as inputCls } from './DealSheet';
 import {
@@ -528,7 +528,8 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
       : termMonths !== null
         ? `${termMonths} meses`
         : 'Sin plazo';
-  const step1Summary = `${termLabel} · Total cliente: ${formatPesos(summary.totalLand)}${benefit > 0 ? ` · Bono ${formatPesos(benefit)}` : ''}`;
+  const netInstallmentsTarget = Math.max(0, summary.totalLand - severanceAmount);
+  const step1Summary = `${termLabel} · Total cliente: ${formatPesos(summary.totalLand)}${benefit > 0 ? ` · Bono ${formatPesos(benefit)}` : ''}${severanceAmount > 0 ? ` · Cesantías ${formatPesos(severanceAmount)} · En cuotas: ${formatPesos(netInstallmentsTarget)}` : ''}`;
   const step2Summary = `Sep. ${formatPesos(summary.separationTotal)} · Ord. ${formatPesos(summary.ordinaryTotal)}${summary.extraordinaryTotal > 0 ? ` · Extra ${formatPesos(summary.extraordinaryTotal)}` : ''} · ${summary.difference === 0 ? 'Cuadra' : summary.difference > 0 ? `Faltan ${formatPesos(summary.difference)}` : `Sobran ${formatPesos(-summary.difference)}`}`;
   const step3Summary = `${referralName(referredBy) ? `Referido: ${referralName(referredBy)}` : 'Sin referido'}${notes.trim() ? ' · Con observaciones' : ''}`;
   const step4Summary = isVerified
@@ -709,9 +710,9 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                   {listPrice !== null && listPrice !== landValue && (
                     <p className="text-amber-300/90">Distinto al de lista ({formatPesos(listPrice)}).</p>
                   )}
-                  <p className="text-zinc-400">
+                  <p className="flex items-center gap-1 text-zinc-400">
                     <span className="font-semibold text-emerald-300">Arras ({earnestPercent}%): {formatPesos(earnest)}</span>
-                    {' '}· calculadas sobre el valor total sin restar el bono.
+                    <HelpTip text="Porcentaje contractual de arras calculado sobre el valor total del terreno antes de descuentos/bono." />
                   </p>
                 </div>
               }
@@ -981,10 +982,10 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             </div>
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Beneficio / Bono descuento">
+            <Field label={<span className="inline-flex items-center gap-1">Beneficio / Bono descuento <HelpTip text="Descuento pactado con el cliente. Se registra como cuota bono descuento al final y no se cobra en cuotas." /></span>}>
               <MoneyInput value={benefit} onChange={setBenefit} />
             </Field>
-            <Field label="Cesantías">
+            <Field label={<span className="inline-flex items-center gap-1">Cesantías <HelpTip text="Valor cubierto con cesantías del comprador. Se resta del total a pagar para calcular el saldo en cuotas." /></span>}>
               <MoneyInput value={severanceAmount} onChange={setSeveranceAmount} />
             </Field>
           </div>
@@ -994,7 +995,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
             </Field>
           )}
 
-          <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3">
+          <div className="space-y-2 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-300">
@@ -1009,6 +1010,21 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                 {formatPesos(summary.totalLand)}
               </span>
             </div>
+            {severanceAmount > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-emerald-500/20 pt-2">
+                <div>
+                  <p className="text-[11px] font-semibold text-zinc-200">
+                    Saldo a financiar en cuotas (descontando cesantías)
+                  </p>
+                  <p className="text-[11px] text-zinc-400">
+                    {formatPesos(summary.totalLand)} − {formatPesos(severanceAmount)} ({severanceFund.trim() || 'Cesantías'})
+                  </p>
+                </div>
+                <span className="whitespace-nowrap text-base font-extrabold text-emerald-300">
+                  {formatPesos(netInstallmentsTarget)}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end pt-1">
@@ -1511,6 +1527,14 @@ function PlanBalance({ totalLand, paid, difference }: { totalLand: number; paid:
         />
       </div>
     </div>
+  );
+}
+
+function HelpTip({ text }: { text: string }) {
+  return (
+    <span title={text} aria-label={text} className="inline-flex cursor-help text-zinc-500 hover:text-zinc-200">
+      <HelpCircle size={12} />
+    </span>
   );
 }
 

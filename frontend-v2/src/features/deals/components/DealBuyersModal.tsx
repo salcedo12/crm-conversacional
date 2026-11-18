@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, HelpCircle, Loader2, Plus, Search, Trash2, UserRound, Users } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
 import { CountryPhoneInput } from '@/shared/components/CountryPhoneInput';
 import {
@@ -34,7 +34,7 @@ interface DealBuyersModalProps {
   /** Compradores de otro negocio del mismo cliente para prellenar si este negocio está vacío. */
   fallbackBuyers?: ClientProfile[];
   onClose:         () => void;
-  onSaved:         () => void;
+  onSaved:         () => void | Promise<void>;
 }
 
 const EMPTY_BUYER: ClientInput = {
@@ -153,7 +153,7 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
         mobile: normalizeMobile(b.mobile),
         ...(b.personKind === 'juridica' ? { birthDate: undefined, maritalStatus: undefined, gender: undefined } : {}),
       })));
-      onSaved();
+      await onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudieron guardar los compradores.');
     } finally {
@@ -164,7 +164,7 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
   return (
     <DealSheet
       title="Compradores del negocio"
-      subtitle="Estos datos pasan a la preventa, la promesa y la firma electrónica."
+      subtitle="Pasan a la preventa, promesa y firma digital de este negocio (quitar o cambiar aquí no afecta otros lotes)."
       icon={<Users size={18} />}
       onClose={onClose}
       width="lg"
@@ -319,7 +319,10 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
                   )}
                 </Group>
 
-                <Group title="Expedición y residencia">
+                <Group
+                  title="Expedición y residencia"
+                  tip="Las ciudades deben seleccionarse de la lista oficial de DocuBlock para que la firma digital no sea rechazada."
+                >
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <Field label="País y ciudad de expedición">
                       <PlaceSelect places={docublock} country={b.expeditionCountry} city={b.expeditionCity} className={inputCls} onChange={(v) => update(key, { expeditionCountry: v.country, expeditionCity: v.city })} />
@@ -388,10 +391,17 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
   );
 }
 
-function Group({ title, children }: { title: string; children: React.ReactNode }) {
+function Group({ title, tip, children }: { title: string; tip?: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="mb-2 text-xs font-semibold text-zinc-300 sm:text-[11px]">{title}</p>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-zinc-300 sm:text-[11px]">
+        <span>{title}</span>
+        {tip && (
+          <span title={tip} className="inline-flex cursor-help text-zinc-500 hover:text-zinc-300">
+            <HelpCircle size={12} />
+          </span>
+        )}
+      </p>
       {children}
     </div>
   );

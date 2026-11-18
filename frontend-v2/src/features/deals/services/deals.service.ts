@@ -202,7 +202,7 @@ export function canEditDealBuyers(status: DealStatus, isAdmin: boolean): boolean
 const _list   = httpsCallable<{ companyId: string; leadId: string }, { deals: DealSummary[] }>(functions, 'listLeadDeals');
 const _listCompany = httpsCallable<{ companyId: string }, { deals: DealSummary[] }>(functions, 'listCompanyDeals');
 const _get = httpsCallable<{ companyId: string; dealId: string }, { deal: DealSummary }>(functions, 'getDeal');
-const _create = httpsCallable<{ companyId: string; leadId: string; advisorId?: string }, { dealId: string }>(functions, 'createDeal');
+const _create = httpsCallable<{ companyId: string; leadId: string; advisorId?: string; copyBuyersFromDealId?: string }, { dealId: string }>(functions, 'createDeal');
 const _find   = httpsCallable<
   { companyId: string; identificationKind: IdentificationKind; identificationNumber: string },
   { client: ClientProfile | null }
@@ -224,8 +224,18 @@ export async function getDeal(companyId: string, dealId: string): Promise<DealSu
   return res.data.deal;
 }
 
-export async function createDeal(companyId: string, leadId: string, advisorId?: string): Promise<string> {
-  const res = await _create({ companyId, leadId, ...(advisorId ? { advisorId } : {}) });
+export async function createDeal(
+  companyId: string,
+  leadId: string,
+  advisorId?: string,
+  copyBuyersFromDealId?: string,
+): Promise<string> {
+  const res = await _create({
+    companyId,
+    leadId,
+    ...(advisorId ? { advisorId } : {}),
+    ...(copyBuyersFromDealId ? { copyBuyersFromDealId } : {}),
+  });
   return res.data.dealId;
 }
 

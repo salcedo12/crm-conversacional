@@ -65,7 +65,10 @@ async function loadBuyerProfiles(companyId: string, deal: Deal) {
 // ─── Negocios del lead ───────────────────────────────────────────────────────
 
 const LeadDealsSchema = z.object({ companyId: z.string().min(1), leadId: z.string().min(1) });
-const CreateDealSchema = LeadDealsSchema.extend({ advisorId: z.string().min(1).optional() });
+const CreateDealSchema = LeadDealsSchema.extend({
+  advisorId:            z.string().min(1).optional(),
+  copyBuyersFromDealId: z.string().min(1).optional(),
+});
 
 export const listLeadDeals = onCall({ region: 'us-central1', timeoutSeconds: 30 }, async (request) => {
   const ctx = requireAuth(request);
@@ -153,29 +156,36 @@ export const createDeal = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
 
   const now = Timestamp.now();
 
-  // Si el lead ya tiene otro negocio con compradores, heredarlos para no reescribirlos
-  const prevSnap = await dealsCol(data.companyId).where('leadId', '==', data.leadId).get();
-  const prevWithBuyers = prevSnap.docs
-    .map((d) => d.data() as Deal)
-    .filter((d) => Array.isArray(d.buyers) && d.buyers.length > 0)
-    .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))[0];
+  let inheritedBuyers: Deal['buyers'] = [];
+  let inheritedBuyerNames: string[] = [];
+  let inheritedBuyerAttachments: DealAttachment[] = [];
 
-  let inheritedBuyers = prevWithBuyers?.buyers ?? [];
-  let inheritedBuyerNames = prevWithBuyers?.buyerNames ?? [];
-  let inheritedBuyerAttachments = (prevWithBuyers?.attachments ?? [])
-    .filter((a) => a.category === 'buyer_identification');
+  if (data.copyBuyersFromDealId !== 'none') {
+    const prevSnap = await dealsCol(data.companyId).where('leadId', '==', data.leadId).get();
+    const candidates = prevSnap.docs
+      .map((d) => ({ ...(d.data() as Deal), id: d.id }))
+      .filter((d) => Array.isArray(d.buyers) && d.buyers.length > 0);
+    const chosenPrev = data.copyBuyersFromDealId
+      ? candidates.find((d) => d.id === data.copyBuyersFromDealId)
+      : candidates.sort((a, b) => Number(a.status === 'anulado') - Number(b.status === 'anulado') || (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))[0];
 
-  // Si no había compradores en deals previos, buscar si hay clientes ya registrados para este lead en clientsCol
-  if (!inheritedBuyers.length) {
-    try {
-      const clientSnap = await clientsCol(data.companyId).where('leadIds', 'array-contains', data.leadId).get();
-      if (!clientSnap.empty) {
-        const sorted = clientSnap.docs.map((doc) => ({ ...(doc.data() as ClientProfile), id: doc.id }));
-        inheritedBuyers = sorted.map((c, i) => ({ clientId: c.id, order: i + 1 }));
-        inheritedBuyerNames = sorted.map((c) => `${c.firstNames} ${c.lastNames}`.trim());
+    inheritedBuyers = chosenPrev?.buyers ?? [];
+    inheritedBuyerNames = chosenPrev?.buyerNames ?? [];
+    inheritedBuyerAttachments = (chosenPrev?.attachments ?? [])
+      .filter((a) => a.category === 'buyer_identification');
+
+    // Si no había compradores en deals previos y no se pidió explícitamente empezar en cero, buscar en clientsCol
+    if (!inheritedBuyers.length && !data.copyBuyersFromDealId) {
+      try {
+        const clientSnap = await clientsCol(data.companyId).where('leadIds', 'array-contains', data.leadId).get();
+        if (!clientSnap.empty) {
+          const sorted = clientSnap.docs.map((doc) => ({ ...(doc.data() as ClientProfile), id: doc.id }));
+          inheritedBuyers = sorted.map((c, i) => ({ clientId: c.id, order: i + 1 }));
+          inheritedBuyerNames = sorted.map((c) => `${c.firstNames} ${c.lastNames}`.trim());
+        }
+      } catch (clientErr) {
+        logger.warn('[Deals] Error buscando clientes existentes para lead', { leadId: data.leadId, error: clientErr });
       }
-    } catch (clientErr) {
-      logger.warn('[Deals] Error buscando clientes existentes para lead', { leadId: data.leadId, error: clientErr });
     }
   }
 

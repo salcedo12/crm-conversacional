@@ -229,7 +229,7 @@ export function DealDetailPage() {
     setCreatingAnotherDeal(true);
     setError(null);
     try {
-      const newDealId = await createDeal(companyId, deal.leadId, isAdmin ? deal.advisorId : undefined);
+      const newDealId = await createDeal(companyId, deal.leadId, isAdmin ? deal.advisorId : undefined, deal.id);
       navigate(`/dashboard/deals/${newDealId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo crear el nuevo negocio.');
@@ -497,9 +497,9 @@ export function DealDetailPage() {
           deal={deal}
           lead={{ id: deal.leadId, name: deal.leadName ?? '' } as any}
           onClose={() => setEditingBuyers(false)}
-          onSaved={() => {
+          onSaved={async () => {
+            await handleRefresh();
             setEditingBuyers(false);
-            void handleRefresh();
           }}
         />
       )}

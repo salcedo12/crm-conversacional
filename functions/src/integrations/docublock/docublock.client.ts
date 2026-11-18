@@ -127,10 +127,12 @@ export async function resendEndorsement(idDocument: string, idSigner: string): P
 const PLACES_TTL_MS = 6 * 60 * 60 * 1000;
 let placesCache: { at: number; cities: DocuBlockCity[]; countries: DocuBlockCountry[] } | null = null;
 
-async function fetchAllPages<T>(path: string, pickList: (res: Record<string, unknown>) => T[], maxPages = 50): Promise<T[]> {
+async function fetchAllPages<T>(path: string, pickList: (res: Record<string, unknown>) => T[], maxPages = 300): Promise<T[]> {
   const first = await call<Record<string, unknown>>('POST', path, { page: 1 });
   const items = [...pickList(first)];
-  const totalPages = Math.min(Number(first?.totalPages ?? 1) || 1, maxPages);
+  const rawTotal = Number(first?.totalPages ?? 1) || 1;
+  if (rawTotal > maxPages) logger.warn('[DocuBlock] Paginación truncada', { path, rawTotal, maxPages });
+  const totalPages = Math.min(rawTotal, maxPages);
   if (totalPages > 1) {
     const rest = await Promise.all(
       Array.from({ length: totalPages - 1 }, (_, i) => call<Record<string, unknown>>('POST', path, { page: i + 2 })),

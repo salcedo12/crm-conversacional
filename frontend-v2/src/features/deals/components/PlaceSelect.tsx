@@ -49,7 +49,7 @@ export function PlaceSelect({ places, country, city, onChange, className }: {
   );
 }
 
-const MAX_SHOWN = 60;
+const MAX_SHOWN = 120;
 
 function CityCombo({ cities, value, invalid, onChange, className }: {
   cities: string[];
@@ -85,7 +85,7 @@ function CityCombo({ cities, value, invalid, onChange, className }: {
         <input
           className={`${className} pr-7 ${invalid ? 'border-amber-500/70' : ''}`}
           value={open ? query : value}
-          placeholder={open ? (value || 'Buscar ciudad…') : 'Seleccionar'}
+          placeholder={open ? (value || `Buscar ciudad (${cities.length} disponibles)…`) : 'Seleccionar'}
           onFocus={() => { setOpen(true); setQuery(''); setActive(0); }}
           onChange={(e) => { setQuery(e.target.value); setActive(0); setOpen(true); }}
           onKeyDown={(e) => {
@@ -102,7 +102,7 @@ function CityCombo({ cities, value, invalid, onChange, className }: {
       </div>
       {open && (
         <ul role="listbox" className="absolute z-[70] mt-1 max-h-64 w-full min-w-[12rem] overflow-auto overscroll-contain rounded-lg border border-zinc-700 bg-zinc-950 py-1 text-sm shadow-xl sm:max-h-56 sm:rounded-md sm:text-xs">
-          {matches.length === 0 && <li className="px-3 py-2.5 text-zinc-500 sm:px-2.5 sm:py-1.5">No está en DocuBlock</li>}
+          {matches.length === 0 && <li className="px-3 py-2.5 text-zinc-500 sm:px-2.5 sm:py-1.5">No está en DocuBlock (busca el nombre de la ciudad, no el estado/depto.)</li>}
           {matches.map((c, i) => (
             <li
               key={c}
