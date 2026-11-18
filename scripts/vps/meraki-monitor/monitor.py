@@ -481,9 +481,94 @@ def check_cloud(st):
             builds[name] = print_
         except Exception as e:  # noqa: BLE001
             log(f'cloud builds {name}: {e}')
+    try:
+        events += check_web_content(st)
+    except Exception as e:  # noqa: BLE001
+        log(f'web_content: {e}')
     st['cloud_seen'] = list(seen)[-500:]
     st['cloud_checked'] = time.time()
     return out, events
+
+
+# ── Contenido publicado en la página web (panel admin, Firebase disponibilidad-e8a81) ──
+# Se leen las mismas colecciones PÚBLICAS que muestra la página (sin permisos especiales):
+# cualquier documento nuevo, editado o borrado se avisa, para confirmar que fue alguien autorizado.
+WEB_PROJECT = 'disponibilidad-e8a81'
+WEB_COLLECTIONS = {
+    'avances_obra': 'Avance de obra', 'galeria_fotos': 'Foto de galería', 'videos_youtube': 'Video',
+    'ferias_eventos': 'Feria/evento', 'asesores': 'Asesor', 'legal_documents': 'Documento legal',
+    'payment_instructions': 'Instructivo de pago',
+}
+
+
+def _fs_val(v):
+    if not isinstance(v, dict):
+        return v
+    for k in ('stringValue', 'integerValue', 'doubleValue', 'booleanValue', 'timestampValue'):
+        if k in v:
+            return v[k]
+    if 'arrayValue' in v:
+        return [_fs_val(x) for x in v['arrayValue'].get('values', [])]
+    return None
+
+
+def _web_summary(col, fields):
+    f = {k: _fs_val(v) for k, v in fields.items()}
+    parts = []
+    for key in ('projectSlug', 'nombre', 'title', 'category', 'lugar', 'cargo'):
+        if f.get(key):
+            parts.append(str(f[key]))
+    text = f.get('text') or f.get('descripcion')
+    if text:
+        parts.append('«' + str(text)[:120] + '»')
+    imgs = f.get('images') if isinstance(f.get('images'), list) else []
+    if imgs:
+        parts.append(f'{len(imgs)} foto(s)')
+    link = (imgs[0] if imgs else None) or f.get('imageUrl') or f.get('foto') or f.get('fileUrl') or f.get('videoUrl')
+    s = ' · '.join(parts)
+    if link and isinstance(link, str) and link.startswith('http'):
+        s += f' · <a href="{link}">ver</a>'
+    return s or '(sin detalle)'
+
+
+def check_web_content(st):
+    events = []
+    key = load_env().get('WEB_FIREBASE_API_KEY')
+    if not key:
+        return events
+    snap = st.setdefault('web_content', {})
+    for col, label in WEB_COLLECTIONS.items():
+        docs, page = {}, None
+        try:
+            for _ in range(20):
+                url = (f'https://firestore.googleapis.com/v1/projects/{WEB_PROJECT}/databases/(default)/documents/{col}'
+                       f'?pageSize=300&key={key}' + (f'&pageToken={urllib.parse.quote(page)}' if page else ''))
+                r = json.load(urllib.request.urlopen(url, timeout=20))
+                for d in r.get('documents', []):
+                    docs[d['name'].split('/')[-1]] = d
+                page = r.get('nextPageToken')
+                if not page:
+                    break
+        except Exception as e:  # noqa: BLE001
+            log(f'web_content {col}: {e}')
+            continue
+        prev = snap.get(col)
+        cur = {i: d.get('updateTime') for i, d in docs.items()}
+        if prev is not None:
+            for i, d in docs.items():
+                if i not in prev:
+                    events.append(f'📸 Página web · NUEVO {label}: {_web_summary(col, d.get("fields", {}))}')
+                elif prev[i] != cur[i]:
+                    events.append(f'✏️ Página web · EDITADO {label}: {_web_summary(col, d.get("fields", {}))}')
+            for i in prev:
+                if i not in cur:
+                    events.append(f'🗑️ Página web · BORRADO un {label} (id {i})')
+        snap[col] = cur
+    if len(events) > 12:
+        events = events[:12] + [f'… y {len(events) - 12} cambios más en la página web']
+    if events:
+        events.append('Si no fuiste tú ni alguien del equipo, avisa de inmediato: puede que alguien entró al panel de la página.')
+    return events
 
 
 # ── rondas ──────────────────────────────────────────────────────────────────
