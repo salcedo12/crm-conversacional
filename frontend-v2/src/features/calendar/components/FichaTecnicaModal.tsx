@@ -1157,15 +1157,9 @@ export function FichaTecnicaModal({
                                   type="date"
                                   value={nextDate}
                                   onChange={(e) => setNextDate(e.target.value)}
-                                  style={{ colorScheme: 'dark', minHeight: '40px' }}
+                                  style={{ minHeight: '40px' }}
                                   className="w-full rounded-xl border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30 focus:outline-none transition-all cursor-pointer font-medium"
                                 />
-                                {!nextDate && (
-                                  <span className="pointer-events-none absolute left-3 text-xs text-zinc-500 flex items-center gap-1.5">
-                                    <span>📅</span>
-                                    <span>Toca para elegir fecha...</span>
-                                  </span>
-                                )}
                               </div>
                             </div>
 
@@ -1179,7 +1173,7 @@ export function FichaTecnicaModal({
                                   type="time"
                                   value={nextTime}
                                   onChange={(e) => setNextTime(e.target.value)}
-                                  style={{ colorScheme: 'dark', minHeight: '40px' }}
+                                  style={{ minHeight: '40px' }}
                                   className="w-full rounded-xl border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30 focus:outline-none transition-all cursor-pointer font-medium"
                                 />
                               </div>

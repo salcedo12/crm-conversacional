@@ -30,6 +30,7 @@
 
   /* iOS Safe Area variables y soporte PWA Standalone (Pantalla de Inicio) */
   :root {
+    color-scheme: dark;
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
   }
@@ -335,6 +336,7 @@ html.light select,
   background-color: #ffffff !important;
   color: #0D060A !important;
   border-color: #cbd5e1 !important;
+  color-scheme: light !important;
 }
 
 html.light input::placeholder,
@@ -391,6 +393,7 @@ html.light .text-amber-400\/90,
   color: #78350f !important; /* Ámbar oscuro contraste alto */
 }
 
+html.light .bg-amber-950\/10,
 html.light .bg-amber-950\/20,
 html.light .bg-amber-950\/30,
 html.light .bg-amber-950\/40,
@@ -399,6 +402,7 @@ html.light .bg-amber-500\/20,
 html.light .bg-amber-500\/15,
 html.light .bg-amber-500\/10,
 html.light .bg-amber-500\/5,
+[data-theme="light"] .bg-amber-950\/10,
 [data-theme="light"] .bg-amber-950\/20,
 [data-theme="light"] .bg-amber-950\/30,
 [data-theme="light"] .bg-amber-950\/40,
@@ -569,18 +573,58 @@ html.light button[class*="bg-violet-600"] .text-white,
   color: #ffffff !important;
 }
 
+html.light .from-rose-950\/25,
+[data-theme="light"] .from-rose-950\/25 {
+  background-image: linear-gradient(to right, #fff1f2, #ffffff, #ffffff) !important;
+  background-color: #fff5f6 !important;
+}
+
+html.light .bg-rose-500\/30,
+html.light .bg-rose-500\/25,
 html.light .bg-rose-500\/20,
 html.light .bg-rose-500\/15,
 html.light .bg-rose-500\/10,
+html.light .bg-rose-950\/10,
+html.light .bg-rose-950\/20,
+html.light .bg-rose-950\/30,
 html.light .bg-rose-950\/70,
 html.light .bg-rose-950\/80,
+[data-theme="light"] .bg-rose-500\/30,
+[data-theme="light"] .bg-rose-500\/25,
 [data-theme="light"] .bg-rose-500\/20,
 [data-theme="light"] .bg-rose-500\/15,
 [data-theme="light"] .bg-rose-500\/10,
+[data-theme="light"] .bg-rose-950\/10,
+[data-theme="light"] .bg-rose-950\/20,
+[data-theme="light"] .bg-rose-950\/30,
 [data-theme="light"] .bg-rose-950\/70,
 [data-theme="light"] .bg-rose-950\/80 {
-  background-color: rgba(239, 68, 68, 0.12) !important;
-  border-color: rgba(239, 68, 68, 0.3) !important;
+  background-color: #ffe4e6 !important;
+  border-color: #fda4af !important;
+}
+
+html.light .hover\:bg-rose-500\/20:hover,
+html.light .hover\:bg-rose-500\/50:hover,
+[data-theme="light"] .hover\:bg-rose-500\/20:hover,
+[data-theme="light"] .hover\:bg-rose-500\/50:hover {
+  background-color: #fecdd3 !important;
+}
+
+html.light .text-teal-300,
+html.light .text-teal-400,
+[data-theme="light"] .text-teal-300,
+[data-theme="light"] .text-teal-400 {
+  color: #0f766e !important;
+}
+
+html.light .bg-teal-500\/20,
+html.light .bg-teal-500\/15,
+html.light .bg-teal-500\/10,
+[data-theme="light"] .bg-teal-500\/20,
+[data-theme="light"] .bg-teal-500\/15,
+[data-theme="light"] .bg-teal-500\/10 {
+  background-color: #f0fdfa !important;
+  border-color: #5eead4 !important;
 }
 
 html.light .text-sky-100,
@@ -616,18 +660,29 @@ html.light .text-blue-100,
   color: #0369a1 !important;
 }
 
+html.light .bg-sky-950\/40,
+html.light .bg-sky-950\/30,
+html.light .bg-sky-950\/20,
 html.light .bg-sky-500\/20,
 html.light .bg-sky-500\/15,
 html.light .bg-sky-500\/10,
 html.light .bg-sky-500\/5,
 html.light .bg-blue-600\/20,
+[data-theme="light"] .bg-sky-950\/40,
+[data-theme="light"] .bg-sky-950\/30,
+[data-theme="light"] .bg-sky-950\/20,
 [data-theme="light"] .bg-sky-500\/20,
 [data-theme="light"] .bg-sky-500\/15,
 [data-theme="light"] .bg-sky-500\/10,
 [data-theme="light"] .bg-sky-500\/5,
 [data-theme="light"] .bg-blue-600\/20 {
-  background-color: rgba(14, 165, 233, 0.12) !important;
-  border-color: rgba(14, 165, 233, 0.3) !important;
+  background-color: #e0f2fe !important;
+  border-color: #7dd3fc !important;
+}
+
+html.light .hover\:bg-sky-900\/50:hover,
+[data-theme="light"] .hover\:bg-sky-900\/50:hover {
+  background-color: #bae6fd !important;
 }
 
 html.light .text-violet-100,
