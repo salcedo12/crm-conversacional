@@ -11,7 +11,13 @@
       "source": "functions",
       "codebase": "crm-api",
       "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"],
-      "ignore": ["node_modules", ".git", "src"]
+      "ignore": [
+        "node_modules", ".git", "src",
+        "*service-account*.json", "*adminsdk*.json",
+        ".env.backup*", ".env.local", ".env.demo-*", ".env.example", ".secret.local",
+        ".emu-scripts", "scripts", "docs", "*.log",
+        "deleteMessages.ts", "fastCheck.js", "fixColors.js", "fixSector.js"
+      ]
     }
   ],
   "hosting": {
