@@ -1,0 +1,9 @@
+[Unit]
+Description=Meraki Monitor resumen diario 7:30 Bogota
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 America/Bogota
+Persistent=true
+
+[Install]
+WantedBy=timers.target

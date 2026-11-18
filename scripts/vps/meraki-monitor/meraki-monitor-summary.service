@@ -1,0 +1,6 @@
+[Unit]
+Description=Meraki Monitor - resumen diario
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/meraki-monitor/monitor.py --summary

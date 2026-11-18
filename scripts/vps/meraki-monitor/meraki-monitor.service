@@ -1,0 +1,9 @@
+[Unit]
+Description=Meraki Monitor - ronda de chequeos de seguridad y salud
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/meraki-monitor/monitor.py
+TimeoutStartSec=120
+Nice=10
