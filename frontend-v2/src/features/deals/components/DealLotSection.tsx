@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Loader2, MapPin } from 'lucide-react';
+import { AlertTriangle, Loader2, MapPin, RefreshCw, Unlink } from 'lucide-react';
 import { DealLotPickerModal } from './DealLotPickerModal';
-import { dealActionCls } from './DealSheet';
 import {
   canEditDealConditions,
   formatArea,
@@ -89,24 +88,24 @@ export function DealLotSection({ companyId, deal, projectHint, isAdmin = false, 
             </p>
           )}
           {editable && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-1.5 sm:gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2 pt-1">
               {isDraft && state?.state === 'vencido' && (
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() => run(() => reserveDealLot(companyId, deal.id, lot.inventoryLotId))}
-                  className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
+                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3.5 py-1.5 text-xs font-bold text-amber-200 transition hover:bg-amber-500/25 disabled:opacity-50 sm:min-h-0"
                 >
-                  Volver a apartar
+                  <RefreshCw size={13} /> Volver a apartar
                 </button>
               )}
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => setPicking(true)}
-                className={`${dealActionCls} text-emerald-300 hover:text-emerald-200`}
+                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 shadow-sm transition hover:bg-emerald-500/20 disabled:opacity-50 sm:min-h-0"
               >
-                Cambiar lote
+                <MapPin size={13} /> Cambiar lote
               </button>
               <button
                 type="button"
@@ -117,11 +116,11 @@ export function DealLotSection({ companyId, deal, projectHint, isAdmin = false, 
                   }
                   void run(() => releaseDealLot(companyId, deal.id));
                 }}
-                className={`${dealActionCls} font-normal text-zinc-500 hover:text-zinc-300`}
+                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/70 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50 sm:min-h-0"
               >
-                Liberar
+                <Unlink size={13} /> Liberar lote
               </button>
-              {busy && <Loader2 size={12} className="animate-spin text-zinc-500" />}
+              {busy && <Loader2 size={14} className="animate-spin text-zinc-400" />}
             </div>
           )}
         </div>
