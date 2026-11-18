@@ -368,6 +368,114 @@ def check_auth(st):
     return events, delta
 
 
+# ── Google Cloud (registros y métricas, solo lectura) ───────────────────────
+GCP_PROJECTS = {'crm-conversacional': 'CRM', 'control-derecho-peticiones': 'Peticiones'}
+CLOUD_EVERY = 300            # segundos entre consultas a Google Cloud
+ERR_PER_FN = 10              # errores de una misma función en 10 min
+ERR_TOTAL = 25               # errores totales en 10 min
+READS_LIMIT = 200_000        # lecturas Firestore en 10 min (normal p99 ≈ 34k)
+SPA_SITES = {'CRM web': 'https://crm.grupoconstructormeraki.com.co/',
+             'Solicitudes y Peticiones': 'https://solicitudesypeticiones.grupoconstructormeraki.com.co/'}
+
+
+def _msg(entry):
+    return (entry.get('jsonPayload', {}).get('message') or entry.get('textPayload') or '').strip()
+
+
+def _fn(entry):
+    labels = entry.get('resource', {}).get('labels', {})
+    return labels.get('service_name') or labels.get('function_name') or entry.get('resource', {}).get('type', '?')
+
+
+def check_cloud(st):
+    """Devuelve (estados, eventos). Estados con transición; eventos se avisan una vez."""
+    out, events = {}, []
+    if time.time() - st.get('cloud_checked', 0) < CLOUD_EVERY:
+        return {k: tuple(v) for k, v in st.get('status', {}).items() if k.startswith('cloud:')}, []
+    try:
+        import gcp
+    except Exception as e:  # noqa: BLE001
+        log(f'gcp no disponible: {e}')
+        return out, events
+    window = max(10, int((time.time() - st.get('cloud_checked', time.time() - 600)) / 60) + 1)
+    seen = set(st.get('cloud_seen', []))
+    for proj, label in GCP_PROJECTS.items():
+        # 1) Registros de seguridad que dejamos en el código ([SECURITY])
+        try:
+            sec = gcp.logs(proj, 'textPayload:"[SECURITY]" OR jsonPayload.message:"[SECURITY]"', minutes=window, limit=20)
+            for x in sec:
+                if x.get('insertId') in seen:
+                    continue
+                seen.add(x.get('insertId'))
+                events.append(f'{label} · alerta de seguridad en <b>{_fn(x)}</b>: {_msg(x)[:200]}')
+            out[f'cloud:logs:{proj}'] = (True, f'{label}: lectura de registros OK')
+        except urllib.error.HTTPError as e:
+            out[f'cloud:logs:{proj}'] = (False, f'{label}: el agente no puede leer los registros (HTTP {e.code}); revisar permisos de meraki-monitor-lector')
+            continue
+        except Exception as e:  # noqa: BLE001
+            log(f'cloud {proj} seguridad: {e}')
+            continue
+        # 2) Ráfagas de errores y señales de facturación/cuota
+        try:
+            errs = gcp.logs(proj, 'severity>=ERROR', minutes=10, limit=500)
+            per = {}
+            for x in errs:
+                per[_fn(x)] = per.get(_fn(x), 0) + 1
+            top = sorted(per.items(), key=lambda kv: -kv[1])[:3]
+            burst = len(errs) >= ERR_TOTAL or (top and top[0][1] >= ERR_PER_FN)
+            out[f'cloud:errores:{proj}'] = (not burst, f'{label}: {len(errs)} errores en 10 min'
+                                            + (' (más: ' + ', '.join(f'{f} {n}' for f, n in top) + ')' if top else ''))
+            quota = sum(1 for x in errs if re.search(r'Rate exceeded|RESOURCE_EXHAUSTED|billing|429', _msg(x), re.I))
+            out[f'cloud:cuota:{proj}'] = (quota < 5, f'{label}: {quota} errores de cuota/429 en 10 min (revisar FACTURACIÓN en GCP)')
+        except Exception as e:  # noqa: BLE001
+            log(f'cloud {proj} errores: {e}')
+        # 3) Lecturas de Firestore anormales
+        try:
+            reads = int(gcp.metric_sum(proj, 'firestore.googleapis.com/document/read_count', minutes=10))
+            out[f'cloud:lecturas:{proj}'] = (reads < READS_LIMIT,
+                                            f'{label}: {reads:,} lecturas de base de datos en 10 min (lo normal es < 35.000)'.replace(',', '.'))
+        except Exception as e:  # noqa: BLE001
+            log(f'cloud {proj} lecturas: {e}')
+    # 4) Cambios de rol / usuarios nuevos en el CRM (trigger UserClaims)
+    try:
+        claims = st.setdefault('claims', {})
+        baseline = bool(claims)
+        for x in reversed(gcp.logs('crm-conversacional', 'jsonPayload.message:"[UserClaims]"', minutes=window, limit=200)):
+            ctx = x.get('jsonPayload', {}).get('context', {})
+            uid = ctx.get('userId')
+            if not uid:
+                continue
+            cur = {'role': ctx.get('role'), 'admin': bool(ctx.get('platformAdmin')), 'active': ctx.get('active')}
+            prev = claims.get(uid)
+            if prev != cur and baseline:
+                if prev is None:
+                    events.append(f'CRM · usuario NUEVO <code>{uid}</code> con rol <b>{cur["role"]}</b>')
+                else:
+                    cambios = [f'{k}: {prev.get(k)} → {cur[k]}' for k in cur if prev.get(k) != cur[k]]
+                    events.append(f'CRM · cambio de permisos de <code>{uid}</code>: ' + ', '.join(cambios))
+            if cur['admin'] and (prev is None or not prev.get('admin')):
+                events.append(f'🚨 CRM · <code>{uid}</code> tiene permisos de SUPERADMINISTRADOR (platformAdmin). Si no fue autorizado, avisa de inmediato.')
+            claims[uid] = cur
+    except Exception as e:  # noqa: BLE001
+        log(f'cloud claims: {e}')
+    # 5) Publicación de versiones nuevas de las apps web (detecta despliegues no autorizados)
+    try:
+        builds = st.setdefault('builds', {})
+        for name, url in SPA_SITES.items():
+            html = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'meraki-monitor'}), timeout=15).read(100_000).decode('utf-8', 'ignore')
+            m = re.search(r'assets/index-[A-Za-z0-9_-]+\.js', html)
+            if not m:
+                continue
+            if builds.get(name) and builds[name] != m.group(0):
+                events.append(f'Se publicó una versión NUEVA de <b>{name}</b>. Si nadie del equipo la subió, avisa de inmediato.')
+            builds[name] = m.group(0)
+    except Exception as e:  # noqa: BLE001
+        log(f'cloud builds: {e}')
+    st['cloud_seen'] = list(seen)[-500:]
+    st['cloud_checked'] = time.time()
+    return out, events
+
+
 # ── rondas ──────────────────────────────────────────────────────────────────
 def round_checks():
     st = load_state()
@@ -385,6 +493,12 @@ def round_checks():
         st['cert_checked'] = int(time.time())
     else:
         results.update({k: tuple(v) for k, v in st.get('status', {}).items() if k.startswith('cert:')})
+    cloud_events = []
+    try:
+        cloud_status, cloud_events = check_cloud(st)
+        results.update(cloud_status)
+    except Exception as e:  # noqa: BLE001
+        log(f'error en chequeo de Google Cloud: {e}')
 
     prev = st.get('status', {})
     alerts, recovered = [], []
@@ -396,7 +510,7 @@ def round_checks():
             recovered.append('🟢 ' + detail)
     st['status'] = {k: [ok, d] for k, (ok, d) in results.items()}
 
-    security = []
+    security = list(cloud_events)
     try:
         security += check_integrity(st)
         security += check_ports(st)
