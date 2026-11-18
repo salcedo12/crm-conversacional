@@ -85,6 +85,30 @@ export function monthlyInstallmentCount(fromDate: string, toDate: string): numbe
   return 0;
 }
 
+/** Calcula la fecha final (`Hasta`) de un rango dada su fecha inicial (`Desde`) y la cantidad de cuotas mensuales. */
+export function rangeEndDate(fromDate: string, count: number): string {
+  if (!isValidDate(fromDate) || !Number.isInteger(count) || count < 1) return '';
+  return addMonths(fromDate, Math.min(240, count) - 1);
+}
+
+/**
+ * Calcula la fecha `Desde` del siguiente rango conservando el día original del mes del rango
+ * anterior (evita perder el día 29/30/31 cuando el rango previo terminó en febrero).
+ */
+export function nextRangeStartDate(
+  ranges: Array<{ fromDate: string; toDate: string }>,
+  fallbackFirstDate: string,
+): string {
+  const previous = ranges[ranges.length - 1];
+  if (!previous) return fallbackFirstDate;
+  const prevCount = monthlyInstallmentCount(previous.fromDate, previous.toDate);
+  if (prevCount > 0 && isValidDate(previous.fromDate)) {
+    return addMonths(previous.fromDate, prevCount);
+  }
+  if (isValidDate(previous.toDate)) return addMonths(previous.toDate, 1);
+  return fallbackFirstDate;
+}
+
 export function expandRows(rows: PlanRow[]): Installment[] {
   const out: Installment[] = [];
   for (const row of rows) {

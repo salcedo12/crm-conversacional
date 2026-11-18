@@ -19,8 +19,11 @@ import {
   formatPesos,
   checkTerm,
   groupInstallments,
+  isValidDate,
   monthlyInstallmentCount,
+  nextRangeStartDate,
   parsePesos,
+  rangeEndDate,
   referralName,
   splitIntoInstallments,
   summarizePlan,
@@ -48,6 +51,8 @@ const SPECIAL = 'especial';
 
 /** Separación por defecto de los contratos de ejemplo ($6.000.000 en 2 cuotas). */
 const DEFAULT_SEPARATION = 6_000_000;
+
+const INVALID_CALENDAR_MSG = 'Esa fecha no existe en el calendario (revisa los días del mes; ej. febrero solo tiene 28 días, o 29 en año bisiesto).';
 
 function today(): string {
   const d = new Date();
@@ -179,6 +184,23 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   );
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [checkNotice, setCheckNotice] = useState<string | null>(null);
+  const [badDates, setBadDates] = useState<Record<string, boolean>>({});
+  const markBadDate = (key: string, bad: boolean) => {
+    setBadDates((prev) => {
+      if (Boolean(prev[key]) === bad) return prev;
+      if (bad) return { ...prev, [key]: true };
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+  const clearBadDatePrefix = (prefix: string) => {
+    setBadDates((prev) => {
+      const entries = Object.entries(prev).filter(([k]) => !k.startsWith(prefix));
+      return entries.length === Object.keys(prev).length ? prev : Object.fromEntries(entries);
+    });
+  };
+  const hasBadDates = Object.keys(badDates).length > 0;
 
   // Sondeo cada 4 segundos mientras la aprobación esté pendiente
   useEffect(() => {
@@ -368,6 +390,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
     }
     // Al pasar a específico se parte de las filas que generó el modo simple.
     if (next === 'especifico' && mode === 'simple') setRows(buildSimpleRows(simple, amounts));
+    setBadDates({});
     setMode(next);
   };
 
@@ -387,6 +410,7 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
   };
 
   const switchOrdinaryMode = (next: 'automatico' | 'rangos') => {
+    clearBadDatePrefix('ord-');
     if (next === 'rangos' && !(simple.ordinaryRanges?.length)) {
       const generated = buildSimpleRows({ ...simple, ordinaryMode: 'automatico' }, amounts)
         .filter((row) => row.kind === 'ordinaria')
@@ -455,8 +479,8 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                   : 'Solicita la autorización por WhatsApp a gerencia antes de guardar.')
             : 'Escribe quién aprobó el plazo especial.'
           : null;
-  // Pasarse del plazo bloquea guardar, igual que si el plan no cuadra (el servidor también lo revisa).
-  const canSave = summary.issues.length === 0 && !termAlert && !specialIssue;
+  // Pasarse del plazo o dejar una fecha inexistente (ej. 30 de febrero) bloquea guardar.
+  const canSave = summary.issues.length === 0 && !termAlert && !specialIssue && !hasBadDates;
 
   const setExtraordinary = (list: SimpleInputs['extraordinary']) => setSimple({ ...simple, extraordinary: list });
   const setRanges = (list: NonNullable<SimpleInputs['ordinaryRanges']>) => setSimple({ ...simple, ordinaryRanges: list });
@@ -479,6 +503,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
           {/* Cuadre siempre visible: en celular el resumen queda muy abajo. */}
           <PlanBalance totalLand={summary.totalLand} paid={summary.installmentsTotal + severanceAmount} difference={summary.difference} />
           {error && <p className="text-xs text-red-300">{error}</p>}
+          {hasBadDates && !error && (
+            <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-200 sm:text-[11px]">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" /> <span>{INVALID_CALENDAR_MSG}</span>
+            </p>
+          )}
           {termAlert && (
             <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-200 sm:text-[11px]">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" /> <span>{termAlert} Corrige las fechas para poder guardar.</span>
@@ -901,7 +930,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                     removeLabel="Quitar pago de separación"
                     onAmount={(amount) => setSeparationPayments((simple.separationPayments ?? []).map((item, index) => (index === i ? { ...item, amount } : item)))}
                     onDate={(date) => setSeparationPayments((simple.separationPayments ?? []).map((item, index) => (index === i ? { ...item, date } : item)))}
-                    onRemove={() => setSeparationPayments((simple.separationPayments ?? []).filter((_, index) => index !== i))}
+                    onInvalidChange={(bad) => markBadDate(`sep-${i}`, bad)}
+                    onRemove={() => {
+                      clearBadDatePrefix('sep-');
+                      setSeparationPayments((simple.separationPayments ?? []).filter((_, index) => index !== i));
+                    }}
                   />
                 ))}
               </div>
@@ -930,50 +963,51 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                 Cuotas ordinarias
               </SubTitle>
               {simple.ordinaryMode === 'rangos' ? (
-                <div className="space-y-2">
-                  {(simple.ordinaryRanges ?? []).map((range, i) => {
-                    const count = monthlyInstallmentCount(range.fromDate, range.toDate);
-                    const patchRange = (patch: Partial<typeof range>) =>
-                      setRanges((simple.ordinaryRanges ?? []).map((item, index) => (index === i ? { ...item, ...patch } : item)));
-                    return (
-                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 sm:border-0 sm:bg-transparent sm:p-0">
-                        <div className="mb-2 flex items-center justify-between sm:hidden">
-                          <span className="text-xs font-semibold text-zinc-300">Rango {i + 1}{count > 0 ? ` · ${count} cuota${count === 1 ? '' : 's'}` : ''}</span>
-                          <RemoveButton label="Quitar rango de cuotas ordinarias" onClick={() => setRanges((simple.ordinaryRanges ?? []).filter((_, index) => index !== i))} />
-                        </div>
-                        <div className="grid grid-cols-2 items-end gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
-                          <Field label="Valor mensual" className="col-span-2 sm:col-span-1">
-                            <MoneyInput value={range.amount} onChange={(amount) => patchRange({ amount })} />
-                          </Field>
-                          <Field label="Desde">
-                            <input type="date" className={inputCls} value={range.fromDate} onChange={(event) => patchRange({ fromDate: event.target.value })} />
-                          </Field>
-                          <Field label={<>Hasta<span className="hidden sm:inline">{count > 0 ? ` · ${count} cuota${count === 1 ? '' : 's'}` : ''}</span></>}>
-                            <input type="date" className={inputCls} value={range.toDate} onChange={(event) => patchRange({ toDate: event.target.value })} />
-                          </Field>
-                          <div className="hidden sm:block">
-                            <RemoveButton label="Quitar rango de cuotas ordinarias" onClick={() => setRanges((simple.ordinaryRanges ?? []).filter((_, index) => index !== i))} />
-                          </div>
-                        </div>
-                        {term && isOutsideTerm(range.toDate) && (
-                          <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-300"><AlertTriangle size={11} className="shrink-0" /> Fuera del plazo: va hasta {formatMonthYear(term.end)}.</p>
-                        )}
-                        {count === 0 && range.fromDate && range.toDate && (
-                          <p className="mt-1.5 text-[11px] text-amber-300">La fecha final debe coincidir con una mensualidad calculada desde la fecha inicial.</p>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <AddButton
-                    onClick={() => {
-                      const ranges = simple.ordinaryRanges ?? [];
-                      const previous = ranges[ranges.length - 1];
-                      const fromDate = previous ? addMonths(previous.toDate, 1) : simple.ordinaryFirstDate;
-                      setRanges([...ranges, { amount: previous?.amount ?? 0, fromDate, toDate: fromDate }]);
-                    }}
-                  >
-                    Agregar rango ordinario
-                  </AddButton>
+                <div className="space-y-2.5">
+                  {(simple.ordinaryRanges ?? []).map((range, i) => (
+                    <OrdinaryRangeRow
+                      key={i}
+                      index={i}
+                      range={range}
+                      termEnd={term?.end}
+                      isOutsideTerm={Boolean(term && range.toDate && isOutsideTerm(range.toDate))}
+                      onChange={(patch) =>
+                        setRanges((simple.ordinaryRanges ?? []).map((item, index) => (index === i ? { ...item, ...patch } : item)))
+                      }
+                      onInvalidFrom={(bad) => markBadDate(`ord-from-${i}`, bad)}
+                      onInvalidTo={(bad) => markBadDate(`ord-to-${i}`, bad)}
+                      onRemove={() => {
+                        clearBadDatePrefix('ord-');
+                        setRanges((simple.ordinaryRanges ?? []).filter((_, index) => index !== i));
+                      }}
+                    />
+                  ))}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                    <AddButton
+                      onClick={() => {
+                        const ranges = simple.ordinaryRanges ?? [];
+                        const previous = ranges[ranges.length - 1];
+                        const fromDate = nextRangeStartDate(ranges, simple.ordinaryFirstDate);
+                        setRanges([...ranges, { amount: previous?.amount ?? 0, fromDate, toDate: fromDate }]);
+                      }}
+                    >
+                      Agregar rango ordinario
+                    </AddButton>
+                    {(simple.ordinaryRanges ?? []).length > 0 && (() => {
+                      const stats = (simple.ordinaryRanges ?? []).reduce(
+                        (acc, r) => {
+                          const c = monthlyInstallmentCount(r.fromDate, r.toDate);
+                          return { count: acc.count + c, amount: acc.amount + c * r.amount };
+                        },
+                        { count: 0, amount: 0 },
+                      );
+                      return (
+                        <p className="text-[11px] text-zinc-400">
+                          Total rangos: <span className="font-semibold text-zinc-200">{stats.count} cuota{stats.count === 1 ? '' : 's'}</span> · <span className="font-semibold text-emerald-300">{formatPesos(stats.amount)}</span>
+                        </p>
+                      );
+                    })()}
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -989,8 +1023,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                       </p>
                     )}
                   >
-                    <input type="date" className={inputCls} value={simple.ordinaryFirstDate}
-                      onChange={(e) => setSimple({ ...simple, ordinaryFirstDate: e.target.value })} />
+                    <PlanDateInput
+                      value={simple.ordinaryFirstDate}
+                      onChange={(v) => setSimple({ ...simple, ordinaryFirstDate: v })}
+                      onInvalidChange={(bad) => markBadDate('ord-first', bad)}
+                    />
                   </Field>
                   {/* Valor calculado: tarjeta informativa, no parece un campo editable. */}
                   <div className="col-span-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 sm:col-span-1 sm:py-1.5">
@@ -1024,7 +1061,11 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                       warning={isOutsideTerm(e.date) && term ? `Fuera del plazo: va hasta ${formatMonthYear(term.end)}.` : undefined}
                       onAmount={(v) => setExtraordinary(simple.extraordinary.map((x, j) => (j === i ? { ...x, amount: v } : x)))}
                       onDate={(d) => setExtraordinary(simple.extraordinary.map((x, j) => (j === i ? { ...x, date: d } : x)))}
-                      onRemove={() => setExtraordinary(simple.extraordinary.filter((_, j) => j !== i))}
+                      onInvalidChange={(bad) => markBadDate(`extra-${i}`, bad)}
+                      onRemove={() => {
+                        clearBadDatePrefix('extra-');
+                        setExtraordinary(simple.extraordinary.filter((_, j) => j !== i));
+                      }}
                     />
                   ))}
                 </div>
@@ -1057,7 +1098,10 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                     </select>
                   </MobileLabel>
                   <div className="sm:hidden">
-                    <RemoveButton label="Quitar fila" onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))} />
+                    <RemoveButton label="Quitar fila" onClick={() => {
+                      clearBadDatePrefix('spec-');
+                      setRows((prev) => prev.filter((_, j) => j !== i));
+                    }} />
                   </div>
                   <div className="col-span-2 grid grid-cols-[5rem_1fr] gap-2 sm:contents">
                     <MobileLabel label="Cuotas">
@@ -1069,12 +1113,23 @@ export function DealPlanModal({ companyId, deal, onClose, onSaved }: DealPlanMod
                     </MobileLabel>
                   </div>
                   <MobileLabel label="Primera fecha" className="col-span-2 sm:col-span-1">
-                    <input type="date" className={inputCls} value={r.firstDate} onChange={(e) => updateRow(i, { firstDate: e.target.value })} />
+                    <PlanDateInput
+                      value={r.firstDate}
+                      showInlineMessage={false}
+                      onChange={(v) => updateRow(i, { firstDate: v })}
+                      onInvalidChange={(bad) => markBadDate(`spec-${i}`, bad)}
+                    />
                   </MobileLabel>
                   <div className="hidden sm:block">
-                    <RemoveButton label="Quitar fila" onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))} />
+                    <RemoveButton label="Quitar fila" onClick={() => {
+                      clearBadDatePrefix('spec-');
+                      setRows((prev) => prev.filter((_, j) => j !== i));
+                    }} />
                   </div>
                 </div>
+                {badDates[`spec-${i}`] && (
+                  <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-300"><AlertTriangle size={11} className="shrink-0" /> {INVALID_CALENDAR_MSG}</p>
+                )}
                 {r.count > 1 && r.amount > 0 && (
                   <p className="mt-1.5 text-[11px] text-zinc-500 sm:hidden">{r.count} × {formatPesos(r.amount)} = {formatPesos(r.count * r.amount)}</p>
                 )}
@@ -1322,8 +1377,208 @@ function Segmented<T extends string>({ value, onChange, options, small = false }
   );
 }
 
+/** Input de fecha con detección de fechas inexistentes en calendario (p. ej. 30 de febrero). */
+function PlanDateInput({ value, onChange, className = '', invalid = false, showInlineMessage = true, onInvalidChange, ariaLabel }: {
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+  invalid?: boolean;
+  showInlineMessage?: boolean;
+  onInvalidChange?: (isInvalid: boolean) => void;
+  ariaLabel?: string;
+}) {
+  const [badInput, setBadInput] = useState(false);
+
+  useEffect(() => {
+    if (value && isValidDate(value) && badInput) {
+      setBadInput(false);
+      onInvalidChange?.(false);
+    }
+  }, [value, badInput, onInvalidChange]);
+
+  const setBad = (next: boolean) => {
+    setBadInput(next);
+    onInvalidChange?.(next);
+  };
+
+  return (
+    <div className="min-w-0">
+      <input
+        type="date"
+        aria-label={ariaLabel}
+        aria-invalid={badInput || invalid || undefined}
+        className={`${inputCls} ${className} ${(badInput || invalid) ? '!border-amber-500/80' : ''}`}
+        value={value}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next) {
+            setBad(false);
+            onChange(next);
+            return;
+          }
+          if (e.target.validity.badInput) {
+            setBad(true);
+            onChange('');
+            return;
+          }
+          setBad(false);
+          onChange('');
+        }}
+        onBlur={(e) => {
+          if (e.currentTarget.validity.badInput) {
+            setBad(true);
+          }
+        }}
+      />
+      {showInlineMessage && badInput && (
+        <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-300">
+          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+          <span>{INVALID_CALENDAR_MSG}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Input de cantidad de cuotas que permite borrar y reescribir sin bloquear el dígito. */
+function RangeCountInput({ count, disabled, onChange }: {
+  count: number;
+  disabled?: boolean;
+  onChange: (nextCount: number) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState(count > 0 ? String(count) : '');
+
+  useEffect(() => {
+    if (!focused) setDraft(count > 0 ? String(count) : '');
+  }, [count, focused]);
+
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      min={1}
+      max={240}
+      disabled={disabled}
+      placeholder="1"
+      className={inputCls}
+      value={focused ? draft : (count > 0 ? String(count) : '')}
+      onFocus={() => {
+        setFocused(true);
+        setDraft(count > 0 ? String(count) : '');
+      }}
+      onBlur={() => {
+        setFocused(false);
+        setDraft(count > 0 ? String(count) : '');
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        const parsed = Number(raw);
+        if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 240) {
+          onChange(parsed);
+        }
+      }}
+    />
+  );
+}
+
+/** Rango mensual de cuotas ordinarias: permite elegir N cuotas o editar fechas con cálculo automático. */
+function OrdinaryRangeRow({ index, range, termEnd, isOutsideTerm, onChange, onInvalidFrom, onInvalidTo, onRemove }: {
+  index: number;
+  range: { amount: number; fromDate: string; toDate: string };
+  termEnd?: string;
+  isOutsideTerm: boolean;
+  onChange: (patch: Partial<{ amount: number; fromDate: string; toDate: string }>) => void;
+  onInvalidFrom: (bad: boolean) => void;
+  onInvalidTo: (bad: boolean) => void;
+  onRemove: () => void;
+}) {
+  const [badFrom, setBadFrom] = useState(false);
+  const [badTo, setBadTo] = useState(false);
+  const count = monthlyInstallmentCount(range.fromDate, range.toDate);
+  const validPair = isValidDate(range.fromDate) && isValidDate(range.toDate);
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 sm:border-0 sm:bg-transparent sm:p-0">
+      <div className="mb-2 flex items-center justify-between sm:hidden">
+        <span className="text-xs font-semibold text-zinc-300">
+          Rango {index + 1}{count > 0 ? ` · ${count} cuota${count === 1 ? '' : 's'}` : ''}
+        </span>
+        <RemoveButton label="Quitar rango de cuotas ordinarias" onClick={onRemove} />
+      </div>
+      <div className="grid grid-cols-2 items-end gap-2 sm:grid-cols-[1.15fr_0.55fr_1fr_1fr_auto]">
+        <Field label="Valor mensual" className="col-span-2 sm:col-span-1">
+          <MoneyInput value={range.amount} onChange={(amount) => onChange({ amount })} />
+        </Field>
+        <Field label="Cuotas">
+          <RangeCountInput
+            count={count}
+            disabled={!isValidDate(range.fromDate)}
+            onChange={(nextCount) => {
+              const nextTo = rangeEndDate(range.fromDate, nextCount);
+              if (nextTo) onChange({ toDate: nextTo });
+            }}
+          />
+        </Field>
+        <Field label="Desde">
+          <PlanDateInput
+            value={range.fromDate}
+            showInlineMessage={false}
+            onInvalidChange={(bad) => { setBadFrom(bad); onInvalidFrom(bad); }}
+            onChange={(newFrom) => {
+              if (newFrom && isValidDate(newFrom) && count > 0) {
+                onChange({ fromDate: newFrom, toDate: rangeEndDate(newFrom, count) });
+              } else {
+                onChange({ fromDate: newFrom, ...(!range.toDate && newFrom ? { toDate: newFrom } : {}) });
+              }
+            }}
+          />
+        </Field>
+        <Field label="Hasta" className="col-span-2 sm:col-span-1">
+          <PlanDateInput
+            value={range.toDate}
+            showInlineMessage={false}
+            onInvalidChange={(bad) => { setBadTo(bad); onInvalidTo(bad); }}
+            onChange={(toDate) => onChange({ toDate })}
+          />
+        </Field>
+        <div className="hidden sm:block">
+          <RemoveButton label="Quitar rango de cuotas ordinarias" onClick={onRemove} />
+        </div>
+      </div>
+
+      {(badFrom || badTo) && (
+        <p className="mt-1.5 flex items-start gap-1 text-[11px] text-amber-300">
+          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+          <span>{INVALID_CALENDAR_MSG}</span>
+        </p>
+      )}
+      {!badFrom && !badTo && count > 0 && validPair && (
+        <p className="mt-1.5 text-[11px] text-zinc-400">
+          <span className="font-semibold text-zinc-200">{count} cuota{count === 1 ? '' : 's'}</span>
+          {' · '}
+          {count === 1 ? formatMonthYear(range.fromDate) : `${formatMonthYear(range.fromDate)} → ${formatMonthYear(range.toDate)}`}
+          {range.amount > 0 && <>{' · '}Total: <span className="font-medium text-emerald-300">{formatPesos(count * range.amount)}</span></>}
+        </p>
+      )}
+      {!badFrom && !badTo && range.fromDate && range.toDate && validPair && range.toDate < range.fromDate && (
+        <p className="mt-1.5 text-[11px] text-amber-300">La fecha final debe ser igual o posterior a la fecha inicial.</p>
+      )}
+      {!badFrom && !badTo && range.fromDate && range.toDate && validPair && range.toDate >= range.fromDate && count === 0 && (
+        <p className="mt-1.5 text-[11px] text-amber-300">La fecha final debe coincidir con una mensualidad desde &quot;Desde&quot;, o ajusta el campo Cuotas.</p>
+      )}
+      {isOutsideTerm && termEnd && (
+        <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-300">
+          <AlertTriangle size={11} className="shrink-0" /> Fuera del plazo: va hasta {formatMonthYear(termEnd)}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Fila valor + fecha + quitar (separaciones y extraordinarias). */
-function AmountDateRow({ index, amount, date, removeLabel, warning, onAmount, onDate, onRemove }: {
+function AmountDateRow({ index, amount, date, removeLabel, warning, onAmount, onDate, onInvalidChange, onRemove }: {
   index: number;
   /** Aviso bajo la fila (p. ej. la fecha se sale del plazo). */
   warning?: string;
@@ -1332,26 +1587,30 @@ function AmountDateRow({ index, amount, date, removeLabel, warning, onAmount, on
   removeLabel: string;
   onAmount: (v: number) => void;
   onDate: (v: string) => void;
+  onInvalidChange?: (bad: boolean) => void;
   onRemove: () => void;
 }) {
+  const [badDate, setBadDate] = useState(false);
+  const effectiveWarning = badDate ? INVALID_CALENDAR_MSG : warning;
   return (
     <div>
       <div className="flex items-center gap-2">
         <span className="hidden w-4 shrink-0 text-center text-[11px] text-zinc-600 sm:block">{index}</span>
         <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-2 sm:grid-cols-2">
           <MoneyInput value={amount} onChange={onAmount} />
-          <input
-            type="date"
-            className={`${inputCls} max-sm:!px-2 ${warning ? '!border-amber-500/70' : ''}`}
+          <PlanDateInput
+            className="max-sm:!px-2"
             value={date}
-            onChange={(e) => onDate(e.target.value)}
-            aria-label={`Fecha ${index}`}
-            aria-invalid={!!warning}
+            invalid={Boolean(warning)}
+            showInlineMessage={false}
+            ariaLabel={`Fecha ${index}`}
+            onInvalidChange={(bad) => { setBadDate(bad); onInvalidChange?.(bad); }}
+            onChange={onDate}
           />
         </div>
         <RemoveButton label={removeLabel} onClick={onRemove} />
       </div>
-      {warning && <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-300 sm:pl-6"><AlertTriangle size={11} className="shrink-0" /> {warning}</p>}
+      {effectiveWarning && <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-300 sm:pl-6"><AlertTriangle size={11} className="shrink-0" /> {effectiveWarning}</p>}
     </div>
   );
 }
