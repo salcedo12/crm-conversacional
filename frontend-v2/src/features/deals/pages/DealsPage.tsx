@@ -339,16 +339,16 @@ export function DealsPage() {
       : selectedProjectConfig?.name);
 
   return (
-    <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
-      <div className="mx-auto max-w-7xl space-y-5">
+    <div className="deal-touch h-full overflow-y-auto overflow-x-hidden bg-zinc-950 p-4 md:p-6">
+      <div className="mx-auto max-w-7xl min-w-0 space-y-5">
         <header className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
+          <div className="flex min-w-0 items-start gap-3">
             <button onClick={() => {
               if (selectedProject === 'laguna-mar' && selectedSector !== null) setSelectedSector(null);
               else setSelectedProject(null);
-            }} className="mt-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button>
-            <div>
-            <div className="flex items-center gap-2">
+            }} className="mt-0.5 shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button>
+            <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
               {!isNoLotView && (
                 <ProjectLogo
                   src={selectedSector && selectedSector !== 'all' ? LAGUNA_SECTORS.find((sector) => sector.key === selectedSector)?.logo || selectedProjectConfig?.logo || '' : selectedProjectConfig?.logo || ''}
@@ -356,11 +356,11 @@ export function DealsPage() {
                   compact
                 />
               )}
-              <div>
+              <div className="min-w-0">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">
                   {isNoLotView ? 'Borradores iniciales' : 'Negocios del proyecto'}
                 </p>
-                <h1 className="text-xl font-extrabold text-zinc-100">
+                <h1 className="truncate text-xl font-extrabold text-zinc-100">
                   {isNoLotView
                     ? 'Negocios sin lote asignado'
                     : (selectedSector && selectedSector !== 'all'
@@ -422,24 +422,24 @@ export function DealsPage() {
         </section>
 
         <section className="grid grid-cols-1 gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:flex sm:flex-wrap">
-          <label className="relative sm:min-w-[220px] sm:flex-1">
+          <label className="relative min-w-0 sm:min-w-[220px] sm:flex-1">
             <Search size={15} className="absolute left-3 top-2.5 text-zinc-500" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar comprador, cédula, lote, código o asesor" className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-9 pr-3 text-xs text-zinc-100 outline-none focus:border-emerald-500/60" />
           </label>
-          <label className="relative">
+          <label className="relative min-w-0">
             <Filter size={14} className="absolute left-3 top-2.5 text-zinc-500" />
-            <select value={status} onChange={(e) => setStatus(e.target.value as 'all' | DealStatus)} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 pl-8 pr-8 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
+            <select value={status} onChange={(e) => setStatus(e.target.value as 'all' | DealStatus)} className="h-10 w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-950 pl-8 pr-8 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
               <option value="all">Todos los estados</option>
               {Object.entries(DEAL_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-          <select value={supportFilter} onChange={(e) => setSupportFilter(e.target.value as 'all' | 'complete' | 'pending')} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
+          <select value={supportFilter} onChange={(e) => setSupportFilter(e.target.value as 'all' | 'complete' | 'pending')} className="h-10 w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
             <option value="all">Todos los soportes</option>
             <option value="pending">Soportes pendientes</option>
             <option value="complete">Soportes completos</option>
           </select>
           {isAdmin && (
-            <select value={advisor} onChange={(e) => setAdvisor(e.target.value)} className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
+            <select value={advisor} onChange={(e) => setAdvisor(e.target.value)} className="h-10 w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-zinc-300 outline-none sm:h-9 sm:w-auto">
               <option value="all">Todos los asesores</option>
               {advisors.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
             </select>
@@ -451,26 +451,26 @@ export function DealsPage() {
         {!loading && !filtered.length && <div className="rounded-xl border border-dashed border-zinc-800 py-16 text-center text-sm text-zinc-500">No hay negocios con estos filtros.</div>}
 
         {!loading && filtered.length > 0 && (
-          <section className="grid gap-3 xl:grid-cols-2">
+          <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             {filtered.map((deal) => {
               const stats = supportStats(deal);
               return (
-                <button key={deal.id} onClick={() => navigate(`/dashboard/deals/${deal.id}`)} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-emerald-500/30 hover:bg-zinc-900">
+                <button key={deal.id} onClick={() => navigate(`/dashboard/deals/${deal.id}`)} className="w-full min-w-0 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-emerald-500/30 hover:bg-zinc-900">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-zinc-100">{deal.buyerNames?.join(', ') || deal.leadName || 'Sin compradores'}</p>
-                      <p className="mt-1 flex items-center gap-1 text-[11px] text-zinc-500"><UserRound size={11} /> {deal.advisorName || 'Asesor'} · {dateTime(deal.updatedAt)}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-2 break-words text-sm font-bold text-zinc-100">{deal.buyerNames?.join(', ') || deal.leadName || 'Sin compradores'}</p>
+                      <p className="mt-1 flex items-center gap-1 truncate text-[11px] text-zinc-500"><UserRound size={11} className="shrink-0" /> <span className="truncate">{deal.advisorName || 'Asesor'} · {dateTime(deal.updatedAt)}</span></p>
                     </div>
                     <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_STYLE[deal.status]}`}>{DEAL_STATUS_LABELS[deal.status]}</span>
                   </div>
-                  <div className="mt-3 grid grid-cols-[1.5fr_0.8fr] gap-2 text-xs">
-                    <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3">
-                      <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-emerald-400"><MapPin size={11} /> Proyecto y lote</p>
-                      <p className="mt-1 text-base font-extrabold text-zinc-100">{projectName(deal.lot?.projectId)}</p>
-                      <p className="mt-0.5 text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</p>
+                  <div className="mt-3 grid grid-cols-1 gap-2 text-xs min-[380px]:grid-cols-[minmax(0,1.5fr)_minmax(0,0.85fr)]">
+                    <div className="min-w-0 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3">
+                      <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-emerald-400"><MapPin size={11} className="shrink-0" /> Proyecto y lote</p>
+                      <p className="mt-1 truncate text-base font-extrabold text-zinc-100">{projectName(deal.lot?.projectId)}</p>
+                      <p className="mt-0.5 break-words text-sm font-semibold text-emerald-300">{deal.lot ? `${deal.lot.sector} · Lote ${deal.lot.lotNumber}${deal.lot.lotCode ? ` · Cód. ${deal.lot.lotCode}` : ''}` : 'Sin lote seleccionado'}</p>
                       {deal.lot && <p className="mt-1 text-[10px] text-zinc-500">{deal.lot.areaM2.toLocaleString('es-CO', { maximumFractionDigits: 2 })} m²{deal.lot.corner ? ' · Esquinero' : ''}</p>}
                     </div>
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-zinc-400"><BadgeDollarSign size={14} className="mb-2 text-amber-400" /><p className="text-[9px] font-bold uppercase tracking-wide text-zinc-500">Valor neto</p><p className="mt-1 text-sm font-bold text-zinc-200">{deal.plan ? money(dealNetValue(deal)) : 'Sin plan'}</p></div>
+                    <div className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-zinc-400"><BadgeDollarSign size={14} className="mb-2 text-amber-400" /><p className="text-[9px] font-bold uppercase tracking-wide text-zinc-500">Valor neto</p><p className="mt-1 truncate text-sm font-bold text-zinc-200">{deal.plan ? money(dealNetValue(deal)) : 'Sin plan'}</p></div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
                     <SupportPill ok={stats.buyersOk} label={`Cédulas ${stats.buyerDocs}/${deal.buyers.length}`} />
@@ -516,7 +516,7 @@ function ProjectSelection({ deals, sales, available, loading, error, onRefresh, 
   const noLotDeals = deals.filter((deal) => !deal.lot);
   const noLotActive = noLotDeals.filter((deal) => deal.status !== 'anulado').length;
   return (
-    <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
+    <div className="deal-touch h-full overflow-y-auto overflow-x-hidden bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div><div className="flex items-center gap-2"><Building2 className="text-emerald-400" size={25} /><h1 className="text-2xl font-extrabold text-zinc-100">Negocios por proyecto</h1></div><p className="mt-1 text-sm text-zinc-500">Selecciona un proyecto para consultar sus compradores, lotes, documentos y soportes.</p></div>
@@ -539,7 +539,7 @@ function ProjectSelection({ deals, sales, available, loading, error, onRefresh, 
               const sold = sales?.filter((sale) => sale.crmProjectId === project.key && !sale.ignored) ?? null;
               const free = available ? project.projectIds.reduce((sum, id) => sum + (available[id] ?? 0), 0) : null;
               return (
-                <button key={project.key} onClick={() => onSelect(project)} className="group overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 text-left shadow-xl shadow-black/40 transition duration-300 hover:-translate-y-1 hover:border-emerald-500/40 hover:shadow-emerald-950/40">
+                <button key={project.key} onClick={() => onSelect(project)} className="group w-full min-w-0 overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 text-left shadow-xl shadow-black/40 transition duration-300 hover:-translate-y-1 hover:border-emerald-500/40 hover:shadow-emerald-950/40">
                   <ProjectHero src={project.logo} name={project.name} accent={project.accent} />
                   <div className="p-5">
                     <div className="flex items-start justify-between gap-3">
@@ -583,7 +583,7 @@ function LagunaSectorSelection({ deals, sales, onBack, onSelect }: { deals: Deal
     ...extraSectorKeys.map((key) => ({ key, name: key, subtitle: 'Laguna Mar', logo: '/project-logos/laguna-mar.png', accent: 'from-slate-900 to-zinc-900' })),
   ];
   return (
-    <div className="deal-touch h-full overflow-y-auto bg-zinc-950 p-4 md:p-6">
+    <div className="deal-touch h-full overflow-y-auto overflow-x-hidden bg-zinc-950 p-4 md:p-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <header className="flex items-start gap-3"><button onClick={onBack} className="mt-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-zinc-100"><ArrowLeft size={16} /></button><div><p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Laguna Mar</p><h1 className="text-2xl font-extrabold text-zinc-100">Selecciona el sector</h1><p className="mt-1 text-sm text-zinc-500">Consulta todos los negocios o entra directamente a un sector.</p></div></header>
         <section className="grid gap-4 md:grid-cols-3">
@@ -591,7 +591,7 @@ function LagunaSectorSelection({ deals, sales, onBack, onSelect }: { deals: Deal
             const rows = card.key === 'all' ? deals : deals.filter((deal) => deal.lot?.sector.trim().toUpperCase() === card.key);
             const value = rows.filter((deal) => deal.status !== 'anulado').reduce((sum, deal) => sum + dealNetValue(deal), 0);
             const sold = sales?.filter((sale) => !sale.ignored && (card.key === 'all' || sale.sector === card.key)) ?? null;
-            return <button key={card.key} onClick={() => onSelect(card.key)} className="group overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 text-left shadow-xl shadow-black/40 transition duration-300 hover:-translate-y-1 hover:border-sky-500/40"><ProjectHero src={card.logo} name={card.name} accent={card.accent} /><div className="p-5"><h2 className="text-lg font-extrabold text-zinc-100 group-hover:text-sky-300">{card.name}</h2><p className="text-xs text-zinc-500">{card.subtitle}</p><div className="mt-4 flex items-center justify-between border-t border-zinc-800 pt-3"><span className="text-xs text-zinc-400">{sold && <><strong className="text-zinc-100">{sold.length}</strong> vendido(s) · </>}<strong className="text-zinc-100">{rows.length}</strong> negocio(s) CRM</span><span className="text-xs font-bold text-emerald-300">{value ? money(value) : 'Sin valor registrado'}</span></div></div></button>;
+            return <button key={card.key} onClick={() => onSelect(card.key)} className="group w-full min-w-0 overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 text-left shadow-xl shadow-black/40 transition duration-300 hover:-translate-y-1 hover:border-sky-500/40"><ProjectHero src={card.logo} name={card.name} accent={card.accent} /><div className="p-5"><h2 className="text-lg font-extrabold text-zinc-100 group-hover:text-sky-300">{card.name}</h2><p className="text-xs text-zinc-500">{card.subtitle}</p><div className="mt-4 flex items-center justify-between border-t border-zinc-800 pt-3"><span className="text-xs text-zinc-400">{sold && <><strong className="text-zinc-100">{sold.length}</strong> vendido(s) · </>}<strong className="text-zinc-100">{rows.length}</strong> negocio(s) CRM</span><span className="text-xs font-bold text-emerald-300">{value ? money(value) : 'Sin valor registrado'}</span></div></div></button>;
           })}
         </section>
       </div>
