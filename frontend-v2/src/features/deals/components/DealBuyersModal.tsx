@@ -173,7 +173,7 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
         <DealSheetFooter
           error={error}
           info={canSave
-            ? <span className="flex items-center gap-1 text-emerald-300"><CheckCircle2 size={13} /> {buyers.length} de {MAX_BUYERS} compradores · datos completos</span>
+            ? <span className="flex items-center gap-1 text-emerald-300"><CheckCircle2 size={13} /> {buyers.length} {buyers.length === 1 ? 'comprador' : 'compradores'} · datos completos</span>
             : <span className="text-amber-300/90">Faltan datos en {pendingCount === 1 ? '1 comprador' : `${pendingCount} compradores`}</span>}
           actions={<>
             <Button variant="ghost" onClick={onClose} className="h-11 sm:h-auto sm:px-3 sm:py-1.5 sm:text-xs">Cancelar</Button>
@@ -381,7 +381,7 @@ export function DealBuyersModal({ companyId, deal, lead, fallbackBuyers, onClose
           onClick={addBuyer}
           className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-zinc-700 px-3 py-3 text-sm text-zinc-300 hover:border-emerald-500/60 hover:text-emerald-300 sm:w-auto sm:justify-start sm:py-2 sm:text-xs"
         >
-          <Plus size={15} /> Agregar comprador ({buyers.length}/{MAX_BUYERS})
+          <Plus size={15} /> Agregar comprador
         </button>
       )}
     </DealSheet>

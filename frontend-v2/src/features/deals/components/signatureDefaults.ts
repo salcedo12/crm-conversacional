@@ -19,7 +19,7 @@ export function defaultTypeSigns(signerTypes: SignerType[], buyerCount: number, 
   const merakiTypes = others.filter((t) => !/\d\s*$/.test(t.name)).map((t) => t.name);
 
   const buyers = [principal, ...buyerExtras].filter((t): t is string => !!t).slice(0, buyerCount);
-  while (buyers.length < buyerCount) buyers.push('');
+  while (buyers.length < buyerCount) buyers.push(AVALADOR);
   const meraki = Array.from({ length: merakiCount }, (_, i) => merakiTypes[i] ?? AVALADOR);
   return { buyers, meraki };
 }

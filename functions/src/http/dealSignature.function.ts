@@ -71,7 +71,7 @@ const SendSchema = z.object({
     refId:     z.string().min(1),
     typeSigns: z.object({ preventa: z.string().min(1).optional(), promesa: z.string().min(1).optional() }),
     iteration: z.number().int().min(1).max(10),
-  })).min(1).max(20),
+  })).min(1).max(30),
   responsibleId: z.string().nullish(),
   requirePhoto:  z.boolean().default(false),
 });
@@ -121,7 +121,7 @@ const SendExtraSchema = z.object({
     refId:     z.string().min(1),
     typeSign:  z.string().min(1),
     iteration: z.number().int().min(1).max(10),
-  })).min(1).max(20),
+  })).min(1).max(30),
   responsibleId: z.string().nullish(),
   requirePhoto:  z.boolean().default(false),
 });

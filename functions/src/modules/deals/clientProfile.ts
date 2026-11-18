@@ -53,5 +53,5 @@ export function clientDocId(identificationKind: string, identificationNumber: st
   return `${identificationKind}-${normalizeIdentification(identificationNumber)}`;
 }
 
-/** Máximo de compradores por negocio. DocuBlock trae tipos hasta "cliente 3"; se confirma con ellos al final. */
-export const MAX_BUYERS = 4;
+/** Límite técnico amplio de compradores por negocio; en DocuBlock los adicionales usan "Avalador". */
+export const MAX_BUYERS = 20;

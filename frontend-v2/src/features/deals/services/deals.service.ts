@@ -138,7 +138,7 @@ export interface DealAttachment {
   uploadedByName: string;
 }
 
-export const MAX_BUYERS = 4;
+export const MAX_BUYERS = 20;
 
 export const DEAL_STATUS_LABELS: Record<DealStatus, string> = {
   borrador:          'Borrador',

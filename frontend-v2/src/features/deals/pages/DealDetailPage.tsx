@@ -761,7 +761,7 @@ export function DealDetailPage() {
                     </div>
                     <div>
                       <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                        Compradores ({deal.buyers.length}/4)
+                        Compradores ({deal.buyers.length})
                       </h3>
                       <p className="text-[11px] text-zinc-400">Titular y co-propietarios para la escrituración</p>
                     </div>
