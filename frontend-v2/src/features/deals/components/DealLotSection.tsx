@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2, MapPin, RefreshCw, Unlink } from 'lucide-react';
+import { InfoTip, Tooltip } from '@/shared/components/Tooltip';
 import { DealLotPickerModal } from './DealLotPickerModal';
 import {
   canEditDealConditions,
@@ -73,6 +74,7 @@ export function DealLotSection({ companyId, deal, projectHint, isAdmin = false, 
             <span className="min-w-0 sm:truncate">
               {lot.sector} · Lote {lot.lotNumber}{lot.lotCode ? ` · Cód. ${lot.lotCode}` : ''} · {formatArea(lot.areaM2)}{lot.corner ? ' · Esquinero' : ''}
             </span>
+            <InfoTip text="Lote apartado en el inventario en vivo. Puedes cambiarlo por otro disponible o liberarlo para devolverlo al inventario." />
           </p>
           {isDraft && state?.state === 'reservado' && (
             <p className="mt-1 text-[11px] text-zinc-500">Apartado hasta {formatUntil(state.expiresAt || lot.reservedUntil)}</p>
@@ -99,27 +101,31 @@ export function DealLotSection({ companyId, deal, projectHint, isAdmin = false, 
                   <RefreshCw size={13} /> Volver a apartar
                 </button>
               )}
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setPicking(true)}
-                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 shadow-sm transition hover:bg-emerald-500/20 disabled:opacity-50 sm:min-h-0"
-              >
-                <MapPin size={13} /> Cambiar lote
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  if (!isDraft && !window.confirm('Este negocio ya tiene contratos generados o en firma. ¿Liberar este lote y marcar sus contratos como vencidos?')) {
-                    return;
-                  }
-                  void run(() => releaseDealLot(companyId, deal.id));
-                }}
-                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/70 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50 sm:min-h-0"
-              >
-                <Unlink size={13} /> Liberar lote
-              </button>
+              <Tooltip content="Escoger otro lote disponible. Si ya había contratos de este lote, quedarán vencidos en el historial.">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setPicking(true)}
+                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 shadow-sm transition hover:bg-emerald-500/20 disabled:opacity-50 sm:min-h-0"
+                >
+                  <MapPin size={13} /> Cambiar lote
+                </button>
+              </Tooltip>
+              <Tooltip content="Devuelve este lote al inventario como DISPONIBLE y limpia el plan del negocio.">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!isDraft && !window.confirm('Este negocio ya tiene contratos generados o en firma. ¿Liberar este lote y marcar sus contratos como vencidos?')) {
+                      return;
+                    }
+                    void run(() => releaseDealLot(companyId, deal.id));
+                  }}
+                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/70 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50 sm:min-h-0"
+                >
+                  <Unlink size={13} /> Liberar lote
+                </button>
+              </Tooltip>
               {busy && <Loader2 size={14} className="animate-spin text-zinc-400" />}
             </div>
           )}

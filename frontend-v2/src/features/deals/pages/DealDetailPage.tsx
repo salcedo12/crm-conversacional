@@ -605,13 +605,15 @@ export function DealDetailPage() {
                 <span>Asesor:</span>
                 <strong className="text-zinc-200">{deal.advisorName || 'Sin asesor'}</strong>
                 {isAdmin && !readOnly && deal.status !== 'anulado' && !reassigningAdvisor && (
-                  <button
-                    type="button"
-                    onClick={() => void openReassignAdvisor()}
-                    className="ml-1 rounded-md border border-zinc-700 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 hover:border-emerald-500/40 hover:bg-emerald-500/10"
-                  >
-                    Cambiar
-                  </button>
+                  <Tooltip content="Reasignar el asesor / broker que aparecerá en los contratos de este negocio">
+                    <button
+                      type="button"
+                      onClick={() => void openReassignAdvisor()}
+                      className="ml-1 rounded-md border border-zinc-700 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 hover:border-emerald-500/40 hover:bg-emerald-500/10"
+                    >
+                      Cambiar
+                    </button>
+                  </Tooltip>
                 )}
               </div>
               {reassigningAdvisor && (
@@ -748,7 +750,10 @@ export function DealDetailPage() {
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
                   <div className="flex items-center gap-2">
                     <span className="flex h-2 w-2 rounded-full bg-emerald-400"></span>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Flujo del negocio</h3>
+                    <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
+                      <span>Flujo del negocio</span>
+                      <InfoTip text="Etapas del cierre: 1) Compradores, 2) Lote apartado, 3) Plan financiero, 4) Preventa generada y 5) Firma digital." />
+                    </h3>
                   </div>
                   <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${STATUS_STYLE[deal.status]}`}>
                     {DEAL_STATUS_LABELS[deal.status]}
@@ -767,20 +772,23 @@ export function DealDetailPage() {
                       <Users size={15} />
                     </div>
                     <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                        Compradores ({deal.buyers.length})
+                      <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-200">
+                        <span>Compradores ({deal.buyers.length})</span>
+                        <InfoTip text="Personas o empresas que firman el contrato y aparecen en la escritura. Puedes editar datos o agregar co-propietarios sin afectar otros negocios." />
                       </h3>
                       <p className="text-[11px] text-zinc-400">Titular y co-propietarios para la escrituración</p>
                     </div>
                   </div>
                   {canEditBuyers && (
-                    <button
-                      type="button"
-                      onClick={() => setEditingBuyers(true)}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition shadow-sm"
-                    >
-                      <Users size={13} /> {deal.buyers.length ? 'Editar / agregar' : 'Registrar compradores'}
-                    </button>
+                    <Tooltip content="Editar ficha de compradores, agregar co-propietarios o quitar compradores">
+                      <button
+                        type="button"
+                        onClick={() => setEditingBuyers(true)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition shadow-sm"
+                      >
+                        <Users size={13} /> {deal.buyers.length ? 'Editar / agregar' : 'Registrar compradores'}
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
 
@@ -840,8 +848,9 @@ export function DealDetailPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-                            {deal.plan ? 'Plan financiero pactado' : 'Plan financiero propuesto'}
+                          <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-200">
+                            <span>{deal.plan ? 'Plan financiero pactado' : 'Plan financiero propuesto'}</span>
+                            <InfoTip text="Define plazo, valor total, bono, cesantías y calendario de cuotas. Si cambias a un plazo o valor especial fuera de lista, se vuelve a pedir autorización a Gerencia." />
                           </h3>
                           {isApprovalPending && (
                             <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
@@ -854,13 +863,15 @@ export function DealDetailPage() {
                       </div>
                     </div>
                     {editable && (
-                      <button
-                        type="button"
-                        onClick={() => setPlanning(true)}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition shadow-sm"
-                      >
-                        <Calculator size={13} /> {deal.plan ? 'Editar plan' : isApprovalPending ? 'Ver / Comprobar' : 'Armar plan'}
-                      </button>
+                      <Tooltip content="Ajustar plazo, valores, cesantías o fechas de cuotas">
+                        <button
+                          type="button"
+                          onClick={() => setPlanning(true)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition shadow-sm"
+                        >
+                          <Calculator size={13} /> {deal.plan ? 'Editar plan' : isApprovalPending ? 'Ver / Comprobar' : 'Armar plan'}
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
 
@@ -1022,7 +1033,10 @@ export function DealDetailPage() {
               {/* TARJETA RESUMEN */}
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4 sm:p-5 shadow-xl backdrop-blur-md space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Resumen del negocio</h3>
+                  <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
+                    <span>Resumen del negocio</span>
+                    <InfoTip text="Totales pactados, plazo, bono/descuento, referido y conteo rápido de documentos y soportes." />
+                  </h3>
                   <span className="text-[11px] font-semibold text-zinc-400">ID: {deal.id.slice(0, 8)}...</span>
                 </div>
 
@@ -1137,7 +1151,10 @@ export function DealDetailPage() {
               {/* Generar contratos */}
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 space-y-3 shadow-lg">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Generar contratos</h3>
+                  <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
+                    <span>Generar contratos</span>
+                    <InfoTip text="Genera primero la Preventa en Word/PDF; luego se habilita la Promesa con los mismos datos para enviarla a firma digital." />
+                  </h3>
                   <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${STATUS_STYLE[deal.status]}`}>
                     {DEAL_STATUS_LABELS[deal.status]}
                   </span>
@@ -1210,7 +1227,9 @@ export function DealDetailPage() {
               <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 shadow-lg">
                 <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
                   <h3 className="flex items-center gap-2 text-sm sm:text-base font-bold text-zinc-100">
-                    <FileCheck2 size={18} className="text-emerald-400" /> Contratos y promesas generados
+                    <FileCheck2 size={18} className="text-emerald-400" />
+                    <span>Contratos y promesas generados</span>
+                    <InfoTip text="Versiones generadas del negocio y su estado actual de firma en DocuBlock." />
                   </h3>
                   <span className="text-xs text-zinc-400">{deal.documents?.length ?? 0} documento(s)</span>
                 </div>
@@ -1348,7 +1367,10 @@ export function DealDetailPage() {
                     <Upload size={15} />
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-200">Agregar soporte</h3>
+                    <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-200">
+                      <span>Agregar soporte</span>
+                      <InfoTip text="Adjunta cédulas de los compradores, recibos de separación, autorizaciones de bono y evidencia del referido (máx. 10 MB por archivo)." />
+                    </h3>
                     <p className="text-[11px] text-zinc-400">Cédulas, recibos de caja, autorizaciones</p>
                   </div>
                 </div>
