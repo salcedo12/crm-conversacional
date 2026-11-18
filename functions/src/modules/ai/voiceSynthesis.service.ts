@@ -165,7 +165,9 @@ export async function generateVictoriaVoiceNote(
       },
     });
 
-    await file.makePublic().catch(() => {});
+    // Seguridad (R07): NO se hace makePublic(). La URL con token de descarga basta
+    // para WhatsApp/YCloud; hacerlo público exponía el audio en
+    // storage.googleapis.com a cualquiera que adivinara la ruta.
 
     // Usar la URL pública con token de descarga estándar de Firebase Storage
     const audioUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media&token=${downloadToken}`;

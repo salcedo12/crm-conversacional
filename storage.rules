@@ -2,12 +2,23 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     function isPlatformAdmin() {
-      return request.auth != null && request.auth.token.platformAdmin == true;
+      return request.auth != null && request.auth.token.get('platformAdmin', false) == true;
     }
 
     function inCompany(companyId) {
       return request.auth != null
-             && (request.auth.token.companyId == companyId || isPlatformAdmin());
+             && (request.auth.token.get('companyId', '') == companyId || isPlatformAdmin());
+    }
+
+    function isAdmin(companyId) {
+      return isPlatformAdmin()
+             || (inCompany(companyId) && request.auth.token.get('role', 'advisor') in ['admin', 'manager']);
+    }
+
+    // Todos menos "Solo lectura" (viewer) pueden subir archivos nuevos.
+    function canWrite(companyId) {
+      return inCompany(companyId)
+             && (isPlatformAdmin() || request.auth.token.get('role', 'advisor') != 'viewer');
     }
 
     function validMediaSize() {
@@ -30,29 +41,37 @@ service firebase.storage {
     // El check de companyId (claim del token) evita fuga de media entre empresas
     // (multi-tenant): sin él, cualquier usuario autenticado podía leer/escribir la
     // media de conversaciones de OTRA empresa conociendo la ruta.
+    //
+    // Seguridad (R07): desde el cliente solo se CREAN archivos nuevos (web y app suben
+    // siempre con nombre único `{timestamp}_{nombre}`). Nadie puede sobrescribir ni
+    // borrar la media de una conversación desde el cliente (evidencias, cédulas o
+    // comprobantes que mandó el cliente por WhatsApp); eso solo lo hace el servidor
+    // (Admin SDK). "Solo lectura" no sube. Plantillas (leadId 'templates'): solo admin.
     match /companies/{companyId}/media/{leadId}/{allPaths=**} {
-      allow read: if inCompany(companyId);
-      allow write: if inCompany(companyId)
-                   && validConversationMediaSize(leadId);
+      allow read:   if inCompany(companyId);
+      allow create: if resource == null
+                    && canWrite(companyId)
+                    && (leadId != 'templates' || isAdmin(companyId))
+                    && validConversationMediaSize(leadId);
+      allow update, delete: if false;
     }
 
     // Biblioteca de portafolios: archivos reutilizables de la empresa (PDF, etc.).
     // Toda la empresa puede LEER (para enviarlos); solo admin/manager pueden SUBIR
     // o borrar. Tope 100 MB (documentos de WhatsApp llegan hasta 100 MB).
     match /companies/{companyId}/library/{allPaths=**} {
-      allow read: if inCompany(companyId);
-      allow write: if inCompany(companyId)
-                   && (request.auth.token.role in ['admin', 'manager'] || isPlatformAdmin())
-                   && validMediaSize();
+      allow read:   if inCompany(companyId);
+      allow create, update: if isAdmin(companyId) && validMediaSize();
+      allow delete: if isAdmin(companyId);
     }
 
     // Logos y recursos de marca de la empresa.
     match /companies/{companyId}/branding/{allPaths=**} {
-      allow read: if inCompany(companyId);
-      allow write: if inCompany(companyId)
-                   && (request.auth.token.role in ['admin', 'manager'] || isPlatformAdmin())
-                   && request.resource.size < 2 * 1024 * 1024
-                   && request.resource.contentType.matches('image/.*');
+      allow read:   if inCompany(companyId);
+      allow create, update: if isAdmin(companyId)
+                            && request.resource.size < 2 * 1024 * 1024
+                            && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdmin(companyId);
     }
 
     // Todo lo demas: denegado.
