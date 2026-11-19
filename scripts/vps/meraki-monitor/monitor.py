@@ -571,6 +571,75 @@ def check_web_content(st):
     return events
 
 
+# ── Sonda de inicio de sesión (sin contraseñas) ─────────────────────────────
+# Recorre los pasos de un login como lo hace el navegador: cargar la app, consultar
+# el servicio de inicio de sesión de Google del proyecto y la base de datos. No usa
+# ninguna cuenta real: la base de datos debe responder rápido aunque niegue (403).
+LOGIN_EVERY = 600     # cada 10 min
+LOGIN_SLOW = 5.0      # segundos por paso
+LOGIN_APPS = {
+    'CRM': ('https://crm.grupoconstructormeraki.com.co/', 'crm-conversacional', 'CRM_FIREBASE_API_KEY'),
+    'Solicitudes y Peticiones': ('https://solicitudesypeticiones.grupoconstructormeraki.com.co/',
+                                 'control-derecho-peticiones', 'PET_FIREBASE_API_KEY'),
+}
+
+
+def _timed(fn):
+    t0 = time.time()
+    try:
+        code = fn()
+    except urllib.error.HTTPError as e:
+        code = e.code
+    except Exception as e:  # noqa: BLE001
+        code = str(e)[:60]
+    return code, time.time() - t0
+
+
+def check_login(st):
+    out = {}
+    if time.time() - st.get('login_checked', 0) < LOGIN_EVERY:
+        return {k: tuple(v) for k, v in st.get('status', {}).items() if k.startswith('login:')}
+    env = load_env()
+    fails = st.setdefault('login_fails', {})
+    times = st.setdefault('login_times', {})
+    for app, (url, proj, keyname) in LOGIN_APPS.items():
+        key = env.get(keyname)
+        if not key:
+            continue
+        get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'meraki-monitor'}), timeout=30)
+        steps = []
+        # 1) cargar la app (página + JS principal)
+        def load_app():
+            html = get(url).read(200_000)
+            m = re.search(rb'/?assets/index-[A-Za-z0-9_-]+\.js', html)
+            if m:
+                get(urllib.parse.urljoin(url, m.group(0).decode())).read()
+            return 200
+        steps.append(('cargar la app', *_timed(load_app), (200,)))
+        # 2) servicio de inicio de sesión (Firebase Auth)
+        def auth():
+            body = json.dumps({'identifier': 'monitor-sonda@example.com', 'continueUri': 'https://example.com'}).encode()
+            req = urllib.request.Request(f'https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key={key}',
+                                         data=body, headers={'Content-Type': 'application/json'})
+            return urllib.request.urlopen(req, timeout=30).status
+        steps.append(('servicio de inicio de sesión', *_timed(auth), (200,)))
+        # 3) base de datos (Firestore): sin sesión debe negar rápido
+        steps.append(('base de datos', *_timed(lambda: get(
+            f'https://firestore.googleapis.com/v1/projects/{proj}/databases/(default)/documents/configs/sonda?key={key}').status),
+            (403, 404, 200)))
+        bad = [f'{n}: {"no responde (" + str(c) + ")" if c not in ok else f"lento ({s:.1f} s)"}'
+               for n, c, s, ok in steps if c not in ok or s > LOGIN_SLOW]
+        total = sum(s for _, _, s, _ in steps)
+        times[app] = round(total, 1)
+        fails[app] = fails.get(app, 0) + 1 if bad else 0
+        ok = fails[app] < 2   # avisar solo con 2 fallas seguidas (20 min)
+        detail = (f'Inicio de sesión {app}: ' + ('; '.join(bad) if bad else f'OK en {total:.1f} s')
+                  + ('' if ok else ' — si persiste, el problema es del sistema, no del usuario'))
+        out['login:' + app] = (ok, detail)
+    st['login_checked'] = time.time()
+    return out
+
+
 # ── rondas ──────────────────────────────────────────────────────────────────
 def round_checks():
     st = load_state()
@@ -588,6 +657,10 @@ def round_checks():
         st['cert_checked'] = int(time.time())
     else:
         results.update({k: tuple(v) for k, v in st.get('status', {}).items() if k.startswith('cert:')})
+    try:
+        results.update(check_login(st))
+    except Exception as e:  # noqa: BLE001
+        log(f'error en sonda de login: {e}')
     cloud_events = []
     try:
         cloud_status, cloud_events = check_cloud(st)
@@ -656,6 +729,9 @@ def summary():
         f'💾 Disco {round(du.used * 100 / du.total)}% · Memoria libre {round(mem["MemAvailable"] * 100 / mem["MemTotal"])}%',
         f'🛡️ fail2ban: {st.get("bans_total", 0)} IP bloqueadas en total',
     ]
+    lt = st.get('login_times', {})
+    if lt:
+        lines.append('🔐 Inicio de sesión (prueba): ' + ' · '.join(f'{a} {s:.1f} s' for a, s in lt.items()))
     yesterday = (now() - timedelta(days=1)).strftime('%Y-%m-%d')
     logins = st.get('logins_today', {})
     ips = logins.get(yesterday, [])
